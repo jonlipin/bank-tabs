@@ -50,7 +50,7 @@ Windows.GROUPS = {
 
 -- Windows that always live under the same global name.
 local NAMED = {
-	{ name = "WorldMapFrame", option = "worldmap", posKey = "worldmap", grip = "handle", handleCorner = "TOPLEFT" },
+	{ name = "WorldMapFrame", option = "worldmap", posKey = "worldmap", grip = "handle", handleCorner = "TOPLEFT", handleQuery = true },
 	{ name = "BankFrame", option = "bank", posKey = "bank", grip = "strip" },
 	{ name = "GuildBankFrame", option = "guildbank", posKey = "guildbank", grip = "strip" },
 	-- Only whole windows belong in this list. Panels that live inside another window, such as the
@@ -217,7 +217,10 @@ local function BuildGrip(entry)
 	local frame = entry.frame
 	local def = entry.def or {}
 	local grip = CreateFrame("Frame", nil, frame)
-	grip:SetFrameLevel(math.min((frame:GetFrameLevel() or 1) + 6, 9000))
+	grip.csOurs = true
+	-- Above everything the window draws inside itself, or the window's own panels take the mouse
+	-- before the grip ever sees it.
+	ns.RaiseOver(grip, frame, 3)
 
 	if def.grip == "handle" then
 		local corner = def.handleCorner or "TOPLEFT"
@@ -250,8 +253,9 @@ end
 local function BuildOverlay(entry)
 	local frame = entry.frame
 	local overlay = CreateFrame("Frame", nil, frame)
+	overlay.csOurs = true
 	overlay:SetAllPoints(frame)
-	overlay:SetFrameLevel(math.min((frame:GetFrameLevel() or 1) + 12, 9000))
+	ns.RaiseOver(overlay, frame, 5)
 	local tint = overlay:CreateTexture(nil, "OVERLAY")
 	tint:SetAllPoints()
 	tint:SetColorTexture(0.35, 0.72, 1, 0.10)
@@ -273,8 +277,21 @@ function Windows.UpdateOverlays()
 	end
 end
 
+-- The world map's corner handle is only wanted when the top bar could not offer anywhere to grab,
+-- so that module gets the last word on it.
+local function GripWanted(entry)
+	if not entry.active then return false end
+	local def = entry.def or {}
+	if def.handleQuery and ns.Map and ns.Map.WantsHandle then
+		local ok, wanted = pcall(ns.Map.WantsHandle)
+		if ok then return wanted and true or false end
+	end
+	return true
+end
+
 local function UpdateGripLook(entry)
 	if not entry.grip then return end
+	entry.grip:SetShown(GripWanted(entry))
 	local def = entry.def or {}
 	if def.grip == "handle" then
 		-- A handle is always visible: it is the only thing telling the user where to grab a
@@ -341,13 +358,16 @@ local function Attach(entry)
 	pcall(frame.SetClampedToScreen, frame, true)
 	if not entry.grip then BuildGrip(entry) end
 	if not entry.overlay then BuildOverlay(entry) end
-	entry.grip:Show()
 	SetPanelLayout(entry, false)
 
 	if not entry.hooked then
 		entry.hooked = true
 		frame:HookScript("OnShow", function()
 			if not entry.active then return end
+			-- A window can grow new panels between one showing and the next (the world map's
+			-- quest panel is the obvious one), so the grip climbs back on top each time.
+			if entry.grip then ns.RaiseOver(entry.grip, frame, 3) end
+			if entry.overlay then ns.RaiseOver(entry.overlay, frame, 5) end
 			Reapply(entry)
 			-- The game finishes placing a window after its OnShow has run, so the position is
 			-- put back once more on the next frame.
@@ -462,6 +482,79 @@ function Windows.MovedCount(key)
 end
 
 -- ------------------------------------------------------------------
+-- Helpers the other modules use
+-- ------------------------------------------------------------------
+
+function Windows.UpdateGrips()
+	for _, entry in ipairs(entries) do pcall(UpdateGripLook, entry) end
+end
+
+-- Makes any region drag a window this module already manages.
+function Windows.WireRegion(region, frame)
+	local entry = byFrame[frame]
+	if not entry then return false end
+	region.csOurs = true
+	WireDrag(region, entry)
+	return true
+end
+
+function Windows.Ratio(frame)
+	return Ratio(frame)
+end
+
+function Windows.Entry(frame)
+	return byFrame[frame]
+end
+
+Windows.CONTAINER_NAMES = CONTAINER_NAMES
+Windows.ContainerOption = ContainerOption
+
+-- The clear stretches along the top edge of a window: the parts of the band that none of the
+-- window's own mouse-enabled frames are sitting on. This is how a whole title bar can be made
+-- draggable without covering the buttons that live in it. Everything is in UIParent units.
+function Windows.HeaderGaps(frame, band, minWidth)
+	local left, bottom, width, height = Measure(frame)
+	if not left or width <= 0 then return {} end
+	local top = bottom + height
+	local floor = top - (band or 28)
+
+	local blockers = {}
+	ns.WalkChildren(frame, function(child)
+		local okShown, shown = pcall(child.IsShown, child)
+		if okShown and not shown then return end
+		local okMouse, mouse = pcall(child.IsMouseEnabled, child)
+		if not (okMouse and mouse) then return end
+		local cl, cb, cw, ch = Measure(child)
+		if not cl or not cw or cw <= 0 then return end
+		if cb + ch > floor and cb < top then blockers[#blockers + 1] = { cl, cl + cw } end
+	end, 5, 500)
+
+	table.sort(blockers, function(a, b) return a[1] < b[1] end)
+
+	local merged = {}
+	for _, span in ipairs(blockers) do
+		local last = merged[#merged]
+		if last and span[1] <= last[2] + 2 then
+			last[2] = math.max(last[2], span[2])
+		else
+			merged[#merged + 1] = { span[1], span[2] }
+		end
+	end
+
+	local gaps = {}
+	local wanted = minWidth or 24
+	local cursor = left
+	local right = left + width
+	for _, span in ipairs(merged) do
+		local edge = math.min(span[1], right)
+		if edge - cursor >= wanted then gaps[#gaps + 1] = { cursor, edge } end
+		cursor = math.max(cursor, span[2])
+	end
+	if right - cursor >= wanted then gaps[#gaps + 1] = { cursor, right } end
+	return gaps, top, floor
+end
+
+-- ------------------------------------------------------------------
 -- Events
 -- ------------------------------------------------------------------
 
@@ -476,6 +569,7 @@ function Windows.OnEvent(event)
 
 	elseif event == "BANKFRAME_OPENED" or event == "GUILDBANKFRAME_OPENED" or event == "BAG_OPEN" then
 		Windows.Sweep(event)
+		if ns.BagHeader and ns.BagHeader.Sweep then pcall(ns.BagHeader.Sweep) end
 		Windows.ReapplyAll()
 		ns.After(0, Windows.ReapplyAll)
 
@@ -487,10 +581,17 @@ end
 function Windows.Init()
 	Windows.Sweep("init")
 
-	-- The game re-stacks every open bag window whenever one opens or closes. This is the hook
-	-- that puts the ones the user has moved back where they left them.
+	-- The game re-stacks every open bag window whenever one opens or closes. This is the hook that
+	-- puts the ones the user has moved back where they left them.
+	--
+	-- It matters that this runs STRAIGHT AWAY rather than on the next frame. hooksecurefunc runs
+	-- as soon as the game's own function returns, which is still before anything is drawn, so the
+	-- window is only ever painted where the user put it. Deferring it by a frame is what made a
+	-- moved bag flicker through its default position on the way to its own.
 	if type(_G.UpdateContainerFrameAnchors) == "function" and hooksecurefunc then
 		local ok = pcall(hooksecurefunc, "UpdateContainerFrameAnchors", function()
+			Windows.ReapplyAll()
+			-- A backstop for any build that finishes the job after this returns.
 			ns.After(0, Windows.ReapplyAll)
 		end)
 		report["bag anchor hook"] = ok and "ok" or "could not be hooked"
@@ -501,6 +602,7 @@ function Windows.Init()
 	-- Some builds place a single bag through this one instead.
 	if type(_G.ContainerFrame_SetPosition) == "function" and hooksecurefunc then
 		pcall(hooksecurefunc, "ContainerFrame_SetPosition", function()
+			Windows.ReapplyAll()
 			ns.After(0, Windows.ReapplyAll)
 		end)
 	end

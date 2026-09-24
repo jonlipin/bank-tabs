@@ -464,4 +464,15 @@ end
 function VaultUI.Show()
 	Build()
 	window:Show()
+	VaultUI.Refresh()
+end
+
+-- Opens the vault straight at one saved bank, which is what the buttons on the bag window do.
+function VaultUI.ShowSource(kind, key)
+	Build()
+	for _, source in ipairs(ns.Vault.Sources()) do
+		if source.kind == kind and source.key == key then selected = source end
+	end
+	window:Show()
+	VaultUI.Refresh()
 end

@@ -12,7 +12,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "1.0.0"
+ns.version = "1.0.1"
 ns.report = {}
 
 local report = ns.report
@@ -47,9 +47,17 @@ ns.defaults = {
 	-- Draw a faint outline over the strip of each window that can be dragged.
 	showGrips = false,
 
+	-- A button on the minimap rim. `angle` is degrees around it, kept when the user drags it.
+	minimap = {
+		shown = true,
+		angle = 205,
+	},
+
 	map = {
 		resizeGrip = true,
 		scaleButtons = true,
+		topBarDrag = true,
+		cornerHandle = false, -- the handle appears on its own when the top bar has no room
 		scale = 1.0,
 		step = 10, -- percent per click of the scale buttons
 		minScale = 0.5,
@@ -60,6 +68,7 @@ ns.defaults = {
 		autoBank = true,
 		autoGuild = true,
 		keepOtherCharacters = true,
+		bagButtons = true,
 	},
 
 	-- Where each window was left, in UIParent units, keyed by window or by bag id.
@@ -185,6 +194,8 @@ function ns.Refresh()
 	MirrorToAccount()
 	if ns.Windows and ns.Windows.Apply then pcall(ns.Windows.Apply) end
 	if ns.Map and ns.Map.Apply then pcall(ns.Map.Apply) end
+	if ns.Minimap and ns.Minimap.Apply then pcall(ns.Minimap.Apply) end
+	if ns.BagHeader and ns.BagHeader.Apply then pcall(ns.BagHeader.Apply) end
 end
 
 -- ------------------------------------------------------------------
@@ -202,10 +213,12 @@ local PANEL_TEMPLATES = {
 	{ "BasicFrameTemplate" },
 }
 
-function ns.CreatePanel(name)
+-- A frame wearing the game's own panel art: the border and the background, nothing else. Used for
+-- the addon's windows and for the small tab that hangs under the world map.
+function ns.CreatePanelFrame(name, parent, key)
 	local panel, used
 	for _, candidate in ipairs(PANEL_TEMPLATES) do
-		local ok, made = pcall(CreateFrame, "Frame", name, UIParent, candidate[1])
+		local ok, made = pcall(CreateFrame, "Frame", name, parent or UIParent, candidate[1])
 		if ok and made and (not candidate[2] or candidate[2](made)) then
 			panel, used = made, candidate[1]
 			break
@@ -213,8 +226,8 @@ function ns.CreatePanel(name)
 		if ok and made then made:Hide() end
 	end
 	if not panel then
-		local ok, made = pcall(CreateFrame, "Frame", name, UIParent, "BackdropTemplate")
-		panel = (ok and made) or CreateFrame("Frame", name, UIParent)
+		local ok, made = pcall(CreateFrame, "Frame", name, parent or UIParent, "BackdropTemplate")
+		panel = (ok and made) or CreateFrame("Frame", name, parent or UIParent)
 		used = "backdrop"
 		if panel.SetBackdrop then
 			panel:SetBackdrop({
@@ -224,9 +237,84 @@ function ns.CreatePanel(name)
 				insets = { left = 3, right = 3, top = 3, bottom = 3 },
 			})
 			panel:SetBackdropColor(0.05, 0.05, 0.05, 0.94)
+		else
+			-- Nothing at all resolved, so the panel is painted by hand rather than left invisible.
+			local backing = panel:CreateTexture(nil, "BACKGROUND")
+			backing:SetAllPoints()
+			backing:SetColorTexture(0.05, 0.05, 0.06, 0.94)
+			for _, edge in ipairs({ { "TOPLEFT", "TOPRIGHT", 0, 1 }, { "BOTTOMLEFT", "BOTTOMRIGHT", 0, 1 },
+				{ "TOPLEFT", "BOTTOMLEFT", 1, 0 }, { "TOPRIGHT", "BOTTOMRIGHT", 1, 0 } }) do
+				local line = panel:CreateTexture(nil, "BORDER")
+				line:SetColorTexture(0.75, 0.62, 0.32, 0.9)
+				line:SetPoint(edge[1])
+				line:SetPoint(edge[2])
+				if edge[3] == 1 then line:SetWidth(1) else line:SetHeight(1) end
+			end
 		end
 	end
-	report["window panel"] = used
+	report[(key or "window") .. " panel"] = used
+
+	if used == "ButtonFrameTemplate" then
+		if ButtonFrameTemplate_HidePortrait then pcall(ButtonFrameTemplate_HidePortrait, panel) end
+		if ButtonFrameTemplate_HideButtonBar then pcall(ButtonFrameTemplate_HideButtonBar, panel) end
+		if panel.Inset then panel.Inset:Hide() end
+	end
+	panel.csTemplate = used
+	return panel
+end
+
+-- A small panel, for the tab under the world map. The big window templates are not used here: the
+-- metal NineSlice border those bring breaks below roughly 156 by 110, and this is a third of that.
+-- The tooltip backdrop is the game's own art and holds up at any size.
+function ns.CreateTabPanel(name, parent, key)
+	local panel, used
+	local ok, made = pcall(CreateFrame, "Frame", name, parent, "TooltipBackdropTemplate")
+	if ok and made and (made.NineSlice or made.SetBackdrop) then
+		panel, used = made, "TooltipBackdropTemplate"
+	elseif ok and made then
+		made:Hide()
+	end
+
+	if not panel then
+		local gotBackdrop, backdropFrame = pcall(CreateFrame, "Frame", name, parent, "BackdropTemplate")
+		if gotBackdrop and backdropFrame and backdropFrame.SetBackdrop then
+			panel, used = backdropFrame, "BackdropTemplate"
+			panel:SetBackdrop({
+				bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+				edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+				tile = true, tileSize = 16, edgeSize = 16,
+				insets = { left = 4, right = 4, top = 4, bottom = 4 },
+			})
+			panel:SetBackdropColor(0.06, 0.06, 0.07, 0.95)
+			panel:SetBackdropBorderColor(0.75, 0.62, 0.32, 1)
+		elseif gotBackdrop and backdropFrame then
+			backdropFrame:Hide()
+		end
+	end
+
+	if not panel then
+		panel, used = CreateFrame("Frame", name, parent), "painted"
+		local backing = panel:CreateTexture(nil, "BACKGROUND")
+		backing:SetAllPoints()
+		backing:SetColorTexture(0.06, 0.06, 0.07, 0.95)
+		for _, edge in ipairs({ { "TOPLEFT", "TOPRIGHT", false }, { "BOTTOMLEFT", "BOTTOMRIGHT", false },
+			{ "TOPLEFT", "BOTTOMLEFT", true }, { "TOPRIGHT", "BOTTOMRIGHT", true } }) do
+			local line = panel:CreateTexture(nil, "BORDER")
+			line:SetColorTexture(0.75, 0.62, 0.32, 1)
+			line:SetPoint(edge[1])
+			line:SetPoint(edge[2])
+			if edge[3] then line:SetWidth(1) else line:SetHeight(1) end
+		end
+	end
+
+	report[(key or "tab") .. " panel"] = used
+	panel.csTemplate = used
+	return panel
+end
+
+function ns.CreatePanel(name)
+	local panel = ns.CreatePanelFrame(name, UIParent, "window")
+	local used = panel.csTemplate
 
 	if used == "ButtonFrameTemplate" then
 		if ButtonFrameTemplate_HidePortrait then pcall(ButtonFrameTemplate_HidePortrait, panel) end
@@ -253,6 +341,85 @@ function ns.CreatePanel(name)
 	panel:SetScript("OnDragStart", panel.StartMoving)
 	panel:SetScript("OnDragStop", panel.StopMovingOrSizing)
 	return panel
+end
+
+-- ------------------------------------------------------------------
+-- Getting on top of a Blizzard window
+--
+-- A grip laid over one of the game's windows has to win the mouse against everything that window
+-- draws inside itself. The world map is the case that proved it: with the quest panel open, the
+-- panel's own frames sit above a grip that is merely a few levels above the map, so the grip is
+-- visible but unclickable. This walks the window, finds the highest strata and level anything
+-- inside it uses, and puts our region above all of it.
+--
+-- Our own frames are marked so that repeated calls do not climb a level higher every time.
+-- ------------------------------------------------------------------
+
+local STRATA = { "BACKGROUND", "LOW", "MEDIUM", "HIGH", "DIALOG", "FULLSCREEN", "FULLSCREEN_DIALOG", "TOOLTIP" }
+local STRATA_INDEX = {}
+for index, name in ipairs(STRATA) do STRATA_INDEX[name] = index end
+
+local function Children(frame)
+	local ok, list = pcall(function() return { frame:GetChildren() } end)
+	if ok and type(list) == "table" then return list end
+	return {}
+end
+ns.Children = Children
+
+-- Walks a window and calls `visit(child)` on everything inside it that is not one of ours.
+function ns.WalkChildren(host, visit, maxDepth, budget)
+	local seen = 0
+	local limit = budget or 400
+	local function walk(frame, depth)
+		if depth > (maxDepth or 4) or seen > limit then return end
+		for _, child in ipairs(Children(frame)) do
+			seen = seen + 1
+			if seen > limit then return end
+			if not child.csOurs then
+				visit(child)
+				walk(child, depth + 1)
+			end
+		end
+	end
+	pcall(walk, host, 1)
+	return seen
+end
+
+function ns.RaiseOver(region, host, extra)
+	region.csOurs = true
+	local hostStrata, bestLevel = 3, 1
+	local okStrata, strata = pcall(host.GetFrameStrata, host)
+	if okStrata and STRATA_INDEX[strata or ""] then hostStrata = STRATA_INDEX[strata] end
+	local okLevel, level = pcall(host.GetFrameLevel, host)
+	if okLevel and type(level) == "number" then bestLevel = level end
+	local bestStrata = hostStrata
+
+	ns.WalkChildren(host, function(child)
+		local gotStrata, childStrata = pcall(child.GetFrameStrata, child)
+		local gotLevel, childLevel = pcall(child.GetFrameLevel, child)
+		-- A child whose strata cannot be read is in the same strata as the window holding it,
+		-- which is what inheriting one means. Treating it as unknown would throw away its frame
+		-- level and leave us underneath it.
+		local s = (gotStrata and STRATA_INDEX[childStrata or ""]) or hostStrata
+		local l = (gotLevel and type(childLevel) == "number") and childLevel or 0
+		if s > bestStrata then
+			bestStrata, bestLevel = s, l
+		elseif s == bestStrata and l > bestLevel then
+			bestLevel = l
+		end
+	end)
+
+	local wanted = STRATA[math.min(bestStrata, #STRATA)]
+	local wantedLevel = math.min(bestLevel + (extra or 3), 9999)
+	pcall(region.SetFrameStrata, region, wanted)
+	pcall(region.SetFrameLevel, region, wantedLevel)
+	return wanted .. " " .. wantedLevel
+end
+
+function ns.TextureExists(path)
+	if not GetFileIDFromPath then return true end
+	local ok, id = pcall(GetFileIDFromPath, path)
+	return ok and id ~= nil
 end
 
 function ns.Tooltip(widget, title, body)
@@ -364,6 +531,14 @@ local function Init()
 		local ok, err = pcall(ns.Vault.Init)
 		report["vault"] = ok and "ok" or ("failed: " .. tostring(err))
 	end
+	if ns.BagHeader and ns.BagHeader.Init then
+		local ok, err = pcall(ns.BagHeader.Init)
+		report["bag header buttons"] = ok and "ok" or ("failed: " .. tostring(err))
+	end
+	if ns.Minimap and ns.Minimap.Init then
+		local ok, err = pcall(ns.Minimap.Init)
+		report["minimap"] = ok and "ok" or ("failed: " .. tostring(err))
+	end
 	if ns.SetupOptions then
 		local ok, err = pcall(ns.SetupOptions)
 		report["options"] = ok and "ok" or ("failed: " .. tostring(err))
@@ -423,6 +598,7 @@ local function PrintHelp()
 		"|cffffff00/casement scale <50-200>|r sets the world map scale",
 		"|cffffff00/casement reset|r puts every window back where the game had it",
 		"|cffffff00/casement lock|r or |cffffff00unlock|r turns every window switch off or on",
+		"|cffffff00/casement minimap|r shows or hides the minimap button",
 		"|cffffff00/casement debug|r prints what resolved on this client",
 	}
 	for _, line in ipairs(lines) do DEFAULT_CHAT_FRAME:AddMessage("   " .. line) end
@@ -472,6 +648,14 @@ SlashCmdList["CASEMENT"] = function(msg)
 		ns.Refresh()
 		if ns.SyncOptions then pcall(ns.SyncOptions) end
 		Print("world map scale " .. math.floor(ns.db.map.scale * 100 + 0.5) .. "%.")
+
+	elseif cmd == "minimap" then
+		local want = not ns.db.minimap.shown
+		if rest == "on" then want = true elseif rest == "off" then want = false end
+		ns.db.minimap.shown = want
+		ns.Refresh()
+		if ns.SyncOptions then pcall(ns.SyncOptions) end
+		Print("minimap button " .. (want and "shown" or "hidden") .. ".")
 
 	elseif cmd == "grips" then
 		ns.db.showGrips = not ns.db.showGrips

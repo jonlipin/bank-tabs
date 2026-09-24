@@ -284,6 +284,10 @@ local function BuildWindowsPage(parent)
 		function() return ns.db.showGrips end,
 		function(value) ns.db.showGrips = value end)
 
+	Check(layout, "Minimap button", "Left-click for these options, right-click for the saved bank contents, drag it round the rim.",
+		function() return ns.db.minimap.shown end,
+		function(value) ns.db.minimap.shown = value end)
+
 	ButtonRow(layout, {
 		{ label = "Reset every window", width = 150, onClick = function()
 			ns.Windows.ResetAll()
@@ -297,15 +301,23 @@ local function BuildMapPage(parent)
 	local layout = NewLayout(parent)
 	Header(layout, "World map")
 
-	Note(layout, "Resizing the map scales the whole window, so the corner grip and the percentage buttons are two ways of setting the same number. Scaling keeps the map, its pins and its text in proportion, which stretching the frame would not.", 0, 4)
+	Note(layout, "Everything this addon adds to the map lives in a tab under it, so nothing is laid over the map's own interface. Resizing scales the whole window, so the grip and the percentage buttons are two ways of setting the same number, and the map, its pins and its text stay in proportion.", 0, 5)
 
-	Check(layout, "Corner grip for resizing", "Puts a small grip in the bottom right corner of the map. Drag it to resize, hold shift while dragging to snap to the step below.",
+	Check(layout, "Drag the map by its top bar", "The clear stretches of the top bar move the map. The game's own buttons up there are measured and left alone.",
+		function() return ns.db.map.topBarDrag end,
+		function(value) ns.db.map.topBarDrag = value end)
+
+	Check(layout, "Percentage buttons in the tab", "Minus, the current percentage, plus, and a button back to 100 percent.",
+		function() return ns.db.map.scaleButtons end,
+		function(value) ns.db.map.scaleButtons = value end)
+
+	Check(layout, "Resize grip in the tab", "Drag it to scale the map. Hold shift while dragging to snap to the step below.",
 		function() return ns.db.map.resizeGrip end,
 		function(value) ns.db.map.resizeGrip = value end)
 
-	Check(layout, "Percentage buttons under the map", "Shows a small bar under the map with minus, the current percentage, plus and a button back to 100 percent.",
-		function() return ns.db.map.scaleButtons end,
-		function(value) ns.db.map.scaleButtons = value end)
+	Check(layout, "Always show the corner handle", "A small gold handle in the map's top left corner. It appears on its own if the top bar has no room to spare.",
+		function() return ns.db.map.cornerHandle end,
+		function(value) ns.db.map.cornerHandle = value end)
 
 	Slider(layout, "Map size", 50, 200, 5,
 		function() return math.floor((ns.db.map.scale or 1) * 100 + 0.5) end,
@@ -348,6 +360,10 @@ local function BuildVaultPage(parent)
 		function() return ns.db.vault.keepOtherCharacters end,
 		function(value) ns.db.vault.keepOtherCharacters = value end)
 
+	Check(layout, "Bank buttons on the bag window", "Puts a Bank button, and a Guild button once there is a guild bank saved, in the header of your backpack. They go somewhere the game is not already using.",
+		function() return ns.db.vault.bagButtons end,
+		function(value) ns.db.vault.bagButtons = value end)
+
 	local status = Note(layout, "", 0, 2)
 	widgets[#widgets + 1] = { refresh = function()
 		local chars, guilds = 0, 0
@@ -378,6 +394,7 @@ local function BuildAboutPage(parent)
 		"/casement snapshot saves what is open in front of you",
 		"/casement scale 120 sets the map size",
 		"/casement lock or unlock turns every window switch off or on",
+		"/casement minimap shows or hides the minimap button",
 		"/casement reset puts every window back",
 		"/casement debug prints what resolved on this client",
 	}

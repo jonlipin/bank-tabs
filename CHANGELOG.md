@@ -2,6 +2,51 @@
 
 All notable changes to Casement are listed here. The newest release is at the top.
 
+## 1.0.1 - 2026-09-24
+
+**Fixed: the map could not be resized while the quest panel was open.** The grip sat in the map's
+bottom right corner, which is underneath the quest panel. It was still drawn, so it looked like it
+should work, but the panel's own frames sit well above it and took every click. Two changes:
+
+- Everything this addon adds to the map now lives in a tab that hangs under it, wearing the game's
+  own panel art, rather than being laid inside the map's frame. The resize grip is in that tab
+  alongside the percentage buttons, so it can never be covered by anything the map draws.
+- Anything the addon does lay over one of the game's windows now walks that window first and puts
+  itself above the highest strata and frame level it finds inside, rather than assuming a few
+  levels up is enough. This is rechecked every time the window is shown or changes size, which is
+  what happens when the quest panel opens.
+
+**Fixed: a moved bag flickered through its default position when opened.** The position was being
+restored on the next frame, after the game had already drawn the window where it wanted it. The
+hook on the game's bag re-stacking now restores it in the same frame, before anything is drawn.
+
+**The map is dragged by its top bar.** Anywhere along it: the band is measured against the game's
+own controls up there and only the stretches nothing else is using take the mouse, so the zone
+buttons, the maximize and the close button all still work. The corner handle is still there and
+shows itself on its own if the top bar ever has no room, or permanently if you ask for it.
+
+**A minimap button.** Left-click for the options, right-click for the saved bank contents, shift
+and left-click to lock or unlock every window, drag it around the rim. `/casement minimap` and a
+switch in the options hide it.
+
+**Bank buttons on the bag window.** With snapshots on, your backpack gets a Bank button, and a
+Guild button once there is a guild bank saved, each opening the vault straight at that record.
+They are placed in a part of the header the game is not already using, and fall back to sitting
+just above the window if the header is full.
+
+Also in this release:
+
+- The resize drag now watches the mouse button itself rather than waiting for a mouse up on the
+  grip, which the grip may never see now that it slides away as the map grows.
+- The map tab flips above the map if the map is sitting at the bottom of the screen.
+- The tab uses the tooltip backdrop rather than the big window templates, whose metal border
+  breaks below roughly 156 by 110.
+- `/casement debug` reports how many draggable stretches the top bar gave up, what layer the tab
+  reached, and how many times the resize grip has actually been pressed, so a grip that never
+  receives a click can be told apart from one that receives it and does nothing.
+- The offline harness grew to 176 checks and now builds a stand in for the quest panel, so the
+  layering and the top bar measuring are tested rather than assumed.
+
 ## 1.0.0 - 2026-09-24
 
 First release.

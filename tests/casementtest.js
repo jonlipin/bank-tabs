@@ -12,7 +12,7 @@ const fs = require('fs');
 const { lua, lauxlib, lualib, to_luastring } = require('fengari');
 const DIR = (process.argv.slice(2).find(a => !a.startsWith('--')) || 'C:/Users/jonli/casement/');
 const L = lauxlib.luaL_newstate(); lualib.luaL_openlibs(L);
-const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Vault.lua', 'VaultUI.lua', 'Options.lua'];
+const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Options.lua'];
 
 const stub = String.raw`
 local VERBS = { "Set", "Get", "Is", "Create", "Register", "Enable", "Clear", "Hook", "Start", "Stop", "Has", "Num", "Add", "Unregister", "Disable", "Raise", "Lower", "Lock", "Unlock", "Show", "Hide", "Insert", "Toggle" }
@@ -62,10 +62,16 @@ function ScreenRect(f)
   return l, b, w, h
 end
 
+local unpack = unpack or table.unpack
+
 local function obj(kind, template, name)
   local o = { shown = true, scripts = {}, w = 0, h = 0, scale = 1, kind = kind, template = template,
-    name = name, points = {}, level = 1, id = 0, mouse = false, enabled = true }
+    name = name, points = {}, level = 1, id = 0, mouse = false, enabled = true, kids = {} }
   return setmetatable(o, { __index = function(t, k)
+    -- Real child lists matter here: the addon walks a window's children to find the clear parts of
+    -- its title bar and to work out what it has to sit above.
+    if k == "GetChildren" then return function(s) return unpack(s.kids or {}) end end
+    if k == "GetNumChildren" then return function(s) return #(s.kids or {}) end end
     if k == "Show" then return function(s) local was = s.shown s.shown = true if not was and s.scripts.OnShow then s.scripts.OnShow(s) end end end
     if k == "Hide" then return function(s) local was = s.shown s.shown = false if was and s.scripts.OnHide then s.scripts.OnHide(s) end end end
     if k == "SetShown" then return function(s, v) if v then s:Show() else s:Hide() end end end
@@ -73,7 +79,13 @@ local function obj(kind, template, name)
     if k == "GetObjectType" then return function(s) return s.kind end end
     if k == "GetName" then return function(s) return s.name end end
     if k == "GetParent" then return function(s) return s.parent end end
-    if k == "SetParent" then return function(s, p) s.parent = p end end
+    if k == "SetParent" then return function(s, p)
+      if s.parent and s.parent.kids then
+        for i, kid in ipairs(s.parent.kids) do if kid == s then table.remove(s.parent.kids, i) break end end
+      end
+      s.parent = p
+      if p and p.kids then p.kids[#p.kids + 1] = s end
+    end end
     if k == "SetID" then return function(s, v) s.id = v end end
     if k == "GetID" then return function(s) return s.id end end
     if k == "SetScript" then return function(s, e, f) s.scripts[e] = f end end
@@ -119,7 +131,8 @@ local function obj(kind, template, name)
     if k == "SetFrameLevel" then return function(s, v) s.level = v end end
     if k == "GetFrameLevel" then return function(s) return s.level end end
     if k == "SetFrameStrata" then return function(s, v)
-      local valid = { BACKGROUND = 1, LOW = 1, MEDIUM = 1, HIGH = 1, DIALOG = 1, FULLSCREEN = 1, TOOLTIP = 1 }
+      local valid = { BACKGROUND = 1, LOW = 1, MEDIUM = 1, HIGH = 1, DIALOG = 1, FULLSCREEN = 1,
+        FULLSCREEN_DIALOG = 1, TOOLTIP = 1 }
       if not valid[v] then error("bad strata " .. tostring(v)) end
       s.strata = v
     end end
@@ -189,10 +202,12 @@ function CreateFrame(kind, name, parent, template)
   if template and BAD_TEMPLATES[template] then error("Couldn't find inherited node " .. template) end
   local f = obj(kind, template, name)
   f.parent = parent
+  if parent and parent.kids then parent.kids[#parent.kids + 1] = f end
   if template == "ButtonFrameTemplate" or template == "DefaultPanelFlatTemplate" or template == "DefaultPanelTemplate" then
     f.NineSlice = obj("Frame") f.TitleText = obj("fontstring") f.Inset = obj("Frame")
   end
   if template == "SearchBoxTemplate" then f.Instructions = obj("fontstring") end
+  if template == "TooltipBackdropTemplate" or template == "BackdropTemplate" then f.SetBackdrop = function(s, b) s.backdrop = b end end
   if template == "UIPanelButtonTemplate" then f.fontString = obj("fontstring") end
   FRAMES[#FRAMES + 1] = f
   if name then _G[name] = f end
@@ -343,6 +358,54 @@ WorldMapFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -100)
 WorldMapFrame.ScrollContainer = CreateFrame("Frame", nil, WorldMapFrame)
 WorldMapFrame:Hide()
 
+-- The map's own top bar: a nav bar on the left and buttons on the right, both taking the mouse.
+-- Anything the addon lays across the top bar has to leave these alone.
+MAP_NAV = CreateFrame("Frame", "CasementTestMapNav", WorldMapFrame)
+MAP_NAV:SetSize(220, 24)
+MAP_NAV:SetPoint("TOPLEFT", WorldMapFrame, "TOPLEFT", 8, -2)
+MAP_NAV:EnableMouse(true)
+MAP_NAV:SetFrameLevel(4)
+
+MAP_CLOSE = CreateFrame("Button", "CasementTestMapClose", WorldMapFrame)
+MAP_CLOSE:SetSize(30, 26)
+MAP_CLOSE:SetPoint("TOPRIGHT", WorldMapFrame, "TOPRIGHT", -4, -2)
+MAP_CLOSE:EnableMouse(true)
+MAP_CLOSE:SetFrameLevel(4)
+
+-- The quest panel. This is the frame that broke the first version: it covers the right hand side
+-- of the map, takes the mouse, and sits well above the map's own frame level, so a grip only a few
+-- levels up from the map was visible but never received a click.
+QuestMapFrame = CreateFrame("Frame", "QuestMapFrame", WorldMapFrame)
+QuestMapFrame:SetSize(330, 500)
+QuestMapFrame:SetPoint("TOPRIGHT", WorldMapFrame, "TOPRIGHT", 0, 0)
+QuestMapFrame:EnableMouse(true)
+QuestMapFrame:SetFrameLevel(20)
+QUEST_SCROLL = CreateFrame("ScrollFrame", nil, QuestMapFrame)
+QUEST_SCROLL:SetSize(330, 470)
+QUEST_SCROLL:SetPoint("TOPLEFT", QuestMapFrame, "TOPLEFT", 0, 0)
+QUEST_SCROLL:EnableMouse(true)
+QUEST_SCROLL:SetFrameLevel(24)
+QuestMapFrame:Hide()
+
+-- Opening the quest panel widens the map, exactly as the real one does.
+function OpenQuestPanel(open)
+  if open then
+    WorldMapFrame:SetSize(1030, 500)
+    QuestMapFrame:Show()
+  else
+    WorldMapFrame:SetSize(700, 500)
+    QuestMapFrame:Hide()
+  end
+  if WorldMapFrame.scripts.OnSizeChanged then WorldMapFrame.scripts.OnSizeChanged(WorldMapFrame) end
+end
+
+Minimap = CreateFrame("Frame", "Minimap", UIParent)
+Minimap:SetSize(140, 140)
+Minimap:SetPoint("TOPRIGHT", UIParent, "TOPRIGHT", -20, -20)
+
+MOUSE_DOWN = false
+function IsMouseButtonDown(which) return MOUSE_DOWN end
+
 BankFrame = CreateFrame("Frame", "BankFrame", UIParent)
 BankFrame:SetSize(400, 500)
 BankFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 40, -120)
@@ -353,6 +416,13 @@ for i = 1, 17 do
   f:SetSize(340, 400)
   f:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -20 - (i - 1) * 10, 100)
   f:SetID(i - 1)
+  -- A close button in the header, so anything the addon puts up there has to work around it.
+  local close = CreateFrame("Button", nil, f)
+  close:SetSize(30, 26)
+  close:SetPoint("TOPRIGHT", f, "TOPRIGHT", -4, -2)
+  close:EnableMouse(true)
+  close:SetFrameLevel(4)
+  f.testClose = close
   f:Hide()
 end
 ContainerFrameCombinedBags = CreateFrame("Frame", "ContainerFrameCombinedBags", UIParent)
@@ -471,31 +541,58 @@ local map = WorldMapFrame
 check("map is movable", map.movable == true)
 check("map is clamped to the screen", map.clamped == true)
 
+-- The corner handle still exists, but it only shows itself when the top bar has no room.
 local grip
 for _, f in ipairs(FRAMES) do
-  if f.parent == map and f.dragButtons and f.w == 22 then grip = f end
+  if f.parent == map and f.dragButtons and f.w == 22 and f.h == 22 then grip = f end
 end
-check("map has a drag handle", grip ~= nil)
-check("handle is small and in a corner", grip and grip.w == 22 and grip.h == 22)
+check("map has a corner handle built", grip ~= nil)
+check("the handle stays out of the way while the top bar works", grip and grip.shown == false)
 
-DragTo(map, grip, 300, 200)
+-- The draggable stretches of the top bar.
+local function TopStrips()
+  local out = {}
+  for _, f in ipairs(FRAMES) do
+    if f.parent == map and f.dragButtons and f.shown and f ~= grip and f.h ~= 22 then out[#out + 1] = f end
+  end
+  return out
+end
+local strips = TopStrips()
+check("the top bar has a draggable stretch", #strips > 0, #strips)
+check("the report says how many", (ns.report["map top bar"] or ""):find("stretches"), ns.report["map top bar"])
+
+-- Nothing the addon laid on the top bar may cover one of the game's own controls.
+local function Overlaps(a, b)
+  local al, ab, aw = ns.Windows.Measure(a)
+  local bl, bb, bw = ns.Windows.Measure(b)
+  if not al or not bl then return false end
+  return al < bl + bw and bl < al + aw
+end
+local covered = false
+for _, strip in ipairs(strips) do
+  if Overlaps(strip, MAP_NAV) or Overlaps(strip, MAP_CLOSE) then covered = true end
+end
+check("the top bar strips leave the game's own buttons clear", covered == false)
+
+local strip1 = strips[1]
+DragTo(map, strip1, 300, 200)
 check("map position saved", ns.db.positions["worldmap"] ~= nil)
 check("saved x is right", near(ns.db.positions["worldmap"].x, 300), ns.db.positions["worldmap"].x)
 check("map actually sits there", near(map:GetLeft(), 300), map:GetLeft())
 
 -- Off the left edge
-DragTo(map, grip, -400, 200)
+DragTo(map, strip1, -400, 200)
 check("dragged off the left edge is pulled back", near(ns.db.positions["worldmap"].x, 0), ns.db.positions["worldmap"].x)
 -- Off the right edge
-DragTo(map, grip, 5000, 200)
+DragTo(map, strip1, 5000, 200)
 check("dragged off the right edge is pulled back", near(ns.db.positions["worldmap"].x, SCREEN_W - 700), ns.db.positions["worldmap"].x)
 -- Off the bottom
-DragTo(map, grip, 300, -900)
+DragTo(map, strip1, 300, -900)
 check("dragged below the screen is pulled back", near(ns.db.positions["worldmap"].y, 0), ns.db.positions["worldmap"].y)
 -- Off the top
-DragTo(map, grip, 300, 4000)
+DragTo(map, strip1, 300, 4000)
 check("dragged above the screen is pulled back", near(ns.db.positions["worldmap"].y, SCREEN_H - 500), ns.db.positions["worldmap"].y)
-DragTo(map, grip, 300, 200)
+DragTo(map, strip1, 300, 200)
 
 -- The game hides and shows the map again: our position has to win.
 map:Hide()
@@ -546,12 +643,15 @@ ns.db.map.step = 10
 ns.Map.ResetSize()
 check("reset goes back to 100 percent", near(ns.db.map.scale, 1.0, 0.001))
 
--- The bar and the grip stay the same size on screen whatever the map is scaled to.
-local bar = CasementMapScale
-check("scale bar built", bar ~= nil)
+-- The tab under the map holds everything the addon adds, and stays the same size on screen
+-- whatever the map is scaled to.
+local tab = CasementMapTab
+check("the map tab was built", tab ~= nil)
+check("the tab wears the game's panel art", (ns.report["map tab panel"] or "") ~= "", ns.report["map tab panel"])
+check("the tab hangs off the map itself", tab and tab.parent == map)
+check("the resize grip lives in the tab, not on the map", CasementMapGrip and CasementMapGrip.parent == tab)
 ns.Map.SetScale(2.0)
-check("bar counters the map scale", near(bar:GetScale(), 0.5, 0.001), bar:GetScale())
-check("grip counters the map scale", near(CasementMapGrip:GetScale(), 0.5, 0.001))
+check("the tab counters the map scale", near(tab:GetScale(), 0.5, 0.001), tab:GetScale())
 ns.Map.SetScale(1.0)
 
 -- ------------------------------------------------------------------
@@ -560,7 +660,8 @@ ns.Map.SetScale(1.0)
 ns.Windows.Place(map, 300, 200)
 local mapGrip = CasementMapGrip
 local before = ns.db.map.scale
--- The corner starts 700 across and 500 down from the top left corner of the map.
+MOUSE_DOWN = true
+-- The grip starts 700 across and 500 down from the top left corner of the map.
 CURSOR = { 1000, 700 }
 mapGrip.scripts.OnMouseDown(mapGrip)
 CURSOR = { 1150, 600 }
@@ -581,7 +682,56 @@ SHIFT = false
 mapGrip.scripts.OnMouseUp(mapGrip)
 check("the resize loop stops when the mouse is let go", mapGrip.scripts.OnUpdate == nil)
 check("the position is saved once the drag is over", ns.db.positions["worldmap"] ~= nil)
+
+-- The grip slides away from under the cursor as the map grows, so a mouse up on the grip itself
+-- may never arrive. The loop watches the button instead.
+CURSOR = { 1000, 700 }
+MOUSE_DOWN = true
+mapGrip.scripts.OnMouseDown(mapGrip)
+CURSOR = { 1100, 640 }
+mapGrip.scripts.OnUpdate(mapGrip)
+check("the resize is running", mapGrip.scripts.OnUpdate ~= nil)
+MOUSE_DOWN = false
+mapGrip.scripts.OnUpdate(mapGrip)
+check("letting go anywhere on screen ends the resize", mapGrip.scripts.OnUpdate == nil)
 ns.Map.SetScale(1.0)
+
+-- ------------------------------------------------------------------
+-- 4b. The quest panel, which is what broke the first version
+-- ------------------------------------------------------------------
+OpenQuestPanel(true)
+RunTimers(1)
+check("the quest panel is above the map's own level", QUEST_SCROLL.level > map.level)
+check("the tab climbs above the quest panel", tab.level > QUEST_SCROLL.level, tab.level .. " vs " .. QUEST_SCROLL.level)
+check("the report names the layer it reached", (ns.report["map tab layer"] or ""):find("%d"), ns.report["map tab layer"])
+
+local wideStrips = TopStrips()
+check("the top bar still has somewhere to grab with the panel open", #wideStrips > 0, #wideStrips)
+local clash = false
+for _, s in ipairs(wideStrips) do
+  if Overlaps(s, MAP_NAV) or Overlaps(s, MAP_CLOSE) or Overlaps(s, QuestMapFrame) then clash = true end
+end
+check("and it still avoids the panel and the buttons", clash == false)
+
+-- Resizing has to work with the panel open, which is the bug that was reported.
+local pressesBefore = ns.Map.gripPresses
+local scaleBefore = ns.db.map.scale
+local ql, qb, qw, qh = ns.Windows.Measure(map)
+CURSOR = { ql + qw, qb }
+MOUSE_DOWN = true
+mapGrip.scripts.OnMouseDown(mapGrip)
+check("the grip in the tab took the click with the panel open", ns.Map.gripPresses == pressesBefore + 1)
+CURSOR = { ql + qw + 120, qb - 80 }
+mapGrip.scripts.OnUpdate(mapGrip)
+check("and the map resized", ns.db.map.scale > scaleBefore, ns.db.map.scale)
+MOUSE_DOWN = false
+mapGrip.scripts.OnUpdate(mapGrip)
+ns.Map.SetScale(1.0)
+
+OpenQuestPanel(false)
+RunTimers(1)
+check("closing the panel leaves the top bar working", #TopStrips() > 0)
+local bar = tab
 
 -- ------------------------------------------------------------------
 -- 5. Switching a window off
@@ -616,10 +766,20 @@ DragTo(backpack, bagGrip, 500, 300)
 check("bag position saved under its bag id", ns.db.positions["bag0"] ~= nil, ns.db.positions["bag0"])
 check("bag sits where it was dropped", near(backpack:GetLeft(), 500), backpack:GetLeft())
 
--- The game re-stacks the bags. Ours has to go back.
+-- The game re-stacks the bags. Ours has to go back, and it has to go back BEFORE the frame is
+-- drawn: putting it off until the next tick is what made a moved bag flicker through its default
+-- position on the way to the user's. Nothing is run between the game's call and this check.
 UpdateContainerFrameAnchors()
+check("a moved bag is put back in the same frame, with no flicker", near(backpack:GetLeft(), 500), backpack:GetLeft())
 RunTimers(0.1)
-check("a moved bag survives the game re-stacking them", near(backpack:GetLeft(), 500), backpack:GetLeft())
+check("and it is still there a frame later", near(backpack:GetLeft(), 500), backpack:GetLeft())
+
+-- Showing a bag the game has just re-anchored must not leave it somewhere else either.
+backpack:Hide()
+backpack:ClearAllPoints()
+backpack:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -20, 100)
+backpack:Show()
+check("opening a moved bag puts it straight where the user left it", near(backpack:GetLeft(), 500), backpack:GetLeft())
 
 -- Which switch governs which window
 ContainerFrame7:SetID(6)
@@ -830,6 +990,115 @@ check("a record can be forgotten", ns.vault.guilds["Night Owls - Voidpact"] == n
 check("the list drops to one", #ns.Vault.Sources() == 1)
 
 -- ------------------------------------------------------------------
+-- 11b. The minimap button
+-- ------------------------------------------------------------------
+local mm = CasementMinimapButton
+check("the minimap button was built", mm ~= nil)
+check("it sits on the minimap", mm and mm.parent == Minimap)
+check("it is shown by default", mm and mm.shown == true)
+check("it found an icon", (ns.report["minimap icon"] or ""):find("Interface"), ns.report["minimap icon"])
+
+-- Dragging it round the rim. The angle must stay in degrees: running math.deg over the game's own
+-- atan2, which already answers in degrees, multiplies it by about fifty seven.
+local mx, my = Minimap:GetCenter()
+CURSOR = { mx, my + 200 }
+mm.scripts.OnDragStart(mm)
+mm.scripts.OnUpdate(mm)
+check("dragging straight up puts it at the top of the rim", near(ns.db.minimap.angle, 90, 1), ns.db.minimap.angle)
+CURSOR = { mx - 200, my }
+mm.scripts.OnUpdate(mm)
+check("dragging left puts it on the left of the rim", near(ns.db.minimap.angle, 180, 1), ns.db.minimap.angle)
+mm.scripts.OnDragStop(mm)
+check("the angle is saved", near(CasementAccountDB.profile.minimap.angle, 180, 1))
+
+CasementVault:Hide()
+mm.scripts.OnClick(mm, "RightButton")
+check("right-click opens the saved banks", CasementVault.shown == true)
+mm.scripts.OnClick(mm, "RightButton")
+check("and closes them again", CasementVault.shown == false)
+
+SHIFT = true
+local wasEnabled = ns.db.enabled
+mm.scripts.OnClick(mm, "LeftButton")
+check("shift and left-click locks everything", ns.db.enabled ~= wasEnabled)
+mm.scripts.OnClick(mm, "LeftButton")
+SHIFT = false
+check("and unlocks it again", ns.db.enabled == wasEnabled)
+
+ns.db.minimap.shown = false
+ns.Refresh()
+check("the button can be switched off", mm.shown == false)
+ns.db.minimap.shown = true
+ns.Refresh()
+
+-- ------------------------------------------------------------------
+-- 11c. The bank buttons on the bag window
+-- ------------------------------------------------------------------
+backpack:Hide()
+backpack:Show()
+RunTimers(0.1)
+
+local bankButton, guildButton
+for _, f in ipairs(FRAMES) do
+  if f.text == "Bank" and f.kind == "Button" then bankButton = f end
+  if f.text == "Guild" and f.kind == "Button" then guildButton = f end
+end
+check("the backpack got a Bank button", bankButton ~= nil)
+check("it is on the backpack", bankButton and bankButton.parent and bankButton.parent.parent == backpack)
+check("it is shown", bankButton and bankButton.parent.shown == true)
+check("the report says where it went", (ns.report["bag buttons"] or ""):find("header") or (ns.report["bag buttons"] or ""):find("above"), ns.report["bag buttons"])
+
+-- It has to keep clear of the game's own close button in that header.
+local holder = bankButton.parent
+local hl, hb, hw = ns.Windows.Measure(holder)
+local cl, cb, cw = ns.Windows.Measure(backpack.testClose)
+check("the buttons keep clear of the game's close button", hl and cl and (hl + hw <= cl + 0.5 or cl + cw <= hl + 0.5),
+  tostring(hl) .. "+" .. tostring(hw) .. " vs " .. tostring(cl))
+
+-- With a guild bank saved there is a Guild button too, and it opens that record.
+check("the Guild button only appears with a guild bank saved", guildButton == nil or guildButton.parent.guild.shown == false)
+ns.vault.guilds["Night Owls - Voidpact"] = { time = time(), tabs = { [1] = { name = "Vault 1", items = {} } } }
+ns.BagHeader.Update(backpack)
+guildButton = holder.guild
+check("the Guild button turns up once there is one", guildButton.shown == true)
+
+CasementVault:Hide()
+bankButton.scripts.OnClick(bankButton)
+check("the Bank button opens the vault", CasementVault.shown == true)
+guildButton.scripts.OnClick(guildButton)
+check("the Guild button opens it at the guild bank", CasementVault.shown == true)
+CasementVault:Hide()
+ns.vault.guilds["Night Owls - Voidpact"] = nil
+
+ns.db.vault.bagButtons = false
+ns.Refresh()
+check("the bag buttons can be switched off", holder.shown == false)
+ns.db.vault.bagButtons = true
+ns.Refresh()
+
+-- ------------------------------------------------------------------
+-- 11d. The corner handle comes back when the top bar has no room
+-- ------------------------------------------------------------------
+local hog = CreateFrame("Frame", nil, map)
+hog:SetSize(700, 26)
+hog:SetPoint("TOPLEFT", map, "TOPLEFT", 0, 0)
+hog:EnableMouse(true)
+hog:SetFrameLevel(6)
+ns.Map.Apply()
+check("a full top bar leaves no draggable stretches", ns.Map.stripCount == 0, ns.Map.stripCount)
+check("so the corner handle shows itself instead", grip.shown == true)
+hog:Hide()
+ns.Map.Apply()
+check("and goes away again once there is room", grip.shown == false)
+check("the top bar is back", ns.Map.stripCount > 0)
+
+ns.db.map.cornerHandle = true
+ns.Refresh()
+check("the handle can also be asked for outright", grip.shown == true)
+ns.db.map.cornerHandle = false
+ns.Refresh()
+
+-- ------------------------------------------------------------------
 -- 12. Slash commands
 -- ------------------------------------------------------------------
 local slash = SlashCmdList["CASEMENT"]
@@ -934,7 +1203,7 @@ lua.lua_newtable(L); files.forEach((f, i) => { lua.lua_pushstring(L, to_luastrin
 lua.lua_setglobal(L, to_luastring('FILES'));
 
 const pre = (process.argv.includes('--bare')
-  ? 'BARE=true\nBAD_ATLAS=true\nBAD_TEMPLATES={UICheckButtonTemplate=true,ChatConfigCheckButtonTemplate=true,MinimalSliderTemplate=true,UISliderTemplate=true,OptionsSliderTemplate=true,UIPanelButtonTemplate=true,UIPanelCloseButton=true,DefaultPanelFlatTemplate=true,DefaultPanelTemplate=true,ButtonFrameTemplate=true,BasicFrameTemplate=true,BackdropTemplate=true,SearchBoxTemplate=true,InputBoxTemplate=true}\n'
+  ? 'BARE=true\nBAD_ATLAS=true\nBAD_TEMPLATES={TooltipBackdropTemplate=true,UICheckButtonTemplate=true,ChatConfigCheckButtonTemplate=true,MinimalSliderTemplate=true,UISliderTemplate=true,OptionsSliderTemplate=true,UIPanelButtonTemplate=true,UIPanelCloseButton=true,DefaultPanelFlatTemplate=true,DefaultPanelTemplate=true,ButtonFrameTemplate=true,BasicFrameTemplate=true,BackdropTemplate=true,SearchBoxTemplate=true,InputBoxTemplate=true}\n'
   : '') + (process.argv.includes('--verbose') ? 'VERBOSE=true\n' : '')
   + (process.argv.includes('--noenum') ? 'NO_ENUM=true\n' : '');
 run(pre + stub, 'stub');
