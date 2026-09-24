@@ -12,7 +12,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "1.0.2"
+ns.version = "1.1.0"
 ns.report = {}
 
 local report = ns.report
@@ -62,6 +62,13 @@ ns.defaults = {
 		step = 10, -- percent per click of the scale buttons
 		minScale = 0.5,
 		maxScale = 2.0,
+		-- Your position and the cursor's, at the left end of the tab, with a button that puts
+		-- your position into chat.
+		coords = true,
+		coordsCursor = true,
+		-- Drawing the unexplored parts of the map, tinted so they can still be told apart.
+		reveal = false,
+		revealTint = "blue",
 	},
 
 	vault = {
@@ -195,6 +202,40 @@ function ns.Refresh()
 	if ns.Map and ns.Map.Apply then pcall(ns.Map.Apply) end
 	if ns.Minimap and ns.Minimap.Apply then pcall(ns.Minimap.Apply) end
 	if ns.BagHeader and ns.BagHeader.Apply then pcall(ns.BagHeader.Apply) end
+	if ns.Reveal and ns.Reveal.Apply then pcall(ns.Reveal.Apply) end
+end
+
+-- A box with some text selected in it, for anything the game will not put on the clipboard
+-- itself: Ctrl+C in a selected edit box does reach the system clipboard.
+function ns.CopyBox(title, text)
+	local box = _G.CasementCopyBox
+	if not box then
+		box = ns.CreatePanel("CasementCopyBox")
+		box:SetSize(560, 400)
+		box:SetPoint("CENTER")
+		box:SetFrameStrata("DIALOG")
+		local scroll = CreateFrame("ScrollFrame", nil, box)
+		scroll:SetPoint("TOPLEFT", 16, -36)
+		scroll:SetPoint("BOTTOMRIGHT", -30, 40)
+		local edit = CreateFrame("EditBox", nil, scroll)
+		edit:SetMultiLine(true)
+		edit:SetAutoFocus(false)
+		edit:SetFontObject("ChatFontNormal")
+		edit:SetWidth(500)
+		edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() box:Hide() end)
+		scroll:SetScrollChild(edit)
+		box.edit = edit
+		local hint = box:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+		hint:SetPoint("BOTTOMLEFT", 16, 16)
+		hint:SetText("The text is selected: press Ctrl+C to copy it, Escape to close.")
+		tinsert(UISpecialFrames, "CasementCopyBox")
+	end
+	box.csTitle:SetText(title or "Casement")
+	box.edit:SetText(text or "")
+	box:Show()
+	box.edit:SetFocus()
+	if box.edit.HighlightText then box.edit:HighlightText() end
+	return box
 end
 
 -- ------------------------------------------------------------------
@@ -555,6 +596,7 @@ local EVENTS = {
 	"GUILDBANKBAGSLOTS_CHANGED",
 	"BAG_OPEN",
 	"BAG_CLOSED",
+	"MAP_EXPLORATION_UPDATED",
 }
 
 -- Some of these do not exist on every build. RegisterEvent on an unknown event errors, so each
@@ -605,6 +647,10 @@ local function Init()
 		local ok, err = pcall(ns.Minimap.Init)
 		report["minimap"] = ok and "ok" or ("failed: " .. tostring(err))
 	end
+	if ns.Reveal and ns.Reveal.Init then
+		local ok, err = pcall(ns.Reveal.Init)
+		report["reveal"] = ok and "ok" or ("failed: " .. tostring(err))
+	end
 	if ns.SetupOptions then
 		local ok, err = pcall(ns.SetupOptions)
 		report["options"] = ok and "ok" or ("failed: " .. tostring(err))
@@ -640,6 +686,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
 	if ns.Windows and ns.Windows.OnEvent then pcall(ns.Windows.OnEvent, event, ...) end
 	if ns.Map and ns.Map.OnEvent then pcall(ns.Map.OnEvent, event, ...) end
 	if ns.Vault and ns.Vault.OnEvent then pcall(ns.Vault.OnEvent, event, ...) end
+	if ns.Reveal and ns.Reveal.OnEvent then pcall(ns.Reveal.OnEvent, event, ...) end
 end)
 
 -- ------------------------------------------------------------------
@@ -666,6 +713,8 @@ local function PrintHelp()
 		"|cffffff00/casement reset|r puts every window back where the game had it",
 		"|cffffff00/casement lock|r or |cffffff00unlock|r turns every window switch off or on",
 		"|cffffff00/casement minimap|r shows or hides the minimap button",
+		"|cffffff00/casement coords|r puts your coordinates in a box to copy",
+		"|cffffff00/casement mapdata|r reports how much of the shown map the reveal knows; |cffffff00dump|r opens all of it",
 		"|cffffff00/casement debug|r prints what resolved on this client",
 	}
 	for _, line in ipairs(lines) do DEFAULT_CHAT_FRAME:AddMessage("   " .. line) end
@@ -719,6 +768,19 @@ SlashCmdList["CASEMENT"] = function(msg)
 		ns.Refresh()
 		if ns.SyncOptions then pcall(ns.SyncOptions) end
 		Print("world map scale " .. math.floor(ns.db.map.scale * 100 + 0.5) .. "%.")
+
+	elseif cmd == "mapdata" then
+		if not ns.Reveal then Print("The map reveal is not built on this client.") return end
+		if rest == "dump" then
+			local maps = ns.Reveal.Dump()
+			Print(maps .. " maps of harvested overlay data are in the box; Ctrl+C copies them out.")
+		else
+			Print(ns.Reveal.Describe())
+		end
+
+	elseif cmd == "coords" then
+		local text = ns.Map and ns.Map.PlayerCoordText and ns.Map.PlayerCoordText()
+		if text then ns.CopyBox("Your position", text) else Print("your position on the map is not available here.") end
 
 	elseif cmd == "minimap" then
 		local want = not ns.db.minimap.shown

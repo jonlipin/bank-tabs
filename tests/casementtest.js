@@ -12,7 +12,7 @@ const fs = require('fs');
 const { lua, lauxlib, lualib, to_luastring } = require('fengari');
 const DIR = (process.argv.slice(2).find(a => !a.startsWith('--')) || 'C:/Users/jonli/casement/');
 const L = lauxlib.luaL_newstate(); lualib.luaL_openlibs(L);
-const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Options.lua'];
+const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Reveal.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Options.lua'];
 
 const stub = String.raw`
 local VERBS = { "Set", "Get", "Is", "Create", "Register", "Enable", "Clear", "Hook", "Start", "Stop", "Has", "Num", "Add", "Unregister", "Disable", "Raise", "Lower", "Lock", "Unlock", "Show", "Hide", "Insert", "Toggle" }
@@ -187,8 +187,8 @@ local function obj(kind, template, name)
     if k == "SetBackdrop" then return function(s, b) s.backdrop = b end end
     if k == "LockHighlight" then return function(s) s.highlighted = true end end
     if k == "UnlockHighlight" then return function(s) s.highlighted = false end end
-    if k == "CreateTexture" then return function(s, n, layer)
-      local r = obj("texture") r.parent = s r.layer = layer TEXTURES[#TEXTURES + 1] = r return r
+    if k == "CreateTexture" then return function(s, n, layer, tmpl, sub)
+      local r = obj("texture") r.parent = s r.layer = layer r.sub = sub TEXTURES[#TEXTURES + 1] = r return r
     end end
     if k == "CreateFontString" then return function(s, n, layer, font)
       local r = obj("fontstring") r.parent = s r.font = font FONTSTRINGS[#FONTSTRINGS + 1] = r return r
@@ -429,6 +429,54 @@ WorldMapFrame = CreateFrame("Frame", "WorldMapFrame", UIParent)
 WorldMapFrame:SetSize(700, 500)
 WorldMapFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -100)
 WorldMapFrame.ScrollContainer = CreateFrame("Frame", nil, WorldMapFrame)
+-- The canvas the map art is drawn on, at the art's native size, and the map ids around it.
+WorldMapFrame.ScrollContainer.Child = CreateFrame("Frame", nil, WorldMapFrame.ScrollContainer)
+WorldMapFrame.ScrollContainer.Child:SetSize(1002, 668)
+WorldMapFrame.ScrollContainer.Child:SetPoint("TOPLEFT", WorldMapFrame.ScrollContainer, "TOPLEFT", 0, 0)
+SHOWN_MAP = 1440
+rawset(WorldMapFrame, "GetMapID", function() return SHOWN_MAP end)
+CURSOR_NORM = { 0.123, 0.456 }
+rawset(WorldMapFrame.ScrollContainer, "GetNormalizedCursorPosition", function()
+  if not CURSOR_NORM then return nil end
+  return CURSOR_NORM[1], CURSOR_NORM[2]
+end)
+
+-- Secret values: a widget takes them, arithmetic on them is an error, exactly like the client.
+SECRETS = setmetatable({}, { __mode = "k" })
+function issecretvalue(v) return SECRETS[v] == true end
+function MakeSecret() local t = {} SECRETS[t] = true return t end
+
+PLAYER_MAP = 1440
+PLAYER_POS = { 0.452, 0.678 }
+MAP_NAMES = { [1440] = "The Barrens", [1414] = "Kalimdor" }
+MAP_ART = { [1440] = 5, [1414] = 12 }
+C_Map = {
+  GetBestMapForUnit = function() return PLAYER_MAP end,
+  GetPlayerMapPosition = function(mapID, unit)
+    if not PLAYER_POS then return nil end
+    return { x = PLAYER_POS[1], y = PLAYER_POS[2], GetXY = function(self) return self.x, self.y end }
+  end,
+  GetMapArtID = function(mapID) return MAP_ART[mapID] end,
+  GetMapInfo = function(mapID) if MAP_NAMES[mapID] then return { name = MAP_NAMES[mapID], mapID = mapID } end return nil end,
+}
+
+-- What the game hands over for explored areas, in the shape the real API uses.
+EXPLORED = {
+  [1440] = {
+    { textureWidth = 300, textureHeight = 200, offsetX = 100, offsetY = 50, fileDataIDs = { 111, 112 } },
+  },
+}
+C_MapExplorationInfo = {
+  GetExploredMapTextures = function(mapID) return EXPLORED[mapID] end,
+}
+
+-- The chat line: either open (text goes in at the cursor) or shut (a fresh line is opened).
+CHAT_EDIT = obj("EditBox")
+CHAT_EDIT:Hide()
+rawset(CHAT_EDIT, "Insert", function(self, text) self.inserted = (self.inserted or "") .. text end)
+function ChatEdit_GetActiveWindow() return CHAT_EDIT end
+OPENED_CHAT = nil
+function ChatFrame_OpenChat(text) OPENED_CHAT = text end
 WorldMapFrame:Hide()
 
 -- The map's own top bar: a nav bar on the left and buttons on the right, both taking the mouse.
@@ -818,6 +866,169 @@ OpenQuestPanel(false)
 RunTimers(1)
 check("closing the panel leaves the top bar working", #TopStrips() > 0)
 local bar = tab
+
+-- ------------------------------------------------------------------
+-- 4d. Coordinates in the tab, and the copy button
+-- ------------------------------------------------------------------
+map:Show()
+RunTimers(1)
+local coordsPart = CasementMapCoords
+local copyBtn = CasementMapCopy
+check("the tab carries a coordinates part", coordsPart ~= nil and coordsPart.parent == tab)
+check("and a copy button", copyBtn ~= nil and copyBtn.parent == tab)
+check("coordinates are on by default and shown", ns.db.map.coords == true and coordsPart.shown == true)
+check("the coordinates sit at the left end of the tab", coordsPart.points[1] and coordsPart.points[1][4] == 10, coordsPart.points[1] and coordsPart.points[1][4])
+local minusBtn
+for _, f in ipairs(FRAMES) do if f.parent == tab and f.text == "-" then minusBtn = f end end
+check("the sizing controls sit to the right of them", minusBtn and minusBtn.points[1][4] > coordsPart.points[1][4] + coordsPart.w)
+local wideTab = tab.w
+ns.db.map.coords = false
+ns.Refresh()
+check("switching the coordinates off hides them", coordsPart.shown == false and copyBtn.shown == false)
+check("and the tab shrinks back from the left", tab.w < wideTab, tab.w .. " vs " .. wideTab)
+local minusX = minusBtn.points[1][4]
+ns.db.map.coords = true
+ns.Refresh()
+check("switching them on grows the tab leftwards, the sizing end staying put", tab.w > minusX and minusBtn.points[1][4] > minusX)
+
+-- The readout.
+local function LineStarting(prefix)
+  for _, fs in ipairs(FONTSTRINGS) do
+    if fs.parent == coordsPart and type(fs.text) == "string" and fs.text:sub(1, #prefix) == prefix then return fs end
+  end
+  return nil
+end
+coordsPart.scripts.OnUpdate(coordsPart, 1)
+check("your position is printed as hundredths", LineStarting("You") and LineStarting("You").text == "You  45.2, 67.8", LineStarting("You") and LineStarting("You").text)
+check("the cursor position too", LineStarting("Cursor") and LineStarting("Cursor").text == "Cursor  12.3, 45.6", LineStarting("Cursor") and LineStarting("Cursor").text)
+CURSOR_NORM = nil
+coordsPart.scripts.OnUpdate(coordsPart, 1)
+check("a cursor off the map shows dashes", LineStarting("Cursor").text == "Cursor  --")
+CURSOR_NORM = { 0.123, 0.456 }
+ns.db.map.coordsCursor = false
+ns.Refresh()
+coordsPart.scripts.OnUpdate(coordsPart, 1)
+check("the cursor line can be switched off on its own", LineStarting("Cursor").shown == false)
+ns.db.map.coordsCursor = true
+ns.Refresh()
+
+-- A position this client keeps secret is shown as unknown, never compared.
+local realPos = PLAYER_POS
+PLAYER_POS = { MakeSecret(), MakeSecret() }
+local okSecret = pcall(coordsPart.scripts.OnUpdate, coordsPart, 1)
+check("a secret position does not error", okSecret)
+check("and is shown as unknown", LineStarting("You").text == "You  --", LineStarting("You").text)
+PLAYER_POS = realPos
+coordsPart.scripts.OnUpdate(coordsPart, 1)
+
+-- The copy button.
+check("the copy text names the zone first", ns.Map.PlayerCoordText() == "The Barrens 45.2, 67.8", ns.Map.PlayerCoordText())
+CHAT_EDIT:Hide()
+OPENED_CHAT = nil
+copyBtn.scripts.OnClick(copyBtn, "LeftButton")
+check("with no chat line open, the click opens one with the position in it", OPENED_CHAT == "The Barrens 45.2, 67.8", OPENED_CHAT)
+CHAT_EDIT:Show()
+CHAT_EDIT.inserted = nil
+copyBtn.scripts.OnClick(copyBtn, "LeftButton")
+check("with a chat line open, the click puts the position into it", CHAT_EDIT.inserted == "The Barrens 45.2, 67.8", CHAT_EDIT.inserted)
+CHAT_EDIT:Hide()
+copyBtn.scripts.OnClick(copyBtn, "RightButton")
+check("right-click opens the copy box", CasementCopyBox ~= nil and CasementCopyBox.shown == true)
+check("with the position in it", CasementCopyBox and CasementCopyBox.edit.text == "The Barrens 45.2, 67.8")
+CasementCopyBox:Hide()
+PLAYER_POS = nil
+copyBtn.scripts.OnClick(copyBtn, "LeftButton")
+check("with no position to give, the click says so instead", CHAT[#CHAT]:find("not available") ~= nil, CHAT[#CHAT])
+PLAYER_POS = realPos
+SlashCmdList["CASEMENT"]("coords")
+check("/casement coords opens the copy box", CasementCopyBox.shown == true)
+CasementCopyBox:Hide()
+
+-- ------------------------------------------------------------------
+-- 4e. Drawing the unexplored map
+-- ------------------------------------------------------------------
+local canvasChild = WorldMapFrame.ScrollContainer.Child
+local function RevealTiles()
+  local out = {}
+  for _, t in ipairs(TEXTURES) do
+    if t.parent == canvasChild and t.shown and t.texture then out[#out + 1] = t end
+  end
+  return out
+end
+
+check("the reveal found the exploration API", ns.report["map reveal api"] == "GetExploredMapTextures found", ns.report["map reveal api"])
+check("the reveal is off by default", ns.db.map.reveal == false)
+ns.Reveal.Refresh(true)
+check("off, it draws nothing", #RevealTiles() == 0, #RevealTiles())
+
+-- Shipped data for The Barrens' art: the explored overlay the game already draws, one it does
+-- not, and one that spans two tiles.
+ns.Reveal.DATA[5] = {
+  ["300:200:100:50"] = "111, 112",
+  ["120:80:600:300"] = "201",
+  ["500:200:0:400"] = "301, 302",
+}
+ns.db.map.reveal = true
+ns.db.map.revealTint = "blue"
+ns.Refresh()
+local tiles = RevealTiles()
+check("on, it draws the overlays the game is not drawing", #tiles == 3, #tiles)
+local function TileAt(x, y)
+  for _, t in ipairs(tiles) do
+    if t.points[1] and t.points[1][4] == x and t.points[1][5] == y then return t end
+  end
+  return nil
+end
+check("the explored overlay is left to the game", TileAt(100, -50) == nil)
+local small = TileAt(600, -300)
+check("a small overlay is one tile at its offset", small ~= nil and small.texture == 201)
+check("sized to the overlay, not to the tile", small and small.w == 120 and small.h == 80)
+check("showing only the used part of its file", small and small.texCoord and near(small.texCoord[2], 120 / 128, 0.001) and near(small.texCoord[4], 80 / 128, 0.001))
+local first, second = TileAt(0, -400), TileAt(256, -400)
+check("a wide overlay is cut into 256 pixel tiles", first ~= nil and second ~= nil)
+check("the first tile is a full 256 wide", first and first.w == 256 and first.texture == 301)
+check("the last tile is the remainder", second and second.w == 244 and second.h == 200 and second.texture == 302)
+check("the last tile shows 244 of a 256 file", second and second.texCoord and near(second.texCoord[2], 244 / 256, 0.001))
+check("the drawn in areas are tinted", small and small.vertex and near(small.vertex[1], 0.62, 0.001) and near(small.vertex[3], 1.0, 0.001))
+check("the tiles sit under the game's own overlays", small and small.sub == -1)
+check("the report says what was drawn", (ns.report["map reveal"] or ""):find("2 drawn") ~= nil, ns.report["map reveal"])
+
+ns.db.map.revealTint = "none"
+ns.Refresh()
+small = TileAt(600, -300)
+check("no tint leaves the art as it is", small and (small.vertex == nil or (near(small.vertex[1], 1, 0.001) and near(small.vertex[2], 1, 0.001))))
+
+-- The harvest: what the game handed over is remembered account wide.
+check("the explored overlay was harvested", CasementAccountDB.overlays and CasementAccountDB.overlays[5] and CasementAccountDB.overlays[5]["300:200:100:50"] == "111, 112")
+
+-- Exploring an area takes it out of our drawing on the next update.
+EXPLORED[1440][#EXPLORED[1440] + 1] = { textureWidth = 120, textureHeight = 80, offsetX = 600, offsetY = 300, fileDataIDs = { 201 } }
+fire("MAP_EXPLORATION_UPDATED")
+tiles = RevealTiles()
+check("an area explored since is handed back to the game", TileAt(600, -300) == nil and #tiles == 2, #tiles)
+
+-- An overlay only the harvest knows about (say, from another character) is drawn too.
+CasementAccountDB.overlays[5]["64:64:900:600"] = "401"
+ns.Reveal.Refresh(true)
+tiles = RevealTiles()
+check("harvested overlays are drawn like shipped ones", TileAt(900, -600) ~= nil and TileAt(900, -600).texture == 401)
+
+check("the report describes the shown map", ns.Reveal.Describe():find("The Barrens") ~= nil, ns.Reveal.Describe())
+local dumped = ns.Reveal.Dump()
+check("the dump opens the copy box with the harvest as Lua", dumped == 1 and CasementCopyBox.shown == true and CasementCopyBox.edit.text:find('%[5%] = {') ~= nil)
+check("with every harvested overlay in it", CasementCopyBox.edit.text:find('%["64:64:900:600"%] = "401"') ~= nil)
+CasementCopyBox:Hide()
+SlashCmdList["CASEMENT"]("mapdata")
+check("/casement mapdata prints the report", CHAT[#CHAT]:find("The Barrens") ~= nil, CHAT[#CHAT])
+
+-- Switching the world map feature off takes the reveal with it.
+ns.db.windows.worldmap = false
+ns.Refresh()
+check("switching the map feature off clears the reveal", #RevealTiles() == 0)
+ns.db.windows.worldmap = true
+ns.db.map.reveal = false
+ns.Reveal.DATA[5] = nil
+ns.Refresh()
 
 -- ------------------------------------------------------------------
 -- 5. Switching a window off
@@ -1729,7 +1940,9 @@ ns.db.map.scaleButtons = false
 ns.Refresh()
 check("with the buttons off only the grip is left", mapTab.parts.minus.shown == false and mapTab.parts.grip.shown == true
   and mapTab.parts.divider.shown == false)
-check("and the grip slides to the left", mapTab.parts.grip.points[1][4] == 10)
+-- The coordinates block, when shown, still sits to the left of it.
+local leftBlock = mapTab.parts.coords.shown and (mapTab.parts.coords.w + 4 + mapTab.parts.copy.w + 4 + mapTab.parts.divider2.w + 6) or 0
+check("and the grip slides to the left", mapTab.parts.grip.points[1][4] == 10 + leftBlock, mapTab.parts.grip.points[1][4] .. " vs " .. (10 + leftBlock))
 ns.db.map.scaleButtons = true
 ns.Refresh()
 check("switching the buttons back on brings them back", mapTab.parts.minus.shown == true and mapTab.parts.divider.shown == true)

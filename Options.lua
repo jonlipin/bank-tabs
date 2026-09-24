@@ -319,6 +319,27 @@ local function BuildMapPage(parent)
 		function() return ns.db.map.cornerHandle end,
 		function(value) ns.db.map.cornerHandle = value end)
 
+	Check(layout, "Coordinates in the tab", "Your position, at the left end of the tab, with a button that puts it into chat (or right-click for a box to copy it from). The tab grows to the left to make room.",
+		function() return ns.db.map.coords end,
+		function(value) ns.db.map.coords = value end)
+
+	Check(layout, "Cursor coordinates too", "A second line under your position with where the mouse is pointing on the map.",
+		function() return ns.db.map.coordsCursor end,
+		function(value) ns.db.map.coordsCursor = value end, 24)
+
+	Check(layout, "Draw the parts of the map you have not explored", "Paints the unexplored areas in with their real art. The addon can only draw an area it knows the art for: what is shipped with it, plus everything any character on this account has ever had revealed. /casement mapdata says how much of the open map that covers.",
+		function() return ns.db.map.reveal end,
+		function(value) ns.db.map.reveal = value end)
+
+	Choice(layout, "Tint the areas you have not explored", {
+		{ value = "none", label = "No tint" },
+		{ value = "blue", label = "Blue" },
+		{ value = "sepia", label = "Sepia" },
+		{ value = "grey", label = "Grey" },
+	}, function() return ns.db.map.revealTint end,
+		function(value) ns.db.map.revealTint = value end,
+		"So the drawn in areas can still be told from the ones you have actually been to.", 24)
+
 	Slider(layout, "Map size", 50, 200, 5,
 		function() return math.floor((ns.db.map.scale or 1) * 100 + 0.5) end,
 		function(value) ns.Map.SetScale(value / 100, false) end,

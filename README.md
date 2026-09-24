@@ -22,6 +22,13 @@ Everything is a switch in **Esc > Options > AddOns > Casement**, or `/casement`.
   zone art and the text, keeps its proportions.
 - A gold handle in the top left corner appears by itself if the top bar ever has no room to spare,
   and can be switched on permanently.
+- Coordinates at the left end of the tab: your position and, on a second line, where the cursor
+  is pointing on the map. A button next to them puts your position into chat with the zone name
+  first ("The Barrens 45.2, 67.8"); right-click it for a box to copy the text out of with Ctrl+C.
+- Optionally, the parts of the map you have not explored are drawn in with their real art, tinted
+  blue, sepia or grey so they can still be told apart. The addon can only draw an area it knows
+  the art for: what is shipped with it plus everything any character on this account has ever had
+  revealed, kept account wide, so an alt sees what the main has explored.   says how much of the open map that covers.
 
 **Bags, bank and guild bank**
 
@@ -71,6 +78,8 @@ or unlock every window, drag it around the rim. `/casement minimap` hides it.
 | `/casement scale 120` | Sets the world map size |
 | `/casement lock` / `unlock` | Turns every window switch off or on |
 | `/casement minimap` | Shows or hides the minimap button |
+| `/casement coords` | Puts your coordinates in a box to copy |
+| `/casement mapdata` | Reports how much of the shown map the reveal knows; `dump` opens all of it |
 | `/casement reset` | Puts every window back where the game had it |
 | `/casement grips` | Outlines the part of each window you can drag |
 | `/casement debug` | Prints what resolved on this client |

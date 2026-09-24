@@ -2,6 +2,29 @@
 
 All notable changes to Casement are listed here. The newest release is at the top.
 
+## 1.1.0 - 2026-09-24
+
+**Coordinates in the map tab.** Your position and, on a second line, where the cursor is pointing
+on the map, both as hundredths of the map the way every coordinate addon prints them. They sit at
+the left end of the tab, so switching them on grows the tab leftwards, away from the sizing
+controls. A button next to them puts your position into the chat box with the zone name first
+("The Barrens 45.2, 67.8"), into whatever you are already typing if a chat line is open;
+right-click it for a box the text can be copied out of with Ctrl+C. `/casement coords` opens that
+box too. Both lines are switches in the options.
+
+**Drawing the parts of the map you have not explored.** Off by default. The game paints explored
+areas over a blank base map from overlay art it only hands out for the areas you have been to, so
+to draw the rest the addon needs its own list of every overlay a map has. Casement keeps two:
+whatever is shipped with it, and a harvest of every overlay any character on this account has
+ever been handed, kept account wide, so an alt sees what the main has explored. The drawn in areas
+can be tinted (blue, sepia or grey) so they can still be told from the ones you have been to.
+`/casement mapdata` says how much of the open map is known; `/casement mapdata dump` opens the
+whole harvest in a copy box so it can be folded into the shipped data. The shipped list is empty
+in this release: see the notes on where that data can come from.
+
+**A copy box** for anything the game will not put on the clipboard itself (a selected edit box
+does reach it with Ctrl+C).
+
 ## 1.0.2 - 2026-09-24
 
 **The snapshot window is now a replica of the bank.** Not a list any more: the same portrait and

@@ -286,6 +286,192 @@ local function ResetButton(parent)
 	return button
 end
 
+-- ------------------------------------------------------------------
+-- Coordinates
+--
+-- Two lines at the left end of the tab: where you are, and where the cursor is on the map. Both
+-- are hundredths of the map, the way every coordinate addon prints them. The copy button puts
+-- your position into the chat box (zone name first, so it reads as a place), or, right-clicked,
+-- into a box it can be copied out of.
+-- ------------------------------------------------------------------
+
+local coordsPart, copyButton, playerLine, cursorLine
+local coordsElapsed = 0
+
+-- Some values are secret to addons on this client; a position that comes back secret is shown
+-- as unknown rather than compared, which would error.
+local function Plain(value)
+	if issecretvalue and issecretvalue(value) then return nil end
+	if type(value) ~= "number" then return nil end
+	return value
+end
+
+local function PlayerMapPosition()
+	if not (C_Map and C_Map.GetBestMapForUnit and C_Map.GetPlayerMapPosition) then return nil end
+	local ok, mapID = pcall(C_Map.GetBestMapForUnit, "player")
+	if not ok or type(mapID) ~= "number" then return nil end
+	local gotPos, pos = pcall(C_Map.GetPlayerMapPosition, mapID, "player")
+	if not gotPos or type(pos) ~= "table" then return nil end
+	local x, y
+	if pos.GetXY then
+		local ok2, gx, gy = pcall(pos.GetXY, pos)
+		if ok2 then x, y = gx, gy end
+	else
+		x, y = pos.x, pos.y
+	end
+	x, y = Plain(x), Plain(y)
+	if not x or not y then return nil end
+	return mapID, x, y
+end
+
+local function CursorMapPosition()
+	local frame = MapFrame()
+	local container = frame and frame.ScrollContainer
+	if container and container.GetNormalizedCursorPosition then
+		local ok, x, y = pcall(container.GetNormalizedCursorPosition, container)
+		x, y = ok and Plain(x), ok and Plain(y)
+		if x and y and x >= 0 and x <= 1 and y >= 0 and y <= 1 then return x, y end
+		return nil
+	end
+	-- No such method here, so the cursor is measured against the canvas itself.
+	local child = container and container.Child
+	if not child then return nil end
+	local left, bottom, w, h = ns.Windows.Measure(child)
+	if not left or w <= 0 or h <= 0 then return nil end
+	local cx, cy = CursorInUIUnits()
+	local x, y = (cx - left) / w, 1 - (cy - bottom) / h
+	if x < 0 or x > 1 or y < 0 or y > 1 then return nil end
+	return x, y
+end
+
+local function FormatXY(x, y)
+	return string.format("%.1f, %.1f", x * 100, y * 100)
+end
+
+local function ZoneName(mapID)
+	if not (mapID and C_Map and C_Map.GetMapInfo) then return nil end
+	local ok, info = pcall(C_Map.GetMapInfo, mapID)
+	if ok and type(info) == "table" and info.name then return info.name end
+	return nil
+end
+
+-- The text the copy button hands over: "The Barrens 45.2, 67.8".
+function Map.PlayerCoordText()
+	local mapID, x, y = PlayerMapPosition()
+	if not mapID then return nil end
+	local zone = ZoneName(mapID)
+	return (zone and (zone .. " ") or "") .. FormatXY(x, y)
+end
+
+-- Into whatever you are typing, or a fresh chat line if nothing is open.
+local function CopyToChat(text)
+	local edit = ChatEdit_GetActiveWindow and ChatEdit_GetActiveWindow()
+	if edit and edit.IsShown and edit:IsShown() and edit.Insert then
+		if pcall(edit.Insert, edit, text) then return "put into what you are typing" end
+	end
+	if ChatFrame_OpenChat and pcall(ChatFrame_OpenChat, text) then return "put into the chat box" end
+	if ChatEdit_InsertLink and pcall(ChatEdit_InsertLink, text) then return "put into the chat box" end
+	return nil
+end
+
+local function UpdateCoords()
+	if not (coordsPart and coordsPart:IsShown()) then return end
+	local mapID, x, y = PlayerMapPosition()
+	playerLine:SetText(mapID and ("You  " .. FormatXY(x, y)) or "You  --")
+	if ns.db.map.coordsCursor then
+		local cx, cy = CursorMapPosition()
+		cursorLine:SetText(cx and ("Cursor  " .. FormatXY(cx, cy)) or "Cursor  --")
+		cursorLine:Show()
+	else
+		cursorLine:Hide()
+	end
+end
+
+local function BuildCoords(parent)
+	coordsPart = CreateFrame("Frame", "CasementMapCoords", parent)
+	coordsPart.csOurs = true
+	coordsPart:SetSize(112, 26)
+
+	playerLine = coordsPart:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	playerLine:SetPoint("TOPLEFT", 0, 0)
+	playerLine:SetJustifyH("LEFT")
+	playerLine:SetText("You  --")
+
+	cursorLine = coordsPart:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+	cursorLine:SetPoint("TOPLEFT", 0, -13)
+	cursorLine:SetJustifyH("LEFT")
+	cursorLine:SetText("Cursor  --")
+
+	-- Read ten times a second while the tab is up; the map's own OnUpdate would be overkill.
+	coordsPart:SetScript("OnUpdate", function(_, elapsed)
+		coordsElapsed = coordsElapsed + (elapsed or 0)
+		if coordsElapsed < 0.1 then return end
+		coordsElapsed = 0
+		pcall(UpdateCoords)
+	end)
+	coordsPart:SetScript("OnShow", function() coordsElapsed = 1 end)
+	return coordsPart
+end
+
+local COPY_ICONS = { "Interface\\Icons\\INV_Misc_Note_01", "Interface\\Icons\\INV_Scroll_03" }
+
+local function BuildCopyButton(parent)
+	copyButton = CreateFrame("Button", "CasementMapCopy", parent)
+	copyButton.csOurs = true
+	copyButton:SetSize(22, 22)
+	copyButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+
+	local icon = copyButton:CreateTexture(nil, "ARTWORK")
+	icon:SetPoint("TOPLEFT", 1, -1)
+	icon:SetPoint("BOTTOMRIGHT", -1, 1)
+	local path
+	for _, candidate in ipairs(COPY_ICONS) do
+		if ns.TextureExists(candidate) then path = candidate break end
+	end
+	if path then
+		icon:SetTexture(path)
+		icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+	else
+		icon:Hide()
+		local text = copyButton:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		text:SetAllPoints()
+		text:SetText("Copy")
+		copyButton:SetWidth(36)
+	end
+	report["map copy icon"] = path or "text"
+
+	local glow = copyButton:CreateTexture(nil, "HIGHLIGHT")
+	glow:SetAllPoints()
+	glow:SetColorTexture(1, 1, 1, 0.18)
+
+	copyButton:SetScript("OnClick", function(_, button)
+		local text = Map.PlayerCoordText()
+		if not text then
+			ns.Print("your position on the map is not available here.")
+			return
+		end
+		if button == "RightButton" then
+			ns.CopyBox("Your position", text)
+			return
+		end
+		local how = CopyToChat(text)
+		if how then
+			ns.Print(text .. " " .. how .. ".")
+		else
+			ns.CopyBox("Your position", text)
+		end
+	end)
+	copyButton:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText("Your coordinates", 1, 1, 1)
+		GameTooltip:AddLine("Click: put them in the chat box, zone name first. Right-click: a box to copy them out of.",
+			nil, nil, nil, true)
+		GameTooltip:Show()
+	end)
+	copyButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	return copyButton
+end
+
 local function BuildTab()
 	local frame = MapFrame()
 	if not frame or tab then return end
@@ -300,6 +486,15 @@ local function BuildTab()
 
 	tab.parts = {}
 	local parts = tab.parts
+
+	-- The coordinates go at the left end, so switching them on grows the tab leftwards, away
+	-- from the sizing controls at the right.
+	parts.coords = BuildCoords(tab)
+	parts.copy = BuildCopyButton(tab)
+	local divider2 = tab:CreateTexture(nil, "ARTWORK")
+	divider2:SetColorTexture(1, 1, 1, 0.16)
+	divider2:SetSize(1, 18)
+	parts.divider2 = divider2
 
 	parts.minus = SmallButton(tab, "-", 22, function() Map.Step(-1) end,
 		"Smaller, in steps of " .. (ns.db.map.step or 10) .. " percent")
@@ -351,12 +546,13 @@ end
 
 -- The order the controls sit in, left to right. The tab is only as wide as the ones switched on,
 -- and the grip slides over when the buttons are off.
-local PART_ORDER = { "minus", "label", "plus", "reset", "divider", "grip" }
+local PART_ORDER = { "coords", "copy", "divider2", "minus", "label", "plus", "reset", "divider", "grip" }
 
 local function LayoutTab()
 	if not tab or not tab.parts then return end
 	local buttons = ns.db.map.scaleButtons and true or false
 	local resize = ns.db.map.resizeGrip and true or false
+	local coords = ns.db.map.coords and true or false
 	local x = 10
 	for _, key in ipairs(PART_ORDER) do
 		local part = tab.parts[key]
@@ -365,6 +561,10 @@ local function LayoutTab()
 			wanted = resize
 		elseif key == "divider" then
 			wanted = buttons and resize
+		elseif key == "coords" or key == "copy" then
+			wanted = coords
+		elseif key == "divider2" then
+			wanted = coords and (buttons or resize)
 		else
 			wanted = buttons
 		end
@@ -372,11 +572,12 @@ local function LayoutTab()
 		if wanted then
 			part:ClearAllPoints()
 			part:SetPoint("LEFT", tab, "LEFT", x, 0)
-			x = x + (part:GetWidth() or 0) + (key == "divider" and 6 or 4)
+			x = x + (part:GetWidth() or 0) + ((key == "divider" or key == "divider2") and 6 or 4)
 		end
 	end
 	tab:SetWidth(math.max(x + 6, 60))
 	PlaceTab()
+	if coords then pcall(UpdateCoords) end
 end
 
 -- ------------------------------------------------------------------
@@ -491,7 +692,7 @@ function Map.Apply()
 
 	if on then BuildTab() end
 	if tab then
-		local wanted = on and (db.map.scaleButtons or db.map.resizeGrip) and not IsMaximized()
+		local wanted = on and (db.map.scaleButtons or db.map.resizeGrip or db.map.coords) and not IsMaximized()
 		LayoutTab()
 		tab:SetShown(wanted and true or false)
 	end
