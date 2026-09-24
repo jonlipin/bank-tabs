@@ -27,7 +27,8 @@ Everything is a switch in **Esc > Options > AddOns > Casement**, or `/casement`.
 
 - Separate switches for the combined bag window, the individual bag windows, the reagent bag, the
   bank window with its bank bags, and the guild bank.
-- Drag any of them by the strip along the top edge. The close button is left clear.
+- Drag any of them by the strip along the top edge. The close button is left clear. The strip
+  is invisible unless you switch on "show me where the drag strips are".
 - Hold alt (or shift, or ctrl, or nothing, your choice) and you can drag a window from anywhere on
   it, which helps when its top edge is busy.
 - Every window is remembered per character, and the game putting a bag window back in its stack
@@ -36,20 +37,25 @@ Everything is a switch in **Esc > Options > AddOns > Casement**, or `/casement`.
 **No window can be dragged off screen.** It is clamped while you drag it, when the position is
 saved, and again if you change your resolution or UI scale.
 
-**Bank snapshots**
+**Bank snapshots, drawn like the bank**
 
-- Whatever your bank and your guild bank hold is saved every time you open them.
-- `/casement vault` shows it from anywhere: every character on the account and every guild bank
-  you have opened, with item tooltips, stack counts and a search box.
-- Your backpack gets a Bank button, and a Guild button once there is a guild bank saved, both
-  opening the vault straight at that record. They are placed in a part of the header the game is
-  not already using.
-- The guild bank is read one tab at a time, which takes a couple of seconds, and the tab you were
-  looking at is put back when it is done.
+- Whatever your bank holds is saved every time you open it, and shown back to you as the bank
+  window itself: the same portrait and title frame, the search box top right, the eight wide grid
+  with every empty slot drawn, the Bag Slots row underneath, the money bottom right. Every item is
+  in the slot it was actually in. Click a bank bag in the Bag Slots row to look inside it.
+- Your bags are saved too, a few seconds after you log in and whenever they settle, and shown as
+  the combined backpack shows them.
+- The guild bank is saved when you open it, one tab at a time, and shown in its own shape with its
+  tabs down the side.
+- Every character on the account is remembered. A row of tabs in the spellbook's style hangs off
+  the top of the window, one per character with their class icon, so any character's bank or bags
+  can be looked at from anywhere.
+- Three icons in your backpack's header open the saved bank, the saved bags and the saved guild
+  bank. They sit in a part of the header the game is not already using.
 
 **A minimap button**
 
-Left-click for the options, right-click for the saved bank contents, shift and left-click to lock
+Left-click for the options, right-click for the saved bank, shift and left-click to lock
 or unlock every window, drag it around the rim. `/casement minimap` hides it.
 
 ## Commands
@@ -58,8 +64,10 @@ or unlock every window, drag it around the rim. `/casement minimap` hides it.
 | --- | --- |
 | `/casement` | Opens the options |
 | `/casement window` | Opens the options in a window of their own |
-| `/casement vault` | Opens the saved bank contents |
-| `/casement snapshot` | Saves whatever bank is open in front of you |
+| `/casement vault` | Opens the saved bank, drawn like the bank window |
+| `/casement bags` | Opens the saved bags |
+| `/casement guild` | Opens the saved guild bank |
+| `/casement snapshot` | Saves your bags, and the bank or guild bank if one is open |
 | `/casement scale 120` | Sets the world map size |
 | `/casement lock` / `unlock` | Turns every window switch off or on |
 | `/casement minimap` | Shows or hides the minimap button |
@@ -81,10 +89,10 @@ whether the bag re-stacking hook took, and what the bank scan saw.
 layout engine for points, anchors and scales, and walks the addon's main paths: clamping, dragging,
 scaling, snapping, the bag switches, both snapshots and the vault window. It also builds a
 stand in for the quest panel, so the layering that the resize grip needs is actually asserted
-rather than assumed.
+rather than assumed, and the bank, bags and guild bank replicas are checked slot by slot.
 
 ```
-node tests/casementtest.js              # 176 checks
+node tests/casementtest.js              # 185 checks
 node tests/casementtest.js --bare       # every UI template missing
 node tests/casementtest.js --noenum     # no Enum.BagIndex, classic bank ids
 ```

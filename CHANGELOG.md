@@ -2,6 +2,51 @@
 
 All notable changes to Casement are listed here. The newest release is at the top.
 
+## 1.0.2 - 2026-09-24
+
+**The snapshot window is now a replica of the bank.** Not a list any more: the same portrait and
+title frame, the search box top right, the eight wide grid with every empty slot drawn, the Bag
+Slots row underneath, the money bottom right. Every item is drawn in the slot it was actually in
+when the bank was last open, never packed together. Click a bank bag in the Bag Slots row to look
+inside it. The guild bank gets the same treatment in its own shape, seven columns of fourteen
+filled down each column, with its tabs down the right hand side.
+
+**Your bags are remembered too.** They are read a few seconds after you log in, whenever they
+settle after a change, and on the way out at logout, and shown as the combined backpack shows
+them: one grid filled from the bottom right corner, the backpack's first slot in that corner and
+each further bag stacked above, a reagent bag in its own grid underneath.
+
+**Every character on the account is remembered**, bank and bags, and a row of tabs in the
+spellbook's style hangs off the top of the snapshot window, one per character with their class
+icon in it, so any character's bank or bags can be looked at from anywhere.
+
+**Three icons in the backpack's header** open the saved bank, the saved bags and the saved guild
+bank. They sit in a clear stretch of the header, and one with nothing behind it yet is dimmed
+rather than hidden. `/casement vault`, `/casement bags` and `/casement guild` do the same.
+
+**The map tab.** Everything the addon adds to the map now lives in a tab hanging under it, wearing
+the game's own panel art: minus, the current percentage, plus, a reset icon in place of the "100%"
+text, and the resize grip wearing the chat window's own grabber. Nothing is laid on the map's
+interface any more. Double-click the grip for 100 percent.
+
+**Fixed: closing the quest log put the map back where the game wanted it.** The game re-anchors
+the map as the log closes; a placed map is now put back in the same frame. A map that was never
+moved is still left entirely to the game.
+
+**Fixed: the header lit up under the mouse.** The hover tint on a drag strip now answers to the
+"show me where the drag strips are" switch, which is off by default.
+
+Also in this release:
+
+- A saved bank from 1.0.0 or 1.0.1 is lifted into the new shape the first time it is seen.
+- The "keep snapshots from my other characters" switch is gone, since other characters are the
+  point now.
+- `/casement debug` reports the bag slots API, the character tab art and the bag icon art that
+  resolved.
+- The offline harness now runs 397 checks. The slot positions, the column by column guild grid
+  and the lifting of an old saved bank were each proven to fail when the code they cover is
+  broken, so those are tested rather than assumed.
+
 ## 1.0.1 - 2026-09-24
 
 **Fixed: the map could not be resized while the quest panel was open.** The grip sat in the map's

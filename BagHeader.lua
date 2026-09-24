@@ -1,9 +1,6 @@
 -- Casement
--- BagHeader: the buttons that put the saved bank one click away from your bags.
---
--- When snapshots are switched on, the backpack (and the combined bag window, where the client has
--- one) gets a Bank button and, if this account has ever opened one, a Guild button. Both open the
--- vault straight at that record.
+-- BagHeader: the three icons in the backpack's header that open the saved bank, the saved bags
+-- and the saved guild bank.
 --
 -- Where they go is worked out rather than guessed: the header band is measured for a stretch that
 -- none of the game's own buttons are sitting on, and the widest clear stretch at the right hand
@@ -20,7 +17,27 @@ local holders = {}
 local hooked = {}
 
 local BAND = 26
-local BUTTON_H = 18
+local ICON = 20
+local ICON_GAP = 3
+
+-- Each button tries the game's own atlas first and falls back to an icon file that every client
+-- carries. The bag icon is the one the game's own bag button uses.
+-- The fallback lists never share a file, so the three stay telling apart even with no atlas.
+local BUTTONS = {
+	{ key = "bank", mode = "bank", label = "Saved bank", atlas = "Banker",
+		icons = { "Interface\\Icons\\INV_Misc_Coin_01", "Interface\\Icons\\INV_Misc_Coin_02" } },
+	{ key = "bags", mode = "bags", label = "Saved bags",
+		icons = { "Interface\\Icons\\INV_Misc_Bag_08", "Interface\\Icons\\INV_Misc_Bag_10" } },
+	{ key = "guild", mode = "guild", label = "Saved guild bank", atlas = "GuildBanker",
+		icons = { "Interface\\Icons\\INV_Box_01", "Interface\\Icons\\INV_Crate_01" } },
+}
+
+-- SetAtlas does not raise for a name the client lacks, so the atlas table is asked first.
+local function HasAtlas(atlas)
+	if not (C_Texture and C_Texture.GetAtlasInfo) then return false end
+	local ok, info = pcall(C_Texture.GetAtlasInfo, atlas)
+	return ok and info ~= nil
+end
 
 local function IsBackpack(frame)
 	if frame == _G.ContainerFrameCombinedBags then return true end
@@ -31,10 +48,7 @@ end
 local function GuildRecord()
 	local key = ns.Vault and ns.Vault.GuildKey and ns.Vault.GuildKey()
 	if key and ns.vault.guilds[key] then return key, ns.vault.guilds[key] end
-	-- Not in a guild right now, but this account may still have one saved.
-	for savedKey, record in pairs(ns.vault.guilds or {}) do
-		return savedKey, record
-	end
+	for savedKey, record in pairs(ns.vault.guilds or {}) do return savedKey, record end
 	return nil
 end
 
@@ -54,45 +68,86 @@ local function CountItems(record, isGuild)
 	return total
 end
 
+-- What each button reports about itself when hovered.
+local function Describe(spec)
+	local entry = ns.Vault.CharRecord(ns.Who())
+	if spec.key == "bank" then
+		local record = entry and entry.bank
+		if record then return CountItems(record) .. " items, checked " .. Ago(record), true end
+		return "Nothing saved yet. Open your bank once.", false
+	elseif spec.key == "bags" then
+		local record = entry and entry.bags
+		local others = #ns.Vault.Characters("bags")
+		if record then
+			return CountItems(record) .. " items, checked " .. Ago(record)
+				.. (others > 1 and (", and " .. (others - 1) .. " other character" .. (others == 2 and "" or "s")) or ""), true
+		end
+		return "Read a few seconds after you log in.", false
+	else
+		local key, record = GuildRecord()
+		if record then return key .. ": " .. CountItems(record, true) .. " items, checked " .. Ago(record), true end
+		return "Nothing saved yet. Open the guild bank once.", false
+	end
+end
+
+local function PaintIcon(texture, spec)
+	if spec.atlas and HasAtlas(spec.atlas) and pcall(texture.SetAtlas, texture, spec.atlas) then
+		report["bag icon " .. spec.key] = "atlas " .. spec.atlas
+		return
+	end
+	for _, path in ipairs(spec.icons) do
+		if ns.TextureExists(path) then
+			texture:SetTexture(path)
+			texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+			report["bag icon " .. spec.key] = path
+			return
+		end
+	end
+	texture:SetColorTexture(0.6, 0.5, 0.3, 0.9)
+	report["bag icon " .. spec.key] = "painted (no art resolved)"
+end
+
 local function BuildHolder(frame)
 	local holder = CreateFrame("Frame", nil, frame)
 	holder.csOurs = true
-	holder:SetSize(90, BUTTON_H)
+	holder:SetSize(#BUTTONS * ICON + (#BUTTONS - 1) * ICON_GAP, ICON)
+	holder.buttons = {}
 
-	holder.bank = ns.Button(holder, "Bank", 42, BUTTON_H, function()
-		if ns.VaultUI then ns.VaultUI.ShowSource("char", ns.Who()) end
-	end)
-	holder.bank:SetPoint("LEFT", 0, 0)
-	holder.bank.csOurs = true
-	holder.bank:SetScript("OnEnter", function(self)
-		local record = ns.vault.chars[ns.Who()]
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText("Your saved bank", 1, 1, 1)
-		if record then
-			GameTooltip:AddLine(CountItems(record) .. " items, checked " .. Ago(record), 0.7, 0.85, 1)
-		else
-			GameTooltip:AddLine("Nothing saved yet. Open your bank once.", 0.8, 0.8, 0.8, true)
-		end
-		GameTooltip:Show()
-	end)
-	holder.bank:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	local x = 0
+	for _, spec in ipairs(BUTTONS) do
+		local button = CreateFrame("Button", nil, holder)
+		button.csOurs = true
+		button:SetSize(ICON, ICON)
+		button:SetPoint("LEFT", x, 0)
+		x = x + ICON + ICON_GAP
 
-	holder.guild = ns.Button(holder, "Guild", 44, BUTTON_H, function()
-		local key = GuildRecord()
-		if key and ns.VaultUI then ns.VaultUI.ShowSource("guild", key) end
-	end)
-	holder.guild:SetPoint("LEFT", holder.bank, "RIGHT", 4, 0)
-	holder.guild.csOurs = true
-	holder.guild:SetScript("OnEnter", function(self)
-		local key, record = GuildRecord()
-		GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
-		GameTooltip:SetText(key and ("Guild bank of " .. key) or "Guild bank", 1, 1, 1)
-		if record then
-			GameTooltip:AddLine(CountItems(record, true) .. " items, checked " .. Ago(record), 0.7, 0.85, 1)
-		end
-		GameTooltip:Show()
-	end)
-	holder.guild:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		local backing = button:CreateTexture(nil, "BACKGROUND")
+		backing:SetPoint("TOPLEFT", -1, 1)
+		backing:SetPoint("BOTTOMRIGHT", 1, -1)
+		backing:SetColorTexture(0, 0, 0, 0.7)
+
+		local icon = button:CreateTexture(nil, "ARTWORK")
+		icon:SetAllPoints()
+		PaintIcon(icon, spec)
+		button.icon = icon
+
+		local hover = button:CreateTexture(nil, "HIGHLIGHT")
+		hover:SetAllPoints()
+		hover:SetColorTexture(1, 1, 1, 0.2)
+
+		button:SetScript("OnClick", function()
+			if ns.VaultUI then ns.VaultUI.Show(spec.mode) end
+		end)
+		button:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+			GameTooltip:SetText(spec.label, 1, 1, 1)
+			local detail, has = Describe(spec)
+			GameTooltip:AddLine(detail, has and 0.7 or 0.8, has and 0.85 or 0.8, has and 1 or 0.8, true)
+			GameTooltip:Show()
+		end)
+		button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		holder.buttons[spec.key] = button
+	end
 
 	holders[frame] = holder
 	return holder
@@ -123,10 +178,10 @@ end
 
 function BagHeader.Update(frame)
 	if not frame or not ns.db then return end
-	if not IsBackpack(frame) then return end
 
-	local wanted = ns.db.enabled and ns.db.vault.bagButtons
-		and (ns.db.vault.autoBank or ns.db.vault.autoGuild or next(ns.vault.chars or {}) ~= nil)
+	-- The game hands its bag frames out as it needs them, so the frame that was the backpack last
+	-- time can be bag 1 this time; a holder built on it then has to go away.
+	local wanted = ns.db.enabled and ns.db.vault.bagButtons and IsBackpack(frame)
 	local holder = holders[frame]
 
 	if not wanted then
@@ -135,16 +190,18 @@ function BagHeader.Update(frame)
 	end
 	if not holder then holder = BuildHolder(frame) end
 
-	local hasGuild = GuildRecord() ~= nil
-	holder.guild:SetShown(hasGuild and true or false)
-	local width = 42 + (hasGuild and (4 + 44) or 0)
-	holder:SetWidth(width)
+	-- A button with nothing behind it is dimmed rather than hidden, so the row keeps its shape.
+	for _, spec in ipairs(BUTTONS) do
+		local _, has = Describe(spec)
+		holder.buttons[spec.key].icon:SetAlpha(has and 1 or 0.4)
+	end
 
+	local width = holder:GetWidth() or 66
 	if frame:IsShown() then PlaceHolder(frame, holder, width) end
 	-- Above the drag strip, which covers this same band and would take the clicks otherwise.
 	ns.RaiseOver(holder, frame, 6)
-	if holder.bank then pcall(holder.bank.SetFrameLevel, holder.bank, (holder:GetFrameLevel() or 1) + 1) end
-	if holder.guild then pcall(holder.guild.SetFrameLevel, holder.guild, (holder:GetFrameLevel() or 1) + 1) end
+	local level = (holder:GetFrameLevel() or 1) + 1
+	for _, button in pairs(holder.buttons) do pcall(button.SetFrameLevel, button, level) end
 	holder:Show()
 end
 

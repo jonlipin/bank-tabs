@@ -242,7 +242,10 @@ local function BuildGrip(entry)
 	hint:SetAllPoints()
 	hint:SetColorTexture(0.35, 0.72, 1, 0.22)
 	hint:Hide()
-	grip:SetScript("OnEnter", function() if ns.db.enabled then hint:Show() end end)
+	-- The hover tint answers to the "show me where the drag strips are" switch, which is off by
+	-- default. Highlighting on every pass of the mouse made a window header look like it was
+	-- reacting to nothing.
+	grip:SetScript("OnEnter", function() if ns.db.enabled and ns.db.showGrips then hint:Show() end end)
 	grip:SetScript("OnLeave", function() hint:Hide() end)
 
 	WireDrag(grip, entry)
@@ -372,6 +375,16 @@ local function Attach(entry)
 			-- The game finishes placing a window after its OnShow has run, so the position is
 			-- put back once more on the next frame.
 			ns.After(0, function() Reapply(entry) end)
+		end)
+
+		-- A window that changes size is usually a window the game has just re-anchored: the world
+		-- map does exactly this when the quest log is opened or closed, and without this the map
+		-- went back to where the game wanted it. Reapply only does anything when the user has
+		-- actually placed this window, so an untouched one is still left entirely to the game.
+		frame:HookScript("OnSizeChanged", function()
+			if not entry.active or entry.moving then return end
+			if ns.Map and ns.Map.IsResizing and ns.Map.IsResizing() then return end
+			Reapply(entry)
 		end)
 	end
 

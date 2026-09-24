@@ -64,15 +64,20 @@ local function Tooltip(self)
 	GameTooltip:AddLine(ns.db.enabled and "Windows are unlocked" or "Windows are locked",
 		ns.db.enabled and 0.4 or 1, ns.db.enabled and 0.85 or 0.4, 0.4)
 
-	local chars, guilds = 0, 0
-	for _ in pairs(ns.vault.chars or {}) do chars = chars + 1 end
+	local banks, bags, guilds = 0, 0, 0
+	for _, entry in pairs(ns.vault.chars or {}) do
+		if type(entry) == "table" then
+			if entry.bank or entry.containers then banks = banks + 1 end
+			if entry.bags then bags = bags + 1 end
+		end
+	end
 	for _ in pairs(ns.vault.guilds or {}) do guilds = guilds + 1 end
-	GameTooltip:AddLine(chars .. " saved bank" .. (chars == 1 and "" or "s")
-		.. ", " .. guilds .. " guild bank" .. (guilds == 1 and "" or "s"), 0.6, 0.85, 1)
+	GameTooltip:AddLine(banks .. " saved bank" .. (banks == 1 and "" or "s") .. ", " .. bags .. " saved bag"
+		.. (bags == 1 and "" or "s") .. ", " .. guilds .. " guild bank" .. (guilds == 1 and "" or "s"), 0.6, 0.85, 1)
 
 	GameTooltip:AddLine(" ")
 	GameTooltip:AddLine("Left-click: the options", 0.7, 0.7, 0.7)
-	GameTooltip:AddLine("Right-click: the saved bank contents", 0.7, 0.7, 0.7)
+	GameTooltip:AddLine("Right-click: the saved bank", 0.7, 0.7, 0.7)
 	GameTooltip:AddLine("Shift and left-click: lock or unlock every window", 0.7, 0.7, 0.7)
 	GameTooltip:AddLine("Drag: move around the minimap", 0.7, 0.7, 0.7)
 	GameTooltip:Show()
@@ -105,7 +110,7 @@ local function Build()
 
 	button:SetScript("OnClick", function(_, which)
 		if which == "RightButton" then
-			if ns.VaultUI and ns.VaultUI.Toggle then ns.VaultUI.Toggle() end
+			if ns.VaultUI and ns.VaultUI.Toggle then ns.VaultUI.Toggle("bank") end
 		elseif IsShiftKeyDown and IsShiftKeyDown() then
 			ns.db.enabled = not ns.db.enabled
 			ns.Refresh()

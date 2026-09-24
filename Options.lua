@@ -264,7 +264,7 @@ local function BuildWindowsPage(parent)
 		function() return ns.db.enabled end,
 		function(value) ns.db.enabled = value end)
 
-	Note(layout, "Each window below can be dragged by the strip along its top edge. The world map has a small gold handle in its top left corner instead, because its own top edge is full of buttons. No window can be dragged off screen.", 0, 4)
+	Note(layout, "Each window below can be dragged by the strip along its top edge. The world map is dragged by the clear parts of its own top bar, and shows a small gold handle in its top left corner only if that bar has no room. No window can be dragged off screen.", 0, 4)
 
 	for _, group in ipairs(ns.Windows.GROUPS) do
 		CheckWithReset(layout, group.label, nil, group.key)
@@ -346,7 +346,7 @@ local function BuildVaultPage(parent)
 	local layout = NewLayout(parent)
 	Header(layout, "Bank snapshots")
 
-	Note(layout, "What your bank and your guild bank hold is saved every time you open them, and can be looked at from anywhere. Snapshots are shared between all your characters on this account.", 0, 3)
+	Note(layout, "What your bank and your guild bank hold is saved every time you open them, and your bags a few seconds after you log in and whenever they settle. Every character on this account is remembered, and the vault window has a tab for each, so any character's bank or bags can be looked at from anywhere.", 0, 4)
 
 	Check(layout, "Remember the bank when I open it", nil,
 		function() return ns.db.vault.autoBank end,
@@ -356,11 +356,7 @@ local function BuildVaultPage(parent)
 		function() return ns.db.vault.autoGuild end,
 		function(value) ns.db.vault.autoGuild = value end)
 
-	Check(layout, "Keep snapshots from my other characters", "With this off, every saved bank except this character's is dropped the next time you log in.",
-		function() return ns.db.vault.keepOtherCharacters end,
-		function(value) ns.db.vault.keepOtherCharacters = value end)
-
-	Check(layout, "Bank buttons on the bag window", "Puts a Bank button, and a Guild button once there is a guild bank saved, in the header of your backpack. They go somewhere the game is not already using.",
+	Check(layout, "Icons on the bag window", "Three icons in the header of your backpack: the saved bank, the saved bags and the saved guild bank. They go somewhere the game is not already using.",
 		function() return ns.db.vault.bagButtons end,
 		function(value) ns.db.vault.bagButtons = value end)
 
@@ -369,15 +365,19 @@ local function BuildVaultPage(parent)
 		local chars, guilds = 0, 0
 		for _ in pairs(ns.vault.chars or {}) do chars = chars + 1 end
 		for _ in pairs(ns.vault.guilds or {}) do guilds = guilds + 1 end
-		status:SetText("Saved right now: " .. chars .. " character bank" .. (chars == 1 and "" or "s")
+		status:SetText("Saved right now: " .. chars .. " character" .. (chars == 1 and "" or "s")
 			.. " and " .. guilds .. " guild bank" .. (guilds == 1 and "" or "s") .. ".")
 	end }
 
 	ButtonRow(layout, {
-		{ label = "Open the vault", width = 130, onClick = function() ns.VaultUI.Show() end,
+		{ label = "Saved bank", width = 100, onClick = function() ns.VaultUI.Show("bank") end,
 			tooltip = "Also on /casement vault." },
+		{ label = "Saved bags", width = 100, onClick = function() ns.VaultUI.Show("bags") end,
+			tooltip = "Also on /casement bags." },
+		{ label = "Guild bank", width = 100, onClick = function() ns.VaultUI.Show("guild") end,
+			tooltip = "Also on /casement guild." },
 		{ label = "Snapshot now", width = 130, onClick = function() ns.Print(ns.Vault.SnapshotNow()) end,
-			tooltip = "Saves whichever of the two is open in front of you." },
+			tooltip = "Saves your bags, and the bank or guild bank if one is open in front of you." },
 	})
 end
 
@@ -390,7 +390,7 @@ local function BuildAboutPage(parent)
 	local lines = {
 		"/casement opens these options",
 		"/casement window opens them in a window of their own",
-		"/casement vault opens the saved bank contents",
+		"/casement vault, bags or guild open the saved bank, bags or guild bank",
 		"/casement snapshot saves what is open in front of you",
 		"/casement scale 120 sets the map size",
 		"/casement lock or unlock turns every window switch off or on",

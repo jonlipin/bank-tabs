@@ -12,7 +12,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "1.0.1"
+ns.version = "1.0.2"
 ns.report = {}
 
 local report = ns.report
@@ -67,7 +67,6 @@ ns.defaults = {
 	vault = {
 		autoBank = true,
 		autoGuild = true,
-		keepOtherCharacters = true,
 		bagButtons = true,
 	},
 
@@ -312,6 +311,67 @@ function ns.CreateTabPanel(name, parent, key)
 	return panel
 end
 
+-- A window with a portrait in its top left corner, the shape the bank and the bag windows have.
+-- The portrait is kept rather than hidden, and the Inset (the dark plate the bank draws its slots
+-- on) is kept too. Falls back to the plain window art where neither template resolves.
+function ns.CreatePortraitPanel(name, key)
+	local panel, used
+	for _, candidate in ipairs({ "ButtonFrameTemplate", "PortraitFrameTemplate" }) do
+		local ok, made = pcall(CreateFrame, "Frame", name, UIParent, candidate)
+		if ok and made and (made.NineSlice or made.Inset or made.PortraitContainer or made.portrait) then
+			panel, used = made, candidate
+			break
+		end
+		if ok and made then made:Hide() end
+	end
+	if not panel then
+		panel = ns.CreatePanelFrame(name, UIParent, key or "portrait window")
+		used = panel.csTemplate
+	end
+	report[(key or "portrait window") .. " panel"] = used
+
+	if used == "ButtonFrameTemplate" and ButtonFrameTemplate_HideButtonBar then
+		pcall(ButtonFrameTemplate_HideButtonBar, panel)
+	end
+
+	local title = panel.TitleText or (panel.TitleContainer and panel.TitleContainer.TitleText)
+	if not title then
+		title = panel:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+		title:SetPoint("TOP", 0, -6)
+	end
+	panel.csTitle = title
+	panel.csTemplate = used
+
+	-- The portrait texture, wherever this template keeps it.
+	panel.csPortrait = (panel.PortraitContainer and panel.PortraitContainer.portrait) or panel.portrait
+		or (panel.GetName and _G[(panel:GetName() or "") .. "Portrait"]) or nil
+
+	if not panel.CloseButton then
+		local ok, button = pcall(CreateFrame, "Button", nil, panel, "UIPanelCloseButton")
+		if ok and button then button:SetPoint("TOPRIGHT", 1, 1) end
+	end
+
+	panel:SetMovable(true)
+	panel:SetClampedToScreen(true)
+	panel:EnableMouse(true)
+	panel:RegisterForDrag("LeftButton")
+	panel:SetScript("OnDragStart", panel.StartMoving)
+	panel:SetScript("OnDragStop", panel.StopMovingOrSizing)
+	return panel
+end
+
+-- Paints the player's face into a portrait texture, by whichever route this client offers.
+function ns.SetPlayerPortrait(texture)
+	if not texture then return false end
+	if SetPortraitTexture then
+		if pcall(SetPortraitTexture, texture, "player") then return true end
+	end
+	if SetPortraitToUnit then
+		if pcall(SetPortraitToUnit, texture, "player") then return true end
+	end
+	return false
+end
+
 function ns.CreatePanel(name)
 	local panel = ns.CreatePanelFrame(name, UIParent, "window")
 	local used = panel.csTemplate
@@ -454,6 +514,12 @@ end
 
 function ns.Money(amount)
 	if type(amount) ~= "number" then return "" end
+	-- The modern stack keeps this under C_CurrencyInfo; older builds have the global.
+	local modern = C_CurrencyInfo and C_CurrencyInfo.GetCoinTextureString
+	if modern then
+		local ok, text = pcall(modern, amount)
+		if ok and text then return text end
+	end
 	if GetCoinTextureString then
 		local ok, text = pcall(GetCoinTextureString, amount)
 		if ok and text then return text end
@@ -566,6 +632,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
 		if ns.SyncOptions then pcall(ns.SyncOptions) end
 
 	elseif event == "PLAYER_LOGOUT" then
+		if ns.Vault and ns.Vault.OnEvent then pcall(ns.Vault.OnEvent, event) end
 		MirrorToAccount()
 		return
 	end
@@ -593,8 +660,8 @@ local function PrintHelp()
 	Print("commands:")
 	local lines = {
 		"|cffffff00/casement|r opens the options",
-		"|cffffff00/casement vault|r opens the saved bank and guild bank contents",
-		"|cffffff00/casement snapshot|r saves what is on screen now",
+		"|cffffff00/casement vault|r opens the saved bank, |cffffff00/casement bags|r the saved bags, |cffffff00/casement guild|r the guild bank",
+		"|cffffff00/casement snapshot|r saves your bags, and the bank or guild bank if one is open",
 		"|cffffff00/casement scale <50-200>|r sets the world map scale",
 		"|cffffff00/casement reset|r puts every window back where the game had it",
 		"|cffffff00/casement lock|r or |cffffff00unlock|r turns every window switch off or on",
@@ -620,8 +687,12 @@ SlashCmdList["CASEMENT"] = function(msg)
 	elseif cmd == "window" then
 		if ns.ToggleOptions then ns.ToggleOptions(true) end
 
-	elseif cmd == "vault" or cmd == "bank" then
-		if ns.VaultUI and ns.VaultUI.Toggle then ns.VaultUI.Toggle() else Print("The vault window is not built on this client.") end
+	elseif cmd == "vault" or cmd == "bank" or cmd == "bags" or cmd == "guild" then
+		if not (ns.VaultUI and ns.VaultUI.Toggle) then Print("The vault window is not built on this client.") return end
+		local which = (cmd ~= "vault") and cmd or rest
+		if which == "guildbank" then which = "guild" end
+		if which ~= "bank" and which ~= "bags" and which ~= "guild" then which = nil end
+		ns.VaultUI.Toggle(which)
 
 	elseif cmd == "snapshot" then
 		if not (ns.Vault and ns.Vault.SnapshotNow) then Print("Snapshots are not available on this client.") return end

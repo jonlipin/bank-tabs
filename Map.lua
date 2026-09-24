@@ -142,6 +142,12 @@ function Map.ResetSize()
 	Map.SetScale(1)
 end
 
+-- The move engine asks this before it re-places the map on a size change, so that our own resize
+-- drag is left to do its own placing.
+function Map.IsResizing()
+	return resizing ~= nil
+end
+
 -- ------------------------------------------------------------------
 -- Resizing, driven from the grip in the tab
 -- ------------------------------------------------------------------
@@ -230,6 +236,56 @@ local function SmallButton(parent, text, width, onClick, tooltip)
 	return button
 end
 
+-- Candidates for the reset button's icon, first one on this client wins. The map scroll is the
+-- addon's own emblem: the map, back as it comes.
+local RESET_ICONS = {
+	"Interface\\Icons\\INV_Misc_Map02",
+	"Interface\\Icons\\INV_Misc_Map_01",
+}
+
+-- The reset button wears an icon. Where none of the candidates resolves the button says 100%
+-- instead, which is what it does.
+local function ResetButton(parent)
+	local button = CreateFrame("Button", nil, parent)
+	button.csOurs = true
+	button:SetSize(24, 24)
+
+	local icon = button:CreateTexture(nil, "ARTWORK")
+	icon:SetPoint("TOPLEFT", 1, -1)
+	icon:SetPoint("BOTTOMRIGHT", -1, 1)
+	local path
+	for _, candidate in ipairs(RESET_ICONS) do
+		if ns.TextureExists(candidate) then path = candidate break end
+	end
+	if path then
+		icon:SetTexture(path)
+		icon:SetTexCoord(0.07, 0.93, 0.07, 0.93)
+		report["map reset icon"] = path
+	else
+		icon:Hide()
+		local text = button:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
+		text:SetAllPoints()
+		text:SetJustifyH("CENTER")
+		text:SetText("100%")
+		button:SetWidth(40)
+		report["map reset icon"] = "text, the icon did not load"
+	end
+
+	-- The HIGHLIGHT layer only draws while the mouse is over the button.
+	local glow = button:CreateTexture(nil, "HIGHLIGHT")
+	glow:SetAllPoints()
+	glow:SetColorTexture(1, 1, 1, 0.18)
+
+	button:SetScript("OnClick", function() Map.ResetSize() end)
+	button:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_TOP")
+		GameTooltip:SetText("Back to the map's normal size", 1, 1, 1)
+		GameTooltip:Show()
+	end)
+	button:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	return button
+end
+
 local function BuildTab()
 	local frame = MapFrame()
 	if not frame or tab then return end
@@ -242,83 +298,84 @@ local function BuildTab()
 	if tab.TitleText then tab.TitleText:SetText("") end
 	PlaceTab()
 
-	local x = 10
-	local minus = SmallButton(tab, "-", 22, function() Map.Step(-1) end,
+	tab.parts = {}
+	local parts = tab.parts
+
+	parts.minus = SmallButton(tab, "-", 22, function() Map.Step(-1) end,
 		"Smaller, in steps of " .. (ns.db.map.step or 10) .. " percent")
-	minus:SetPoint("LEFT", x, 0)
-	x = x + 24
 
 	label = tab:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
-	label:SetPoint("LEFT", x, 0)
 	label:SetWidth(42)
 	label:SetJustifyH("CENTER")
 	label:SetText(Percent() .. "%")
-	x = x + 44
+	parts.label = label
 
-	local plus = SmallButton(tab, "+", 22, function() Map.Step(1) end,
+	parts.plus = SmallButton(tab, "+", 22, function() Map.Step(1) end,
 		"Bigger, in steps of " .. (ns.db.map.step or 10) .. " percent")
-	plus:SetPoint("LEFT", x, 0)
-	x = x + 26
 
-	local reset = SmallButton(tab, "100%", 40, function() Map.ResetSize() end, "Back to the map's normal size")
-	reset:SetPoint("LEFT", x, 0)
-	x = x + 44
+	parts.reset = ResetButton(tab)
 
 	local divider = tab:CreateTexture(nil, "ARTWORK")
 	divider:SetColorTexture(1, 1, 1, 0.16)
 	divider:SetSize(1, 18)
-	divider:SetPoint("LEFT", x, 0)
-	x = x + 7
+	parts.divider = divider
 
 	-- The resize grip. It lives here rather than on the map itself so that it can never sit on top
 	-- of the quest panel or anything else the game draws inside the map.
-	grip = CreateFrame("Frame", "CasementMapGrip", tab)
+	grip = CreateFrame("Button", "CasementMapGrip", tab)
 	grip.csOurs = true
-	grip:SetSize(22, 22)
-	grip:SetPoint("LEFT", x, 0)
+	grip:SetSize(18, 18)
 	grip:EnableMouse(true)
-	x = x + 26
+	parts.grip = grip
 
-	local hit = grip:CreateTexture(nil, "BACKGROUND")
-	hit:SetAllPoints()
-	hit:SetColorTexture(1, 1, 1, 0.05)
-	-- Drawn rather than textured: several of the game's own grabber files, and everything under
-	-- Interface\Buttons, do not render on this client.
-	for i = 1, 3 do
-		local dash = grip:CreateTexture(nil, "OVERLAY")
-		dash:SetColorTexture(0.95, 0.82, 0.45, 0.9)
-		dash:SetSize(4 + (i - 1) * 5, 2)
-		dash:SetPoint("BOTTOMRIGHT", -3, 2 + (i - 1) * 4)
-	end
+	-- The game's own resize grabber, the one the chat windows carry. Everything under the Buttons
+	-- folder fails to render on this client, but this family is known to.
+	grip:SetNormalTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Up")
+	grip:SetHighlightTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Highlight")
+	grip:SetPushedTexture("Interface\\ChatFrame\\UI-ChatIM-SizeGrabber-Down")
+	report["map grip art"] = "chat frame grabber"
 
 	grip:SetScript("OnMouseDown", StartResize)
 	grip:SetScript("OnMouseUp", StopResize)
 	grip:SetScript("OnHide", StopResize)
+	grip:SetScript("OnDoubleClick", function() StopResize() Map.ResetSize() end)
 	grip:SetScript("OnEnter", function(self)
 		GameTooltip:SetOwner(self, "ANCHOR_TOP")
 		GameTooltip:SetText("Resize the map", 1, 1, 1)
 		GameTooltip:AddLine("Drag to scale the whole map. Hold shift to snap to "
-			.. (ns.db.map.step or 10) .. " percent steps.", nil, nil, nil, true)
+			.. (ns.db.map.step or 10) .. " percent steps. Double-click for 100 percent.", nil, nil, nil, true)
 		GameTooltip:Show()
 	end)
 	grip:SetScript("OnLeave", function() GameTooltip:Hide() end)
-
-	tab.csFullWidth = x + 4
 end
 
--- The tab is only as wide as the controls that are switched on.
-local function LayoutTab()
-	if not tab then return end
-	local buttons = ns.db.map.scaleButtons
-	local resize = ns.db.map.resizeGrip
-	local width = 10
-	if buttons then width = width + 24 + 44 + 26 + 44 end
-	if buttons and resize then width = width + 7 end
-	if resize then width = width + 26 end
-	tab:SetWidth(math.max(width + 4, 60))
+-- The order the controls sit in, left to right. The tab is only as wide as the ones switched on,
+-- and the grip slides over when the buttons are off.
+local PART_ORDER = { "minus", "label", "plus", "reset", "divider", "grip" }
 
-	-- With the buttons off, the grip slides over to where they were.
-	if grip then grip:ClearAllPoints() grip:SetPoint("LEFT", buttons and (10 + 24 + 44 + 26 + 44 + 7) or 10, 0) end
+local function LayoutTab()
+	if not tab or not tab.parts then return end
+	local buttons = ns.db.map.scaleButtons and true or false
+	local resize = ns.db.map.resizeGrip and true or false
+	local x = 10
+	for _, key in ipairs(PART_ORDER) do
+		local part = tab.parts[key]
+		local wanted
+		if key == "grip" then
+			wanted = resize
+		elseif key == "divider" then
+			wanted = buttons and resize
+		else
+			wanted = buttons
+		end
+		part:SetShown(wanted)
+		if wanted then
+			part:ClearAllPoints()
+			part:SetPoint("LEFT", tab, "LEFT", x, 0)
+			x = x + (part:GetWidth() or 0) + (key == "divider" and 6 or 4)
+		end
+	end
+	tab:SetWidth(math.max(x + 6, 60))
 	PlaceTab()
 end
 
@@ -368,7 +425,7 @@ local function BuildStrips()
 			hint:SetAllPoints()
 			hint:SetColorTexture(0.35, 0.72, 1, 0.20)
 			hint:Hide()
-			strip:SetScript("OnEnter", function() if ns.db.enabled then hint:Show() end end)
+			strip:SetScript("OnEnter", function() if ns.db.enabled and ns.db.showGrips then hint:Show() end end)
 			strip:SetScript("OnLeave", function() hint:Hide() end)
 			ns.Windows.WireRegion(strip, frame)
 			strips[index] = strip
@@ -413,6 +470,9 @@ local function QueueRebuild()
 	rebuildQueued = true
 	ns.After(0.05, function()
 		rebuildQueued = false
+		-- Opening or closing the quest log re-anchors the map, so a map the user has placed is put
+		-- back. One that has never been moved is left to the game.
+		if ns.db.positions["worldmap"] then pcall(Replace) end
 		pcall(BuildStrips)
 		pcall(RaiseControls)
 		pcall(PlaceTab)
@@ -434,7 +494,6 @@ function Map.Apply()
 		local wanted = on and (db.map.scaleButtons or db.map.resizeGrip) and not IsMaximized()
 		LayoutTab()
 		tab:SetShown(wanted and true or false)
-		if grip then grip:SetShown(db.map.resizeGrip and true or false) end
 	end
 
 	if on then
