@@ -278,7 +278,7 @@ local function BuildWindowsPage(parent)
 		{ value = "alt", label = "Alt" },
 	}, function() return ns.db.dragModifier end,
 		function(value) ns.db.dragModifier = value end,
-		"While the key is held, a managed window can be grabbed anywhere on it, not just by its top strip.")
+		"While the key is held, a managed window can be grabbed anywhere on it, not just by its top strip. Nothing shows on screen unless the drag areas are switched on below.")
 
 	Check(layout, "Show me where the drag strips are", "Paints a faint blue band over the part of each window that can be dragged.",
 		function() return ns.db.showGrips end,
@@ -384,6 +384,10 @@ local function BuildVaultPage(parent)
 	Check(layout, "Account gold in the corner of the saved bank", "A small line in the bottom left of the saved bank and bags with every character's gold added up. /casement gold lists them one by one.",
 		function() return ns.db.vault.showAccountGold end,
 		function(value) ns.db.vault.showAccountGold = value end)
+
+	Check(layout, "Every character's gold when hovering the money", "Hover the money on your bag window, the bank, or the saved bank, and a tooltip lists each character's gold and the total.",
+		function() return ns.db.vault.moneyTooltip end,
+		function(value) ns.db.vault.moneyTooltip = value end)
 
 	Check(layout, "Item tooltips: who has it and where", "Lines on every item tooltip with each character that has the item, how many in their bank and bags, and the guild bank, from the snapshots. Your own bags are counted live.",
 		function() return ns.db.tooltips.enabled end,

@@ -178,7 +178,7 @@ local function AddLines(tooltip, id, name)
 		if counts.bank > 0 then parts[#parts + 1] = "bank " .. counts.bank end
 		if bags > 0 then parts[#parts + 1] = "bags " .. bags end
 		if #parts > 0 then
-			rows[#rows + 1] = { left = ShortName(who), right = table.concat(parts, ", "), who = who }
+			rows[#rows + 1] = { left = ns.ShortLabel(who), right = table.concat(parts, ", "), who = who }
 			total = total + counts.bank + bags
 			places = places + #parts
 		end

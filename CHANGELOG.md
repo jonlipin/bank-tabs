@@ -2,6 +2,31 @@
 
 All notable changes to Casement are listed here. The newest release is at the top.
 
+## 1.2.1 - 2026-09-24
+
+**Fixed: the saved bank and bags framed every item in a fat border.** Only uncommon and better
+wear a border in the real bank and bags, and the replica now follows that rule, using the game's
+own quality glow tinted per quality. Common items sit clean in their slots.
+
+**Fixed: the saved bank's slots were packed tighter than the real bank's.** The snapshot now
+measures the real bank window while it is open (where the grid starts, how far apart the slots
+are, the window's size, and the Bag Slots row) and the replica lays itself out from those numbers,
+so it matches this client's bank exactly instead of a guess. This also picked up that this client's
+bank has eight Bag Slots, not the classic seven. `/casement debug` prints what was measured; a bank
+saved before this release uses the classic numbers until it is next opened.
+
+**Fixed: one character showed up as two tabs.** The name this client hands back has been seen to
+change between logins ("Vatik" one day, "Vatik Voidpact" another), which split one character's
+snapshots across two entries. Characters are now keyed by their GUID, which never changes; the
+display name travels with the entry, and an older entry saved under a matching name is folded in
+the next time that character takes a snapshot.
+
+**The drag anywhere overlay no longer lights the windows up.** Holding alt still lets you drag a
+window from anywhere; nothing shows on screen unless "show me where the drag strips are" is on.
+
+**Hover the money.** Hovering the money on your bag window, on the bank, or on the saved bank lists
+every character's gold and the account total, marking the one you are on.
+
 ## 1.2.0 - 2026-09-24
 
 **Item tooltips say who has it and where.** Every item tooltip gets a line per character on the

@@ -12,7 +12,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "1.2.0"
+ns.version = "1.2.1"
 ns.report = {}
 
 local report = ns.report
@@ -76,6 +76,7 @@ ns.defaults = {
 		autoGuild = true,
 		bagButtons = true,
 		showAccountGold = true, -- the account's gold, small, in the replica's bottom left corner
+		moneyTooltip = true,    -- hovering the money on a bag or bank window lists every character's gold
 	},
 
 	-- Lines on item tooltips: which characters have the item and where, from the snapshots.
@@ -145,11 +146,41 @@ function ns.After(delay, fn)
 	pending[#pending + 1] = { at = GetTime() + delay, fn = fn }
 end
 
-function ns.Who()
+-- The name and realm as the client gives them right now.
+function ns.NameKey()
 	local name = UnitName and UnitName("player") or "player"
 	local realm = GetRealmName and GetRealmName() or ""
 	if realm ~= "" then return name .. " - " .. realm end
 	return name
+end
+
+-- The key a character is stored under. The GUID never changes, whereas the name this client hands
+-- back has been seen to vary ("Vatik" one login, "Vatik Voidpact" another), which split one
+-- character's snapshots across two entries. Older entries keyed by name are folded in by the
+-- vault the next time that character takes a snapshot.
+function ns.Who()
+	if UnitGUID then
+		local ok, guid = pcall(UnitGUID, "player")
+		if ok and type(guid) == "string" and guid ~= "" then return guid end
+	end
+	return ns.NameKey()
+end
+
+-- What to call a stored character: the name and realm saved with the entry, or the key itself
+-- for an entry saved by name before 1.2.1.
+function ns.Label(who)
+	local entry = ns.vault and ns.vault.chars and ns.vault.chars[who]
+	if type(entry) == "table" and type(entry.name) == "string" then
+		local realm = entry.realm
+		return entry.name .. ((realm and realm ~= "") and (" - " .. realm) or "")
+	end
+	return tostring(who)
+end
+
+function ns.ShortLabel(who)
+	local entry = ns.vault and ns.vault.chars and ns.vault.chars[who]
+	if type(entry) == "table" and type(entry.name) == "string" then return entry.name end
+	return (tostring(who):gsub(" %- .*$", ""))
 end
 
 -- ------------------------------------------------------------------
@@ -212,6 +243,53 @@ function ns.Refresh()
 	if ns.Minimap and ns.Minimap.Apply then pcall(ns.Minimap.Apply) end
 	if ns.BagHeader and ns.BagHeader.Apply then pcall(ns.BagHeader.Apply) end
 	if ns.Reveal and ns.Reveal.Apply then pcall(ns.Reveal.Apply) end
+end
+
+-- Every character's gold and the total, as a tooltip on `owner`. Shown from the money on the
+-- game's own bag and bank windows, from the replica's money, and from the minimap button.
+function ns.GoldTooltip(owner)
+	if not (ns.Vault and ns.Vault.Gold and GameTooltip) then return false end
+	local rows, total = ns.Vault.Gold()
+	GameTooltip:SetOwner(owner, "ANCHOR_RIGHT")
+	GameTooltip:SetText("Gold across the account", 1, 1, 1)
+	for _, row in ipairs(rows) do
+		local entry = ns.Vault.CharRecord and ns.Vault.CharRecord(row.who)
+		local colors = _G.RAID_CLASS_COLORS
+		local color = entry and entry.class and colors and colors[entry.class]
+		local r, g, b = 1, 0.82, 0
+		if color and color.r then r, g, b = color.r, color.g, color.b end
+		GameTooltip:AddDoubleLine(ns.ShortLabel(row.who) .. (row.mine and " (now)" or ""), ns.Money(row.money), r, g, b, 1, 1, 1)
+	end
+	if #rows > 1 then GameTooltip:AddDoubleLine("Total", ns.Money(total), 1, 0.82, 0, 1, 1, 1) end
+	GameTooltip:Show()
+	return true
+end
+
+-- Puts the gold tooltip on a window's money frame (the game's own coin readout). The frame and
+-- the coin buttons inside it are hooked, since whichever is under the mouse takes the hover.
+local moneyHooked = {}
+function ns.HookMoneyFrame(frame, label)
+	if not frame then return false end
+	local money = frame.MoneyFrame
+	if not money and frame.GetName then
+		local name = frame:GetName()
+		if name then money = _G[name .. "MoneyFrame"] end
+	end
+	if not money or moneyHooked[money] then return money ~= nil end
+	moneyHooked[money] = true
+
+	local function hook(region)
+		if not (region and region.HookScript) then return end
+		pcall(region.EnableMouse, region, true)
+		pcall(region.HookScript, region, "OnEnter", function(self)
+			if ns.db and ns.db.vault.moneyTooltip then ns.GoldTooltip(self) end
+		end)
+		pcall(region.HookScript, region, "OnLeave", function() GameTooltip:Hide() end)
+	end
+	hook(money)
+	ns.WalkChildren(money, hook, 2, 30)
+	report["money tooltip " .. tostring(label or "window")] = "hooked"
+	return true
 end
 
 -- A box with some text selected in it, for anything the game will not put on the clipboard
@@ -800,7 +878,7 @@ SlashCmdList["CASEMENT"] = function(msg)
 		local rows, total = ns.Vault.Gold()
 		Print("gold across the account:")
 		for _, row in ipairs(rows) do
-			DEFAULT_CHAT_FRAME:AddMessage("   |cffffd200" .. (row.who:gsub(" %- .*$", "")) .. "|r  " .. ns.Money(row.money)
+			DEFAULT_CHAT_FRAME:AddMessage("   |cffffd200" .. ns.ShortLabel(row.who) .. "|r  " .. ns.Money(row.money)
 				.. (row.mine and "  |cff909090(now)|r" or ""))
 		end
 		DEFAULT_CHAT_FRAME:AddMessage("   |cffffd200Total|r  " .. ns.Money(total))

@@ -209,7 +209,146 @@ local function StampCharacter(entry)
 		local ok, level = pcall(UnitLevel, "player")
 		if ok and type(level) == "number" then entry.level = level end
 	end
+	-- The display name and realm travel with the entry; the key is the GUID.
+	if UnitName then
+		local ok, name = pcall(UnitName, "player")
+		if ok and type(name) == "string" and name ~= "" then entry.name = name end
+	end
+	if GetRealmName then
+		local ok, realm = pcall(GetRealmName)
+		if ok and type(realm) == "string" then entry.realm = realm end
+	end
+	if UnitGUID then
+		local ok, guid = pcall(UnitGUID, "player")
+		if ok and type(guid) == "string" and guid ~= "" then entry.guid = guid end
+	end
 end
+
+-- Snapshots taken before 1.2.1 were keyed by name, and the name this client hands back has been
+-- seen to change between logins, which left one character with two entries. Anything stored under
+-- a name that matches this character on this realm is folded into the entry keyed by GUID, the
+-- newer record of each kind winning, and the old key dropped.
+local function AdoptLegacy(who, entry)
+	if not (entry.name and who:find("^Player%-")) then return 0 end
+	local first = entry.name:match("^(%S+)")
+	local realm = entry.realm or ""
+	local adopted = 0
+	for key, raw in pairs(ns.vault.chars) do
+		if key ~= who and type(key) == "string" and not key:find("^Player%-") and type(raw) == "table" then
+			local old = Migrate(key, raw)
+			local oldName, oldRealm = key:match("^(.-) %- (.*)$")
+			oldName = oldName or key
+			oldRealm = oldRealm or ""
+			if old and oldName:match("^(%S+)") == first and oldRealm == realm then
+				for _, kind in ipairs({ "bank", "bags" }) do
+					if old[kind] and (not entry[kind] or (old[kind].time or 0) > (entry[kind].time or 0)) then
+						entry[kind] = old[kind]
+					end
+				end
+				entry.class = entry.class or old.class
+				entry.level = entry.level or old.level
+				ns.vault.chars[key] = nil
+				adopted = adopted + 1
+			end
+		end
+	end
+	if adopted > 0 then report["legacy records adopted"] = adopted .. " folded into this character's entry" end
+	return adopted
+end
+
+-- The real bank's geometry, read off the live window while it is open: where its slot grid sits,
+-- how far apart the slots are, the window's size, and the Bag Slots row. The replica lays itself
+-- out from these numbers, so it matches this client's bank exactly rather than a guess. Every
+-- number is in the bank window's own units, relative to its top left corner.
+local function MeasureBankLayout()
+	local frame = _G.BankFrame
+	if not (frame and frame.IsShown and frame:IsShown()) then return nil end
+	local fl, fb, fw, fh = ns.Windows.Measure(frame)
+	if not fl or not fw or fw <= 0 then return nil end
+	local ratio = ns.Windows.Ratio(frame)
+	local ftop = fb + fh
+
+	-- Every square, shown button of a slot's size anywhere inside the window.
+	local buttons = {}
+	ns.WalkChildren(frame, function(child)
+		local okType, kind = pcall(child.GetObjectType, child)
+		if not okType or not (kind == "Button" or kind == "ItemButton" or kind == "CheckButton") then return end
+		local okShown, shown = pcall(child.IsShown, child)
+		if okShown and not shown then return end
+		local l, b, w, h = ns.Windows.Measure(child)
+		if not l or not w or not h or w < 16 or w > 64 or math.abs(w - h) > 4 then return end
+		buttons[#buttons + 1] = { x = (l - fl) * ratio, y = (ftop - (b + h)) * ratio, w = w * ratio, h = h * ratio }
+	end, 6, 800)
+	if #buttons < 8 then
+		report["bank layout"] = "not measured: " .. #buttons .. " slot sized buttons found"
+		return nil
+	end
+
+	-- The most common size is the slot size; everything that size is a slot.
+	local sizes = {}
+	for _, b in ipairs(buttons) do
+		local size = math.floor(b.w + 0.5)
+		sizes[size] = (sizes[size] or 0) + 1
+	end
+	local cell, most = nil, 0
+	for size, n in pairs(sizes) do
+		if n > most then cell, most = size, n end
+	end
+	if most < 8 then
+		report["bank layout"] = "not measured: no run of same sized slots"
+		return nil
+	end
+	local slots, others = {}, {}
+	for _, b in ipairs(buttons) do
+		if math.abs(b.w - cell) <= 1 then slots[#slots + 1] = b else others[#others + 1] = b end
+	end
+	table.sort(slots, function(a, b)
+		if math.abs(a.y - b.y) > 2 then return a.y < b.y end
+		return a.x < b.x
+	end)
+	local rows = {}
+	for _, b in ipairs(slots) do
+		local row = rows[#rows]
+		if row and math.abs(row[1].y - b.y) <= 2 then row[#row + 1] = b else rows[#rows + 1] = { b } end
+	end
+	local first = rows[1]
+	local layout = {
+		width = fw * ratio, height = fh * ratio,
+		cell = cell, cols = #first, rows = #rows, slots = #slots,
+		pitchX = (first[2] and (first[2].x - first[1].x)) or (cell + 12),
+		pitchY = (rows[2] and (rows[2][1].y - first[1].y)) or (cell + 10),
+		originX = first[1].x, originY = first[1].y,
+	}
+
+	-- The Bag Slots: one row of smaller buttons under the grid.
+	local gridBottom = rows[#rows][1].y + cell
+	local below = {}
+	for _, b in ipairs(others) do
+		if b.y > gridBottom and b.w < cell then below[#below + 1] = b end
+	end
+	table.sort(below, function(a, b)
+		if math.abs(a.y - b.y) > 2 then return a.y < b.y end
+		return a.x < b.x
+	end)
+	local bagRow = {}
+	for _, b in ipairs(below) do
+		if #bagRow == 0 or math.abs(bagRow[1].y - b.y) <= 2 then bagRow[#bagRow + 1] = b end
+	end
+	if #bagRow >= 4 then
+		layout.bagCount = #bagRow
+		layout.bagCell = math.floor(bagRow[1].w + 0.5)
+		layout.bagPitch = (bagRow[2] and (bagRow[2].x - bagRow[1].x)) or (layout.bagCell + 14)
+		layout.bagOriginX = bagRow[1].x
+		layout.bagOriginY = bagRow[1].y
+	end
+
+	for key, value in pairs(layout) do layout[key] = math.floor(value * 10 + 0.5) / 10 end
+	report["bank layout"] = layout.cols .. " columns of " .. cell .. ", pitch " .. layout.pitchX .. " by " .. layout.pitchY
+		.. ", grid at " .. layout.originX .. "," .. layout.originY .. ", window " .. layout.width .. " by " .. layout.height
+		.. (layout.bagCount and (", " .. layout.bagCount .. " bag slots of " .. layout.bagCell) or ", bag slots not found")
+	return layout
+end
+Vault.MeasureBankLayout = MeasureBankLayout
 
 local function Totals(record)
 	record.items, record.slots, record.free = 0, 0, 0
@@ -232,7 +371,7 @@ function Vault.Characters(kind)
 	end
 	table.sort(out, function(a, b)
 		if a.mine ~= b.mine then return a.mine end
-		return a.who < b.who
+		return ns.Label(a.who) < ns.Label(b.who)
 	end)
 	return out
 end
@@ -314,8 +453,11 @@ end
 
 -- The seven Bag Slots along the bottom of the bank window: which are purchased, which hold a bag,
 -- and which container each bag opens as.
-local function BankBagSlots()
+local function BankBagSlots(measured)
 	local slots = {}
+	-- This client's bank has more Bag Slots than the classic seven, so the count comes from the
+	-- measured window when there is one, the game's own constant otherwise.
+	local count = math.max(measured or 0, tonumber(_G.NUM_BANKBAGSLOTS) or 0, NUM_BANK_BAG_SLOTS)
 	local purchased
 	if GetNumBankSlots then
 		local ok, count = pcall(GetNumBankSlots)
@@ -343,7 +485,7 @@ local function BankBagSlots()
 		end
 	end
 
-	for i = 1, NUM_BANK_BAG_SLOTS do
+	for i = 1, count do
 		local inv
 		if BankButtonIDToInvSlotID then
 			local ok, value = pcall(BankButtonIDToInvSlotID, i, 1)
@@ -388,11 +530,14 @@ function Vault.SnapshotBank(reason)
 	for _, container in ipairs(containers) do
 		record.containers[#record.containers + 1] = ScanContainer(container.id, container.label, container.slots)
 	end
-	record.bagSlots = BankBagSlots()
+	record.layout = MeasureBankLayout()
+	record.bagSlots = BankBagSlots(record.layout and record.layout.bagCount)
 	Totals(record)
 
-	local entry = Vault.CharRecord(ns.Who(), true)
+	local who = ns.Who()
+	local entry = Vault.CharRecord(who, true)
 	StampCharacter(entry)
+	AdoptLegacy(who, entry)
 	entry.bank = record
 
 	report["bank scan"] = record.items .. " items in " .. #record.containers .. " containers ("
@@ -429,8 +574,10 @@ function Vault.SnapshotBags(reason)
 	end
 	Totals(record)
 
-	local entry = Vault.CharRecord(ns.Who(), true)
+	local who = ns.Who()
+	local entry = Vault.CharRecord(who, true)
 	StampCharacter(entry)
+	AdoptLegacy(who, entry)
 	entry.bags = record
 
 	report["bags scan"] = record.items .. " items in " .. #record.containers .. " bags (" .. tostring(reason) .. ")"

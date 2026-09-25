@@ -33,6 +33,29 @@ local TAB_SIZE, TAB_PITCH = 30, 36
 local MARGIN_X, GRID_TOP = 20, 62
 local BAG_ROW_H, FOOTER_H = 46, 36
 
+-- The grid geometry each shape is drawn with. The bank's is read off the real bank window when a
+-- snapshot is taken (Vault.MeasureBankLayout), so the replica matches this client's bank exactly;
+-- until one has been measured, the classic bank's numbers stand in: 37 pixel slots, 12 apart
+-- across and 10 down, 48 in from the left edge. The other shapes use the plain grid.
+local PLAIN = { cell = CELL, pitchX = PITCH, pitchY = PITCH, originX = MARGIN_X, originY = GRID_TOP }
+local CLASSIC_BANK = { cell = 37, pitchX = 49, pitchY = 47, originX = 48, originY = 63, cols = 8,
+	bagCell = 24, bagPitch = 38, bagOriginX = 145 }
+
+local function BankGeometry(record)
+	local layout = record and record.layout
+	if layout and layout.cell and layout.pitchX and layout.pitchY and layout.originX and layout.originY then
+		return {
+			cell = layout.cell, pitchX = layout.pitchX, pitchY = layout.pitchY,
+			originX = layout.originX, originY = layout.originY, cols = layout.cols or BANK_COLS,
+			width = layout.width, height = layout.height,
+			bagCell = layout.bagCell or CLASSIC_BANK.bagCell, bagPitch = layout.bagPitch or CLASSIC_BANK.bagPitch,
+			bagOriginX = layout.bagOriginX or CLASSIC_BANK.bagOriginX, bagOriginY = layout.bagOriginY,
+			bagCount = layout.bagCount,
+		}
+	end
+	return CLASSIC_BANK
+end
+
 -- The character tabs, sized as the spellbook's are.
 local CTAB_W, CTAB_H, CTAB_GAP = 43, 37, 2
 local CTAB_ART = {
@@ -42,7 +65,7 @@ local CTAB_ART = {
 }
 local CLASS_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
 
-local window, searchBox, moneyText, accountText, noteText, bagLabel, inset, divider
+local window, searchBox, moneyText, accountText, noteText, bagLabel, bagRule, inset, divider
 local cells, bagCells, tabButtons, charTabs = {}, {}, {}, {}
 local mode = "bank"    -- "bank", "bags" or "guild"
 local who = nil        -- the character being looked at; nil means this one
@@ -190,16 +213,29 @@ local function NewCell(parent, size)
 	cell:SetSize(size, size)
 	SlotBacking(cell)
 
-	local border = cell:CreateTexture(nil, "BORDER")
-	border:SetAllPoints()
-	border:Hide()
-	cell.border = border
-
 	local icon = cell:CreateTexture(nil, "ARTWORK")
-	icon:SetPoint("TOPLEFT", 2, -2)
-	icon:SetPoint("BOTTOMRIGHT", -2, 2)
+	icon:SetPoint("TOPLEFT", 1, -1)
+	icon:SetPoint("BOTTOMRIGHT", -1, 1)
 	icon:Hide()
 	cell.icon = icon
+
+	-- The quality glow the game's own slots wear, tinted per quality and shown only for uncommon
+	-- and better: common items have no border in the real bags and bank. Where the atlas is
+	-- missing, a two pixel ring of four bars stands in.
+	local border = cell:CreateTexture(nil, "OVERLAY")
+	border:SetAllPoints()
+	if pcall(border.SetAtlas, border, "bags-glow-white") then
+		cell.borderIsGlow = true
+	else
+		cell.ring = {}
+		for i = 1, 4 do cell.ring[i] = cell:CreateTexture(nil, "OVERLAY") end
+		cell.ring[1]:SetPoint("TOPLEFT") cell.ring[1]:SetPoint("TOPRIGHT") cell.ring[1]:SetHeight(2)
+		cell.ring[2]:SetPoint("BOTTOMLEFT") cell.ring[2]:SetPoint("BOTTOMRIGHT") cell.ring[2]:SetHeight(2)
+		cell.ring[3]:SetPoint("TOPLEFT") cell.ring[3]:SetPoint("BOTTOMLEFT") cell.ring[3]:SetWidth(2)
+		cell.ring[4]:SetPoint("TOPRIGHT") cell.ring[4]:SetPoint("BOTTOMRIGHT") cell.ring[4]:SetWidth(2)
+	end
+	border:Hide()
+	cell.border = border
 
 	local count = cell:CreateFontString(nil, "OVERLAY", "NumberFontNormal")
 	count:SetPoint("BOTTOMRIGHT", -2, 2)
@@ -216,19 +252,41 @@ local function NewCell(parent, size)
 	return cell
 end
 
+-- Paints a cell's border in a colour, or hides it. `cell.border` carries the shown state in both
+-- the glow and the ring cases.
+local function PaintBorder(cell, shown, r, g, b)
+	if cell.borderIsGlow then
+		cell.border:SetVertexColor(r, g, b)
+	else
+		for _, bar in ipairs(cell.ring or {}) do
+			bar:SetColorTexture(r, g, b, 0.9)
+			bar:SetShown(shown)
+		end
+	end
+	cell.border:SetShown(shown)
+end
+
+local function SetQualityBorder(cell, quality)
+	local r, g, b = QualityColor(quality)
+	PaintBorder(cell, type(quality) == "number" and quality >= 2, r, g, b)
+end
+
+-- The blue outline that marks the tab or bag being looked at.
+local function SetOutline(cell, on)
+	PaintBorder(cell, on and true or false, 0.35, 0.72, 1)
+end
+
 local function SetCellItem(cell, item)
 	cell.csItem = item
 	if item then
 		cell.icon:SetTexture(item.icon)
 		cell.icon:Show()
 		cell.count:SetText((item.count or 1) > 1 and item.count or "")
-		local r, g, b = QualityColor(item.quality)
-		cell.border:SetColorTexture(r, g, b, 0.85)
-		cell.border:Show()
+		SetQualityBorder(cell, item.quality)
 	else
 		cell.icon:Hide()
 		cell.count:SetText("")
-		cell.border:Hide()
+		SetQualityBorder(cell, nil)
 	end
 	-- The real bank dims what does not match the search rather than hiding it.
 	cell:SetAlpha(Matches(item) and 1 or 0.25)
@@ -247,18 +305,20 @@ local function HideCellsFrom(index)
 	for i = index, #cells do cells[i]:Hide() end
 end
 
--- Places cell `index` at grid position (col, row), row 0 at the top.
-local function PlaceCell(index, col, row, item)
+-- Places cell `index` at grid position (col, row), row 0 at the top, in the given geometry.
+local function PlaceCell(index, col, row, item, geo)
+	geo = geo or PLAIN
 	local cell = GetCell(index)
+	cell:SetSize(geo.cell, geo.cell)
 	cell:ClearAllPoints()
-	cell:SetPoint("TOPLEFT", window, "TOPLEFT", MARGIN_X + col * PITCH, -(GRID_TOP + row * PITCH))
+	cell:SetPoint("TOPLEFT", window, "TOPLEFT", geo.originX + col * geo.pitchX, -(geo.originY + row * geo.pitchY))
 	SetCellItem(cell, item)
 	cell:Show()
 end
 
 -- One container's slots from the top left, one per slot in the slot's own position. The guild
 -- bank fills down each column first, the bank fills across each row first.
-local function LayoutGrid(slots, cols, columnMajor, items)
+local function LayoutGrid(slots, cols, columnMajor, items, geo)
 	local bySlot = {}
 	for _, item in ipairs(items or {}) do bySlot[item.slot] = item end
 
@@ -273,7 +333,7 @@ local function LayoutGrid(slots, cols, columnMajor, items)
 			col = (i - 1) % cols
 			row = math.floor((i - 1) / cols)
 		end
-		PlaceCell(i, col, row, bySlot[i])
+		PlaceCell(i, col, row, bySlot[i], geo)
 	end
 	HideCellsFrom(slots + 1)
 	return rows
@@ -319,17 +379,33 @@ local function GetBagCell(index)
 	return cell
 end
 
-local function LayoutBagRow(record, y)
+-- The Bag Slots row, at the measured place when there is one, else just under the grid. Returns
+-- the bottom edge of the row.
+local function LayoutBagRow(record, y, geo)
+	geo = geo or CLASSIC_BANK
+	local count = (record and record.bagSlots and #record.bagSlots > 0 and #record.bagSlots)
+		or geo.bagCount or tonumber(_G.NUM_BANKBAGSLOTS) or NUM_BAG_SLOTS
+	local size, pitch = geo.bagCell or BAG_CELL, geo.bagPitch or BAG_PITCH
+	local x0 = geo.bagOriginX or (MARGIN_X + 82)
+	local top = geo.bagOriginY or (y + 4)
+
 	bagLabel:ClearAllPoints()
-	bagLabel:SetPoint("TOPLEFT", window, "TOPLEFT", MARGIN_X, -(y + 8))
+	bagLabel:SetPoint("RIGHT", window, "TOPLEFT", x0 - 12, -(top + size / 2))
 	bagLabel:Show()
-	local x = MARGIN_X + 82
-	for i = 1, NUM_BAG_SLOTS do
+
+	-- The thin rule the real bank draws between the grid and the Bag Slots.
+	bagRule:ClearAllPoints()
+	bagRule:SetPoint("TOPLEFT", window, "TOPLEFT", geo.originX or MARGIN_X, -(top - 12))
+	bagRule:SetWidth(math.max(60, (geo.cols or BANK_COLS) * geo.pitchX - (geo.pitchX - geo.cell)))
+	bagRule:Show()
+
+	for i = 1, count do
 		local cell = GetBagCell(i)
 		local slot = record and record.bagSlots and record.bagSlots[i]
 		cell.csSlot = slot
+		cell:SetSize(size, size)
 		cell:ClearAllPoints()
-		cell:SetPoint("TOPLEFT", window, "TOPLEFT", x + (i - 1) * BAG_PITCH, -(y + 4))
+		cell:SetPoint("TOPLEFT", window, "TOPLEFT", x0 + (i - 1) * pitch, -top)
 		if slot and slot.icon then
 			cell.icon:SetTexture(slot.icon)
 			cell.icon:Show()
@@ -339,14 +415,16 @@ local function LayoutBagRow(record, y)
 			cell:SetAlpha((slot and slot.purchased) and 1 or 0.45)
 		end
 		cell.count:SetText("")
-		cell.border:SetColorTexture(0.35, 0.72, 1, 0.9)
-		cell.border:SetShown(viewingBag == i)
+		SetOutline(cell, viewingBag == i)
 		cell:Show()
 	end
+	for i = count + 1, #bagCells do bagCells[i]:Hide() end
+	return top + size
 end
 
 local function HideBagRow()
 	bagLabel:Hide()
+	bagRule:Hide()
 	for _, cell in ipairs(bagCells) do cell:Hide() end
 end
 
@@ -370,14 +448,16 @@ local function GetTabButton(index)
 	return button
 end
 
--- `tabs` is a list of { label, icon, detail }. Returns how wide a column they needed.
-local function LayoutTabs(tabs, x)
+-- `tabs` is a list of { label, icon, detail }, laid down the right of a grid whose top is at
+-- `top`. Returns how wide a column they needed.
+local function LayoutTabs(tabs, x, top)
+	top = top or GRID_TOP
 	for index, tab in ipairs(tabs) do
 		local button = GetTabButton(index)
 		button.csLabel, button.csDetail = tab.label, tab.detail
 		button.csItem = nil
 		button:ClearAllPoints()
-		button:SetPoint("TOPLEFT", window, "TOPLEFT", x, -(GRID_TOP + (index - 1) * TAB_PITCH))
+		button:SetPoint("TOPLEFT", window, "TOPLEFT", x, -(top + (index - 1) * TAB_PITCH))
 		if tab.icon then
 			button.icon:SetTexture(tab.icon)
 			button.icon:Show()
@@ -385,8 +465,7 @@ local function LayoutTabs(tabs, x)
 			button.icon:Hide()
 		end
 		button.count:SetText("")
-		button.border:SetColorTexture(0.35, 0.72, 1, 0.9)
-		button.border:SetShown((viewing or 1) == index)
+		SetOutline(button, (viewing or 1) == index)
 		button:SetAlpha(1)
 		button:Show()
 	end
@@ -424,7 +503,7 @@ end
 local function CharTabTooltip(self)
 	local entry = self.csEntry or {}
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	GameTooltip:SetText(self.csWho or "", 1, 1, 1)
+	GameTooltip:SetText(ns.Label(self.csWho or ""), 1, 1, 1)
 	local line = {}
 	if entry.level then line[#line + 1] = "Level " .. entry.level end
 	if entry.class then line[#line + 1] = ClassLabel(entry.class) end
@@ -553,14 +632,24 @@ end
 -- Laying out each shape
 -- ------------------------------------------------------------------
 
-local function SizeWindow(cols, rows, tabColumn, withBagRow, extraRows)
-	local width = MARGIN_X + cols * PITCH - GAP + tabColumn + MARGIN_X
-	local height = GRID_TOP + (rows + (extraRows or 0)) * PITCH - GAP + (withBagRow and BAG_ROW_H or 6) + FOOTER_H
+-- Sizes the window round its contents, or to the measured size of the real window when the bank
+-- was measured and nothing extra (a side column) has to fit.
+local function SizeWindow(cols, rows, tabColumn, withBagRow, extraRows, geo, contentBottom)
+	geo = geo or PLAIN
+	local width, height
+	if geo.width and geo.height and tabColumn == 0 then
+		width, height = geo.width, geo.height
+	else
+		local gridWidth = cols * geo.pitchX - (geo.pitchX - geo.cell)
+		width = geo.originX + gridWidth + tabColumn + geo.originX
+		local bottom = contentBottom or (geo.originY + (rows + (extraRows or 0)) * geo.pitchY - (geo.pitchY - geo.cell))
+		height = bottom + (withBagRow and 12 or 6) + FOOTER_H
+	end
 	window:SetSize(math.max(width, 300), math.max(height, 200))
 	if inset then
 		inset:ClearAllPoints()
-		inset:SetPoint("TOPLEFT", window, "TOPLEFT", MARGIN_X - 8, -(GRID_TOP - 8))
-		inset:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -(MARGIN_X - 8), FOOTER_H - 4)
+		inset:SetPoint("TOPLEFT", window, "TOPLEFT", geo.originX - 8, -(geo.originY - 8))
+		inset:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -(geo.originX - 8), FOOTER_H - 4)
 	end
 end
 
@@ -581,7 +670,7 @@ end
 local function PortraitTooltip(self)
 	local entry = CharEntry()
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	GameTooltip:SetText(Selected(), 1, 1, 1)
+	GameTooltip:SetText(ns.Label(Selected()), 1, 1, 1)
 	local line = {}
 	if entry and entry.level then line[#line + 1] = "Level " .. entry.level end
 	if entry and entry.class then line[#line + 1] = ClassLabel(entry.class) end
@@ -632,8 +721,10 @@ local function LayoutBank()
 		container = mains[viewing or 1]
 	end
 
+	local geo = BankGeometry(record)
+	local cols = geo.cols or BANK_COLS
 	local slots = container and container.slots or 48
-	local rows = LayoutGrid(slots, BANK_COLS, false, container and container.items or {})
+	local rows = LayoutGrid(slots, cols, false, container and container.items or {}, geo)
 
 	local tabs = {}
 	if #mains > 1 then
@@ -641,11 +732,12 @@ local function LayoutBank()
 			tabs[index] = { label = bucket.label, detail = #bucket.items .. " of " .. bucket.slots .. " used" }
 		end
 	end
-	local tabColumn = LayoutTabs(tabs, MARGIN_X + BANK_COLS * PITCH + 4)
+	local tabColumn = LayoutTabs(tabs, geo.originX + cols * geo.pitchX + 4, geo.originY)
 
-	LayoutBagRow(record, GRID_TOP + rows * PITCH)
+	local gridBottom = geo.originY + (rows - 1) * geo.pitchY + geo.cell
+	local rowBottom = LayoutBagRow(record, gridBottom + 6, geo)
 	divider:Hide()
-	SizeWindow(BANK_COLS, rows, tabColumn, true)
+	SizeWindow(cols, rows, tabColumn, true, nil, geo, rowBottom)
 	Footer(record)
 
 	if record then
@@ -685,7 +777,7 @@ local function LayoutBags()
 			local rowFromBottom = math.floor(k / BAGS_COLS)
 			local row = topRow + (rows - 1 - rowFromBottom)
 			cellIndex = cellIndex + 1
-			PlaceCell(cellIndex, col, row, sequence[k + 1] or nil)
+			PlaceCell(cellIndex, col, row, sequence[k + 1] or nil, PLAIN)
 		end
 		return rows, cellIndex
 	end
@@ -708,7 +800,7 @@ local function LayoutBags()
 
 	LayoutTabs({}, 0)
 	HideBagRow()
-	SizeWindow(BAGS_COLS, rows, 0, false, extra)
+	SizeWindow(BAGS_COLS, rows, 0, false, extra, PLAIN)
 	Footer(record)
 
 	if record then
@@ -742,12 +834,12 @@ local function LayoutGuild()
 	if type(viewing) ~= "number" or not tabList[viewing] then viewing = 1 end
 	local tab = tabList[viewing]
 
-	local rows = LayoutGrid(GUILD_SLOTS, GUILD_COLS, true, tab and tab.items or {})
+	local rows = LayoutGrid(GUILD_SLOTS, GUILD_COLS, true, tab and tab.items or {}, PLAIN)
 	local tabColumn = LayoutTabs(tabs, MARGIN_X + GUILD_COLS * PITCH + 4)
 	if #tabs == 1 then tabColumn = TAB_SIZE + 10 end
 	HideBagRow()
 	divider:Hide()
-	SizeWindow(GUILD_COLS, rows, tabColumn, false)
+	SizeWindow(GUILD_COLS, rows, tabColumn, false, nil, PLAIN)
 	Footer(record)
 
 	if record and tab then
@@ -834,8 +926,13 @@ local function Build()
 	searchBox = BuildSearchBox(window)
 	searchBox:SetPoint("TOPRIGHT", window, "TOPRIGHT", -34, -30)
 
-	bagLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	bagLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 	bagLabel:SetText("Bag Slots:")
+
+	bagRule = window:CreateTexture(nil, "ARTWORK")
+	bagRule:SetColorTexture(1, 0.82, 0, 0.3)
+	bagRule:SetHeight(1)
+	bagRule:Hide()
 
 	divider = window:CreateTexture(nil, "ARTWORK")
 	divider:SetColorTexture(1, 1, 1, 0.16)
@@ -850,6 +947,17 @@ local function Build()
 	accountText:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", MARGIN_X, 14)
 	accountText:SetJustifyH("LEFT")
 	accountText:Hide()
+
+	-- Hovering either money line lists every character's gold, as on the real windows.
+	for _, text in ipairs({ moneyText, accountText }) do
+		local hit = CreateFrame("Frame", nil, window)
+		hit:SetPoint("TOPLEFT", text, "TOPLEFT", -4, 4)
+		hit:SetPoint("BOTTOMRIGHT", text, "BOTTOMRIGHT", 4, -4)
+		hit:EnableMouse(true)
+		hit:SetScript("OnEnter", function(self) ns.GoldTooltip(self) end)
+		hit:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		hit.csMoneyHit = true
+	end
 
 	-- The portrait is a texture, so a small frame over it carries the tooltip.
 	if window.csPortrait then

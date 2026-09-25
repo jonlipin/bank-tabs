@@ -178,6 +178,8 @@ end
 
 function BagHeader.Update(frame)
 	if not frame or not ns.db then return end
+	-- The money readout on a bag window shows every character's gold on hover.
+	if IsBackpack(frame) then ns.HookMoneyFrame(frame, "bags") end
 
 	-- The game hands its bag frames out as it needs them, so the frame that was the backpack last
 	-- time can be bag 1 this time; a holder built on it then has to go away.
@@ -212,6 +214,8 @@ end
 
 -- Hooks every bag window once, so the buttons appear whether or not that window is being moved.
 function BagHeader.Sweep()
+	-- The bank's money readout too, once the bank window exists.
+	if _G.BankFrame then ns.HookMoneyFrame(_G.BankFrame, "bank") end
 	for _, name in ipairs(ns.Windows.CONTAINER_NAMES or {}) do
 		local frame = _G[name]
 		if type(frame) == "table" and frame.HookScript and not hooked[frame] then

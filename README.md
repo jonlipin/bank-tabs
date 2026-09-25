@@ -65,7 +65,10 @@ saved, and again if you change your resolution or UI scale.
   and bags, the guild bank, and an account total. Your own bags are counted live. Switch it off,
   or have it only while holding a key, in the options.
 - `/casement gold` lists every character's gold and the account total, which also sits in the
-  corner of the saved bank and on the minimap button's tooltip.
+  corner of the saved bank and on the minimap button's tooltip. Hovering the money on your bag
+  window, the bank or the saved bank shows the same list.
+- The saved bank lays itself out from measurements taken off the real bank window while it was
+  open, so the slots sit exactly where the real ones do on this client.
 
 **A minimap button**
 
@@ -109,7 +112,7 @@ stand in for the quest panel, so the layering that the resize grip needs is actu
 rather than assumed, and the bank, bags and guild bank replicas are checked slot by slot.
 
 ```
-node tests/casementtest.js              # 474 checks
+node tests/casementtest.js              # 503 checks
 node tests/casementtest.js --bare       # every UI template missing
 node tests/casementtest.js --noenum     # no Enum.BagIndex, classic bank ids
 ```

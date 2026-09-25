@@ -259,9 +259,12 @@ local function BuildOverlay(entry)
 	overlay.csOurs = true
 	overlay:SetAllPoints(frame)
 	ns.RaiseOver(overlay, frame, 5)
+	-- The tint only shows when the user has asked to see the drag areas; the overlay itself works
+	-- unseen. Lighting every window up on each press of alt was more distracting than helpful.
 	local tint = overlay:CreateTexture(nil, "OVERLAY")
 	tint:SetAllPoints()
 	tint:SetColorTexture(0.35, 0.72, 1, 0.10)
+	overlay.tint = tint
 	overlay:Hide()
 	WireDrag(overlay, entry)
 	entry.overlay = overlay
@@ -275,6 +278,7 @@ function Windows.UpdateOverlays()
 	for _, entry in ipairs(entries) do
 		if entry.overlay then
 			local want = down and entry.active and entry.frame:IsShown() and true or false
+			if entry.overlay.tint then entry.overlay.tint:SetAlpha(ns.db.showGrips and 1 or 0) end
 			if want ~= (entry.overlay:IsShown() and true or false) then entry.overlay:SetShown(want) end
 		end
 	end

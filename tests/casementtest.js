@@ -316,7 +316,7 @@ function link(id, name) return "|cffffffff|Hitem:" .. id .. "::::::::60:::::::::
 BANK_ITEMS = {
   [6] = {
     [1] = { id = 2589, name = "Linen Cloth", count = 20, quality = 1 },
-    [4] = { id = 2592, name = "Wool Cloth", count = 12, quality = 1 },
+    [4] = { id = 2592, name = "Wool Cloth", count = 12, quality = 2 },
     [9] = { id = 12359, name = "Thorium Bar", count = 5, quality = 1 },
   },
   [7] = {
@@ -557,6 +557,33 @@ function IsMouseButtonDown(which) return MOUSE_DOWN end
 BankFrame = CreateFrame("Frame", "BankFrame", UIParent)
 BankFrame:SetSize(400, 500)
 BankFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 40, -120)
+-- The real bank's slots, so the snapshot can measure the layout the replica copies: 48 slots on a
+-- 50 by 47 pitch starting 48 in and 63 down, eight bag slots of 24 on a 38 pitch, and the buttons
+-- that must be ignored (a square close button up top, a wide purchase button below).
+BANK_SLOT_BUTTONS = {}
+for i = 1, 48 do
+  local b = CreateFrame("ItemButton", "BankFrameItem" .. i, BankFrame)
+  b:SetSize(37, 37)
+  b:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", 48 + ((i - 1) % 8) * 50, -(63 + math.floor((i - 1) / 8) * 47))
+  b:EnableMouse(true)
+  BANK_SLOT_BUTTONS[i] = b
+end
+for i = 1, 8 do
+  local b = CreateFrame("ItemButton", "BankFrameBag" .. i, BankFrame)
+  b:SetSize(24, 24)
+  b:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", 145 + (i - 1) * 38, -359)
+  b:EnableMouse(true)
+end
+BANK_CLOSE = CreateFrame("Button", nil, BankFrame)
+BANK_CLOSE:SetSize(32, 32)
+BANK_CLOSE:SetPoint("TOPRIGHT", BankFrame, "TOPRIGHT", -4, -4)
+BANK_CLOSE:EnableMouse(true)
+BANK_PURCHASE = CreateFrame("Button", nil, BankFrame)
+BANK_PURCHASE:SetSize(120, 22)
+BANK_PURCHASE:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", 200, -410)
+BANK_PURCHASE:EnableMouse(true)
+NUM_BANKBAGSLOTS = 8
+function UnitGUID(unit) return "Player-70-0A1B2C3D" end
 BankFrame:Hide()
 
 for i = 1, 17 do
@@ -577,6 +604,21 @@ ContainerFrameCombinedBags = CreateFrame("Frame", "ContainerFrameCombinedBags", 
 ContainerFrameCombinedBags:SetSize(420, 600)
 ContainerFrameCombinedBags:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -20, 100)
 ContainerFrameCombinedBags:Hide()
+
+-- The money readouts on the game's own windows: a frame with the coin buttons inside it.
+local function moneyFrame(parent, name)
+  local m = CreateFrame("Frame", name, parent)
+  m:SetSize(120, 16)
+  m:SetPoint("BOTTOMRIGHT", parent, "BOTTOMRIGHT", -10, 10)
+  local gold = CreateFrame("Button", nil, m)
+  gold:SetSize(40, 16)
+  gold:SetPoint("LEFT", m, "LEFT", 0, 0)
+  m.gold = gold
+  return m
+end
+ContainerFrame1.MoneyFrame = moneyFrame(ContainerFrame1, nil)
+ContainerFrameCombinedBags.MoneyFrame = moneyFrame(ContainerFrameCombinedBags, nil)
+moneyFrame(BankFrame, "BankFrameMoneyFrame")
 
 -- The game re-stacks every open bag window through this one.
 BLIZZ_RESTACKS = 0
@@ -666,6 +708,11 @@ CasementAccountDB = { vault = { chars = {
     class = "MAGE", level = 30,
     containers = { { id = 6, label = "Bank tab 1", slots = 48, items = {
       { slot = 6, id = 2589, icon = 2689, count = 1, quality = 1, link = link(2589, "Linen Cloth"), name = "Linen Cloth" } } } } },
+  -- The same character as the one logging in, saved by 1.0.2 under a name the client gave with a
+  -- second word. It has to be folded into the GUID keyed entry when the next snapshot is taken.
+  ["Vatik Voidpact - Voidpact"] = { class = "WARLOCK", level = 20,
+    bank = { time = time() - 40000, reason = "bank closed", money = 5, items = 0, slots = 48, free = 48,
+      containers = { { id = 6, label = "Bank tab 1", slots = 48, items = {} } } } },
 } } }
 fire("ADDON_LOADED", "Casement")
 
@@ -676,7 +723,9 @@ check("the vault is the account file's own table", ns.vault == CasementAccountDB
 check("the old setting that kept other characters is gone", ns.db.vault.keepOtherCharacters == nil)
 check("the new defaults are in", ns.db.minimap.shown == true and ns.db.minimap.angle == 205 and ns.db.map.topBarDrag == true
   and ns.db.map.cornerHandle == false and ns.db.vault.bagButtons == true)
-check("the report counts the saved characters", ns.report["vault holds"] == "1 characters, 0 guild banks", ns.report["vault holds"])
+-- Two at load: the 1.0.x record and the name keyed copy of this character, which the first
+-- snapshot folds in.
+check("the report counts the saved characters", ns.report["vault holds"] == "2 characters, 0 guild banks", ns.report["vault holds"])
 check("the bank bag slots API was found", ns.report["bank bag slots api"] == "BankButtonIDToInvSlotID", ns.report["bank bag slots api"])
 check("windows module ok", ns.report["windows"] == "ok", ns.report["windows"])
 check("map module ok", ns.report["world map"] == "ok", ns.report["world map"])
@@ -1212,7 +1261,25 @@ fire("BANKFRAME_OPENED")
 RunTimers(1)
 
 local me = ns.Who()
-check("the character is named the way the vault keys it", me == "Vatik - Voidpact", me)
+check("the character is keyed by GUID, which never changes", me == "Player-70-0A1B2C3D", me)
+check("the name and realm are still to hand", ns.NameKey() == "Vatik - Voidpact", ns.NameKey())
+check("and the entry carries them for display", ns.Label(me) == "Vatik - Voidpact" and ns.ShortLabel(me) == "Vatik", ns.Label(me))
+-- The name this client gave before had a second word, which left a second entry. It has been
+-- folded into this one and dropped.
+check("the old name keyed entry was adopted", ns.vault.chars["Vatik Voidpact - Voidpact"] == nil)
+check("and the report says so", (ns.report["legacy records adopted"] or ""):find("1 folded") ~= nil, ns.report["legacy records adopted"])
+check("another character's name keyed entry is left alone", ns.vault.chars["Oldtoon - Voidpact"] ~= nil)
+
+-- The layout measured off the real bank window.
+local layout = ns.vault.chars[me].bank.layout
+check("the bank's layout was measured", type(layout) == "table", ns.report["bank layout"])
+check("eight columns of 37 pixel slots", layout and layout.cols == 8 and layout.cell == 37, layout and (layout.cols .. "x" .. layout.cell))
+check("on the real pitch", layout and layout.pitchX == 50 and layout.pitchY == 47, layout and (layout.pitchX .. "x" .. layout.pitchY))
+check("starting where the real grid starts", layout and layout.originX == 48 and layout.originY == 63)
+check("the window's own size", layout and layout.width == 400 and layout.height == 500)
+check("eight bag slots of 24 on a 38 pitch", layout and layout.bagCount == 8 and layout.bagCell == 24 and layout.bagPitch == 38, layout and layout.bagCount)
+check("at their measured place", layout and layout.bagOriginX == 145 and layout.bagOriginY == 359)
+check("the close and purchase buttons were not mistaken for slots", layout and layout.slots == 48, layout and layout.slots)
 local entry = ns.vault.chars[me]
 check("a character entry was made", entry ~= nil)
 local record = entry and entry.bank
@@ -1262,7 +1329,7 @@ check("the item's icon was kept", tab6 and tab6.items[1].icon == 100 + 2589)
 
 -- The Bag Slots row along the bottom of the bank window.
 local bagSlots = record and record.bagSlots
-check("the Bag Slots row was read", type(bagSlots) == "table" and #bagSlots == 7, bagSlots and #bagSlots)
+check("the Bag Slots row was read, all eight of this client's slots", type(bagSlots) == "table" and #bagSlots == 8, bagSlots and #bagSlots)
 check("it knows how many are purchased", bagSlots and bagSlots.purchased == 1, bagSlots and bagSlots.purchased)
 check("the first bag slot hangs off the right inventory slot", bagSlots and bagSlots[1].inv == 68, bagSlots and bagSlots[1].inv)
 check("the first bag slot is purchased and holds the bank bag", bagSlots and bagSlots[1].purchased == true
@@ -1419,7 +1486,11 @@ local function Cells(size)
   end
   return out
 end
+-- The plain grid (guild bank and bags), the bank grid as measured off the real window, and the
+-- classic bank grid a record without a measurement falls back to.
 local function GridXY(col, row) return 20 + col * 42, -(62 + row * 42) end
+local function BankXY(col, row) return 48 + col * 50, -(63 + row * 47) end
+local function ClassicXY(col, row) return 48 + col * 49, -(63 + row * 47) end
 local function CellAt(list, x, y)
   for _, c in ipairs(list) do
     local p = c.points[1]
@@ -1456,9 +1527,11 @@ local function SideTabs()
   for _, c in ipairs(Cells(30)) do if c.csLabel then out[#out + 1] = c end end
   return out
 end
+-- The Bag Slots cells are the measured 24 pixels; a record without a measurement would draw them
+-- at the classic 24 as well.
 local function BagRow()
   local out = {}
-  for _, c in ipairs(Cells(30)) do if c.csLabel == nil then out[#out + 1] = c end end
+  for _, c in ipairs(Cells(24)) do if c.csLabel == nil then out[#out + 1] = c end end
   return out
 end
 
@@ -1506,8 +1579,8 @@ if NO_ENUM then
   local want
   for _, t in ipairs(side) do if t.csLabel == "Bank bag 2" then want = t end end
   check("the side column names the real tab", want ~= nil)
-  check("the side tabs run down the right of the grid", side[1] and side[1].points[1][4] == 20 + 8 * 42 + 4
-    and side[2] and side[2].points[1][5] == -(62 + 36))
+  check("the side tabs run down the right of the measured grid", side[1] and side[1].points[1][4] == 48 + 8 * 50 + 4
+    and side[2] and side[2].points[1][5] == -(63 + 36), side[1] and (side[1].points[1][4] .. "," .. tostring(side[2] and side[2].points[1][5])))
   if want then want.scripts.OnClick(want) end
 else
   check("one main tab means no side column", #SideTabs() == 0, #SideTabs())
@@ -1517,22 +1590,22 @@ local grid = Cells(37)
 check("the 48 slot tab is drawn as 48 cells", #grid == 48, #grid)
 local placed = true
 for i = 1, 48 do
-  local x, y = GridXY((i - 1) % 8, math.floor((i - 1) / 8))
+  local x, y = BankXY((i - 1) % 8, math.floor((i - 1) / 8))
   if not CellAt(grid, x, y) then placed = false end
 end
 check("every cell sits where its slot index puts it, eight across", placed)
-local ninth = CellAt(grid, GridXY(0, 1))
+local ninth = CellAt(grid, BankXY(0, 1))
 check("slot 9 is drawn in the ninth cell: second row, first column", ninth ~= nil and ninth.csItem ~= nil and ninth.csItem.id == 12359,
   ninth and ninth.csItem and ninth.csItem.name)
-local first = CellAt(grid, GridXY(0, 0))
+local first = CellAt(grid, BankXY(0, 0))
 check("slot 1 is in the first cell", first and first.csItem and first.csItem.id == 2589)
-local second = CellAt(grid, GridXY(1, 0))
+local second = CellAt(grid, BankXY(1, 0))
 check("slot 2 is empty: the items were not packed together", second and second.csItem == nil and second.icon.shown == false)
-local fourth = CellAt(grid, GridXY(3, 0))
+local fourth = CellAt(grid, BankXY(3, 0))
 check("slot 4 is in the fourth cell", fourth and fourth.csItem and fourth.csItem.id == 2592)
 check("the thorium is drawn once, where it sat", CellWith(grid, 12359) == ninth)
-check("the wildvine picked up while the bank was open is in slot 12", CellAt(grid, GridXY(3, 1)) and CellAt(grid, GridXY(3, 1)).csItem
-  and CellAt(grid, GridXY(3, 1)).csItem.id == 8153)
+check("the wildvine picked up while the bank was open is in slot 12", CellAt(grid, BankXY(3, 1)) and CellAt(grid, BankXY(3, 1)).csItem
+  and CellAt(grid, BankXY(3, 1)).csItem.id == 8153)
 
 local emptyOK, itemOK, itemCount = true, true, 0
 for _, c in ipairs(grid) do
@@ -1548,7 +1621,11 @@ check("every item cell shows its own icon", itemOK)
 check("the grid holds exactly the tab's items", itemCount == 4, itemCount)
 check("a stack shows its count", first and first.count.text == 20, first and tostring(first.count.text))
 check("an empty cell shows no count", second and second.count.text == "", second and tostring(second.count.text))
-check("an item cell has a quality border, an empty one does not", first and first.border.shown == true and second.border.shown == false)
+-- Only uncommon and better wear the quality glow, as in the real bank: the wool (quality 2) does,
+-- the linen (quality 1) and the empty slot do not.
+check("an uncommon item wears the quality glow", fourth and fourth.border.shown == true)
+check("a common item and an empty slot do not", first and first.border.shown == false and second.border.shown == false)
+check("the glow is the game's own atlas or a ring, never a flat square", first and (first.borderIsGlow == true or first.ring ~= nil))
 
 local backing
 for _, t in ipairs(TEXTURES) do if t.parent == first and t.layer == "BACKGROUND" then backing = t end end
@@ -1560,10 +1637,11 @@ end
 
 -- The Bag Slots row under the grid.
 local bagRow = BagRow()
-check("the Bag Slots row has seven cells", #bagRow == 7, #bagRow)
-check("it sits just under the grid", bagRow[1] and near(bagRow[1].points[1][4], 102) and near(bagRow[1].points[1][5], -(62 + 6 * 42 + 4)),
+check("the Bag Slots row has this client's eight cells", #bagRow == 8, #bagRow)
+check("it sits where the real bank's Bag Slots sit", bagRow[1] and near(bagRow[1].points[1][4], 145) and near(bagRow[1].points[1][5], -359),
   bagRow[1] and bagRow[1].points[1][5])
-check("the cells are a bank bag's size", bagRow[1] and bagRow[1].w == 30 and bagRow[7].points[1][4] == 102 + 6 * 34)
+check("the cells are the measured size, on the measured pitch, at the measured place", bagRow[1] and bagRow[1].w == 24
+  and bagRow[1].points[1][4] == 145 and bagRow[1].points[1][5] == -359 and bagRow[8].points[1][4] == 145 + 7 * 38)
 check("the label says Bag Slots", TextOn(vault, "Bag Slots:") ~= nil)
 check("the first bag slot shows the bank bag's icon", bagRow[1] and bagRow[1].icon.shown == true
   and bagRow[1].icon.texture == INVENTORY[68].icon and bagRow[1]:GetAlpha() == 1)
@@ -1572,16 +1650,16 @@ for i = 2, 7 do
   if not bagRow[i] or bagRow[i]:GetAlpha() ~= 0.45 or bagRow[i].icon.shown or not bagRow[i].shown then dimmed = false end
 end
 check("the unbought slots are dimmed, not hidden", dimmed)
-check("the bag slot tooltips run", pcall(bagRow[1].scripts.OnEnter, bagRow[1]) and pcall(bagRow[7].scripts.OnEnter, bagRow[7]))
+check("the bag slot tooltips run", pcall(bagRow[1].scripts.OnEnter, bagRow[1]) and pcall(bagRow[8].scripts.OnEnter, bagRow[8]))
 
 bagRow[1].scripts.OnClick(bagRow[1])
 grid = Cells(37)
 check("clicking the bag shows its 48 slots", #grid == 48, #grid)
-local potion = CellAt(grid, GridXY(1, 0))
+local potion = CellAt(grid, BankXY(1, 0))
 check("the potion sits in the bag's second slot", potion and potion.csItem and potion.csItem.id == 13446)
 check("the tab's own items are gone from the grid", CellWith(grid, 2589) == nil)
 check("the bag being looked at is outlined", bagRow[1].border.shown == true)
-bagRow[7].scripts.OnClick(bagRow[7])
+bagRow[8].scripts.OnClick(bagRow[8])
 check("clicking an empty slot changes nothing", CellWith(Cells(37), 13446) ~= nil)
 bagRow[1].scripts.OnClick(bagRow[1])
 grid = Cells(37)
@@ -1775,7 +1853,7 @@ ctabs[2].scripts.OnClick(ctabs[2])
 check("clicking a tab changes who is being looked at", ns.VaultUI.Selected() == CHOHAM, ns.VaultUI.Selected())
 grid = Cells(37)
 check("the grid now shows that character's bank", ItemCount(grid) == 2, ItemCount(grid))
-local c0, c4 = CellAt(grid, GridXY(0, 0)), CellAt(grid, GridXY(4, 0))
+local c0, c4 = CellAt(grid, ClassicXY(0, 0)), CellAt(grid, ClassicXY(4, 0))
 check("with their items where they sat", c0 and c0.csItem and c0.csItem.id == 2770 and c4 and c4.csItem and c4.csItem.id == 818)
 check("the chosen tab moved", ctabs[2].icon:GetAlpha() == 1 and ctabs[1].icon:GetAlpha() == 0.85)
 check("a page turned", #PLAYED == played + 1, #PLAYED - played)
@@ -1803,7 +1881,7 @@ end
 ctabs = CharTabs()
 ctabs[3].scripts.OnClick(ctabs[3])
 check("the old style record can be looked at", ns.VaultUI.Selected() == "Oldtoon - Voidpact" and ItemCount(Cells(37)) == 1)
-check("with its item in its slot", CellAt(Cells(37), GridXY(5, 0)) and CellAt(Cells(37), GridXY(5, 0)).csItem ~= nil)
+check("with its item in its slot", CellAt(Cells(37), ClassicXY(5, 0)) and CellAt(Cells(37), ClassicXY(5, 0)).csItem ~= nil)
 check("a record with no bag slots dims the whole row", BagRow()[1]:GetAlpha() == 0.45)
 
 -- Forgetting the character being looked at falls back to this one.
@@ -2153,6 +2231,61 @@ GameTooltip:SetOwner(nil)
 ctabsGold[2].scripts.OnEnter(ctabsGold[2])
 check("a character tab tooltip carries that character's gold", LineFor(GameTooltip.csLines, "Gold") ~= nil)
 CasementVault:Hide()
+
+-- ------------------------------------------------------------------
+-- 11h. Hovering the money on the game's own windows
+-- ------------------------------------------------------------------
+backpack:Hide()
+backpack:Show()
+RunTimers(0.1)
+local money = ContainerFrame1.MoneyFrame
+check("the backpack's money readout was hooked", money.scripts.OnEnter ~= nil and money.mouse == true)
+GameTooltip:SetOwner(nil)
+money.scripts.OnEnter(money)
+check("hovering it lists this character's gold, marked as now", LineFor(GameTooltip.csLines, "Vatik (now)") ~= nil)
+check("and the other characters'", LineFor(GameTooltip.csLines, "Choham") ~= nil)
+check("and the total", LineFor(GameTooltip.csLines, "Total") ~= nil)
+check("the coin button inside takes the hover too", money.gold.scripts.OnEnter ~= nil)
+money.scripts.OnLeave(money)
+check("the bank's money readout was hooked as well", BankFrameMoneyFrame.scripts.OnEnter ~= nil, ns.report["money tooltip bank"])
+ns.db.vault.moneyTooltip = false
+GameTooltip:SetOwner(nil)
+money.scripts.OnEnter(money)
+check("the money tooltip can be switched off", #GameTooltip.csLines == 0, #GameTooltip.csLines)
+ns.db.vault.moneyTooltip = true
+
+-- The replica's own money too.
+ns.VaultUI.Show("bank")
+local moneyHit
+for _, f in ipairs(FRAMES) do if f.parent == vault and f.csMoneyHit then moneyHit = f end end
+check("the saved bank's money carries the same tooltip", moneyHit ~= nil)
+GameTooltip:SetOwner(nil)
+moneyHit.scripts.OnEnter(moneyHit)
+check("and it lists the account", LineFor(GameTooltip.csLines, "Total") ~= nil)
+CasementVault:Hide()
+
+-- ------------------------------------------------------------------
+-- 11i. The drag anywhere overlay stays unseen unless asked for
+-- ------------------------------------------------------------------
+map:Show()
+RunTimers(0.1)
+local mapOverlay
+for _, f in ipairs(FRAMES) do
+  if f.parent == map and f.allPoints == map and f.dragButtons and f.tint then mapOverlay = f end
+end
+check("the map's overlay carries a tint", mapOverlay ~= nil)
+ns.db.showGrips = false
+ALT = true
+fire("MODIFIER_STATE_CHANGED", "LALT", 1)
+check("holding alt brings the overlay up", mapOverlay.shown == true)
+check("but paints nothing by default", mapOverlay.tint.alpha == 0, mapOverlay.tint.alpha)
+ns.db.showGrips = true
+fire("MODIFIER_STATE_CHANGED", "LALT", 1)
+check("with the drag areas switched on the tint shows", mapOverlay.tint.alpha == 1)
+ns.db.showGrips = false
+ALT = false
+fire("MODIFIER_STATE_CHANGED", "LALT", 0)
+check("letting go puts it away", mapOverlay.shown == false)
 
 -- ------------------------------------------------------------------
 -- 12. Slash commands
