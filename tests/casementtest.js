@@ -12,7 +12,7 @@ const fs = require('fs');
 const { lua, lauxlib, lualib, to_luastring } = require('fengari');
 const DIR = (process.argv.slice(2).find(a => !a.startsWith('--')) || 'C:/Users/jonli/casement/');
 const L = lauxlib.luaL_newstate(); lualib.luaL_openlibs(L);
-const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Reveal.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Options.lua'];
+const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Data/MapOverlays.lua', 'Reveal.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Options.lua'];
 
 const stub = String.raw`
 local VERBS = { "Set", "Get", "Is", "Create", "Register", "Enable", "Clear", "Hook", "Start", "Stop", "Has", "Num", "Add", "Unregister", "Disable", "Raise", "Lower", "Lock", "Unlock", "Show", "Hide", "Insert", "Toggle" }
@@ -958,6 +958,28 @@ end
 
 check("the reveal found the exploration API", ns.report["map reveal api"] == "GetExploredMapTextures found", ns.report["map reveal api"])
 check("the reveal is off by default", ns.db.map.reveal == false)
+
+-- The shipped table, straight from the client's WorldMapOverlay and WorldMapOverlayTile tables.
+local shippedMaps = 0
+for _ in pairs(ns.Reveal.DATA) do shippedMaps = shippedMaps + 1 end
+check("the shipped overlay table is present", shippedMaps >= 60, shippedMaps)
+check("the report counts it", (ns.report["map reveal data"] or ""):find("^" .. shippedMaps .. " maps shipped") ~= nil, ns.report["map reveal data"])
+-- Overlay 84 in the tables: map art 1244, 160 by 210 at 382,281, one tile, file 272826.
+check("a known overlay is in it with its tile", ns.Reveal.DATA[1244] and ns.Reveal.DATA[1244]["160:210:382:281"] == "272826", ns.Reveal.DATA[1244] and ns.Reveal.DATA[1244]["160:210:382:281"])
+-- Overlay 85: 315 wide, so two tiles across, in row-major order.
+check("a two tile overlay lists its tiles left to right", ns.Reveal.DATA[1244] and ns.Reveal.DATA[1244]["315:256:101:247"] == "272806, 272812", ns.Reveal.DATA[1244] and ns.Reveal.DATA[1244]["315:256:101:247"])
+-- Every entry in the table has exactly the tiles its size calls for.
+local badShape = 0
+for _, overlays in pairs(ns.Reveal.DATA) do
+  for key, ids in pairs(overlays) do
+    local w, h = key:match("^(%d+):(%d+):")
+    local want = math.ceil(tonumber(w) / 256) * math.ceil(tonumber(h) / 256)
+    local got = 0
+    for _ in tostring(ids):gmatch("%d+") do got = got + 1 end
+    if got ~= want then badShape = badShape + 1 end
+  end
+end
+check("every shipped overlay has exactly the tiles its size needs", badShape == 0, badShape)
 ns.Reveal.Refresh(true)
 check("off, it draws nothing", #RevealTiles() == 0, #RevealTiles())
 

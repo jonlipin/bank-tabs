@@ -26,9 +26,11 @@ Everything is a switch in **Esc > Options > AddOns > Casement**, or `/casement`.
   is pointing on the map. A button next to them puts your position into chat with the zone name
   first ("The Barrens 45.2, 67.8"); right-click it for a box to copy the text out of with Ctrl+C.
 - Optionally, the parts of the map you have not explored are drawn in with their real art, tinted
-  blue, sepia or grey so they can still be told apart. The addon can only draw an area it knows
-  the art for: what is shipped with it plus everything any character on this account has ever had
-  revealed, kept account wide, so an alt sees what the main has explored.   says how much of the open map that covers.
+  blue, sepia or grey so they can still be told apart. The list of every map's overlays ships with
+  the addon (`Data/MapOverlays.lua`, generated from the client's own map tables), and everything
+  any character on this account is handed is remembered on top of it, so a patch that adds an
+  area is picked up as soon as anyone sees it. `/casement mapdata` says how much of the open map
+  is known.
 
 **Bags, bank and guild bank**
 
@@ -101,7 +103,7 @@ stand in for the quest panel, so the layering that the resize grip needs is actu
 rather than assumed, and the bank, bags and guild bank replicas are checked slot by slot.
 
 ```
-node tests/casementtest.js              # 185 checks
+node tests/casementtest.js              # 447 checks
 node tests/casementtest.js --bare       # every UI template missing
 node tests/casementtest.js --noenum     # no Enum.BagIndex, classic bank ids
 ```

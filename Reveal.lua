@@ -21,7 +21,8 @@
 local ADDON, ns = ...
 
 local report = ns.report
-local Reveal = {}
+-- Data/MapOverlays.lua loads first and hands over the shipped table on ns.Reveal.DATA.
+local Reveal = ns.Reveal or {}
 ns.Reveal = Reveal
 
 Reveal.DATA = Reveal.DATA or {}

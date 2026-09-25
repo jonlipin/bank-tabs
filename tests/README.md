@@ -9,7 +9,7 @@ map is scaled, and putting a window back after the game has re-anchored it.
 node casementtest.js [addon dir] [--bare] [--verbose] [--noenum]
 ```
 
-- no flags: 132 checks against the normal client
+- no flags: 447 checks against the normal client
 - `--bare`: every UI template is missing, so every fallback path runs
 - `--noenum`: no `Enum.BagIndex`, so the bank scan falls back to the classic container ids
 - `--verbose`: prints everything the addon puts in the chat frame
