@@ -14,5 +14,4 @@ node casementtest.js [addon dir] [--bare] [--verbose] [--noenum]
 - `--noenum`: no `Enum.BagIndex`, so the bank scan falls back to the classic container ids
 - `--verbose`: prints everything the addon puts in the chat frame
 
-It needs `fengari` on the module path. The copy this was developed against lives in
-`C:\Users\jonli\AppData\Local\Temp\claude`.
+It needs `fengari` on the module path; the copy this was developed against is not checked in.
