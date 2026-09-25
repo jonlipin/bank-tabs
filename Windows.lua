@@ -157,7 +157,8 @@ local function Save(entry)
 end
 
 local function Reapply(entry)
-	if not entry.active or not entry.frame:IsShown() then return end
+	-- Never while the user has hold of the window: it would snap back under the cursor.
+	if not entry.active or entry.moving or not entry.frame:IsShown() then return end
 	local key = PosKey(entry)
 	local pos = key and ns.db.positions[key]
 	if not pos then return end
@@ -623,6 +624,25 @@ function Windows.Init()
 			ns.After(0, Windows.ReapplyAll)
 		end)
 	end
+
+	-- Panel windows (the map, the bank) are positioned by the game's UI panel system, which runs
+	-- AFTER a window changes size: toggling the map's quest log changed the width (caught by the
+	-- size hook), then re-anchored the map, and the map showed a frame at the game's spot before
+	-- the deferred re-place caught up. Hooking the positioning itself runs our re-place in the
+	-- same frame, after every anchor the game sets, so nothing is ever drawn out of place.
+	local hooked = {}
+	for _, name in ipairs({ "UpdateUIPanelPositions", "ShowUIPanel", "HideUIPanel" }) do
+		if type(_G[name]) == "function" and hooksecurefunc then
+			if pcall(hooksecurefunc, name, function() Windows.ReapplyAll() end) then hooked[#hooked + 1] = name end
+		end
+	end
+	local delegate = _G.FramePositionDelegate
+	if delegate and type(delegate.UpdateUIPanelPositions) == "function" and hooksecurefunc then
+		if pcall(hooksecurefunc, delegate, "UpdateUIPanelPositions", function() Windows.ReapplyAll() end) then
+			hooked[#hooked + 1] = "FramePositionDelegate"
+		end
+	end
+	report["panel position hook"] = #hooked > 0 and table.concat(hooked, ", ") or "none of the panel functions are on this client"
 
 	local reagent = ReagentBagIndex()
 	report["reagent bag"] = reagent and ("bag " .. reagent) or "not on this client, bag 5 is treated as a bank bag"

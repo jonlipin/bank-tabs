@@ -744,6 +744,21 @@ function Map.Init()
 	-- along the top bar have to be worked out again.
 	frame:HookScript("OnSizeChanged", QueueRebuild)
 
+	-- The map's own layout methods re-anchor it after they have changed its shape. A placed map
+	-- is put straight back once each has finished, in the same frame, so it never shows anywhere
+	-- else. Which of these exist varies by build; each is hooked only if it does.
+	local hooked = 0
+	for _, method in ipairs({ "SynchronizeDisplayState", "HandleUserActionToggleQuestLog", "OnQuestLogOpen",
+		"OnQuestLogClose", "HandleUserActionMinimizeSelf", "HandleUserActionMaximizeSelf" }) do
+		if type(frame[method]) == "function" and hooksecurefunc then
+			local ok = pcall(hooksecurefunc, frame, method, function()
+				if ns.db.positions["worldmap"] then Replace() end
+			end)
+			if ok then hooked = hooked + 1 end
+		end
+	end
+	report["map layout hooks"] = hooked .. " of the map's layout methods hooked"
+
 	-- Some builds toggle the side panel without changing the map's size.
 	local panel = _G.QuestMapFrame
 	if panel and panel.HookScript then

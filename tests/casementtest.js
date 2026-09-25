@@ -535,7 +535,20 @@ QUEST_SCROLL:EnableMouse(true)
 QUEST_SCROLL:SetFrameLevel(24)
 QuestMapFrame:Hide()
 
--- Opening the quest panel widens the map, exactly as the real one does.
+-- The game's panel positioning: it re-anchors a panel window to its own spot, and it runs AFTER
+-- the window has changed size. That ordering is what made a placed map show a frame at the game's
+-- spot when the quest log toggled: the size change was caught, the re-anchor that followed was not.
+PANEL_POSITIONINGS = 0
+function UpdateUIPanelPositions(frame)
+  PANEL_POSITIONINGS = PANEL_POSITIONINGS + 1
+  if frame == WorldMapFrame then
+    WorldMapFrame:ClearAllPoints()
+    WorldMapFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -100)
+  end
+end
+
+-- Opening and closing the quest panel widens and narrows the map, exactly as the real one does,
+-- then the game positions the panel again.
 function OpenQuestPanel(open)
   if open then
     WorldMapFrame:SetSize(1030, 500)
@@ -545,6 +558,7 @@ function OpenQuestPanel(open)
     QuestMapFrame:Hide()
   end
   if WorldMapFrame.scripts.OnSizeChanged then WorldMapFrame.scripts.OnSizeChanged(WorldMapFrame) end
+  UpdateUIPanelPositions(WorldMapFrame)
 end
 
 Minimap = CreateFrame("Frame", "Minimap", UIParent)
@@ -943,6 +957,64 @@ RunTimers(1)
 check("closing the panel leaves the top bar working", #TopStrips() > 0)
 local bar = tab
 
+do -- scope: 4b2. A placed map through the quest log toggling
+-- The game re-anchors the map AFTER changing its width when the quest log toggles. A placed map
+-- must be back in place the instant that finishes, with no frame drawn at the game's spot.
+check("the game's panel positioning was hooked", (ns.report["panel position hook"] or ""):find("UpdateUIPanelPositions") ~= nil, ns.report["panel position hook"])
+DragTo(map, strip1, 420, 260)
+local savedX = ns.db.positions["worldmap"].x
+check("the map was placed", near(savedX, 420), savedX)
+local before = PANEL_POSITIONINGS
+OpenQuestPanel(true)
+check("the game positioned the panel", PANEL_POSITIONINGS == before + 1)
+check("the map holds its place the instant the quest log opens", near(ns.Windows.Measure(map), savedX, 1), ns.Windows.Measure(map))
+RunTimers(1)
+check("and a moment later", near(ns.Windows.Measure(map), savedX, 1), ns.Windows.Measure(map))
+OpenQuestPanel(false)
+check("the map holds its place the instant the quest log closes", near(ns.Windows.Measure(map), savedX, 1), ns.Windows.Measure(map))
+RunTimers(1)
+check("and stays there", near(ns.Windows.Measure(map), savedX, 1), ns.Windows.Measure(map))
+
+-- A map the user has never touched is still left entirely to the game.
+ns.db.positions["worldmap"] = nil
+OpenQuestPanel(true)
+OpenQuestPanel(false)
+RunTimers(1)
+check("an unplaced map is left where the game puts it", near(ns.Windows.Measure(map), 20, 1), ns.Windows.Measure(map))
+DragTo(map, strip1, 420, 260)
+
+-- A window the user is holding is never snapped back by the game's positioning.
+strip1.scripts.OnDragStart(strip1)
+map:ClearAllPoints()
+map:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 600, 300)
+UpdateUIPanelPositions(map)
+check("the game's positioning is ignored while the map is being dragged", near(ns.Windows.Measure(map), 20, 1), ns.Windows.Measure(map))
+strip1.scripts.OnDragStop(strip1)
+DragTo(map, strip1, 420, 260)
+end -- scope
+
+do -- scope: 4c. The hover tint
+-- The hover tint on a drag strip answers to the "show me where the drag strips are" switch, which
+-- is off by default: a header must not light up under a passing mouse.
+ns.db.showGrips = false
+ns.Refresh()
+local hintTex
+for _, t in ipairs(TEXTURES) do
+  if t.parent == strip1 and t.color and t.color[1] == 0.35 and t.color[4] == 0.20 then hintTex = t end
+end
+check("a drag strip carries a hover tint", hintTex ~= nil)
+strip1.scripts.OnEnter(strip1)
+check("but hovering the header does not light it up by default", hintTex and hintTex.shown == false)
+strip1.scripts.OnLeave(strip1)
+ns.db.showGrips = true
+ns.Refresh()
+strip1.scripts.OnEnter(strip1)
+check("it lights up once the drag areas are switched on", hintTex and hintTex.shown == true)
+strip1.scripts.OnLeave(strip1)
+ns.db.showGrips = false
+ns.Refresh()
+end -- scope
+
 do -- scope: 4d. Coordinates in the tab
 -- ------------------------------------------------------------------
 -- 4d. Coordinates in the tab, and the copy button
@@ -1143,7 +1215,7 @@ check("the scale bar is hidden too", bar.shown == false)
 check("the map is back to its normal size", near(map:GetScale(), 1, 0.001))
 ns.db.windows.worldmap = true
 ns.Refresh()
-check("switching it back on restores the saved position", near(map:GetLeft(), 300, 1), map:GetLeft())
+check("switching it back on restores the saved position", near(map:GetLeft(), 420, 1), map:GetLeft())
 
 -- ------------------------------------------------------------------
 -- 6. Bag windows
