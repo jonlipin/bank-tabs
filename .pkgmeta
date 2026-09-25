@@ -1,0 +1,9 @@
+package-as: Casement
+
+ignore:
+  - tests
+  - tools
+
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown
