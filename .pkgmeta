@@ -5,5 +5,5 @@ ignore:
   - tools
 
 manual-changelog:
-  filename: CHANGELOG.md
+  filename: RELEASE-NOTES.md
   markup-type: markdown
