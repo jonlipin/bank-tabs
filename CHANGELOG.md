@@ -2,6 +2,22 @@
 
 All notable changes to Casement are listed here. The newest release is at the top.
 
+## 1.2.2 - 2026-09-24
+
+**Fixed: the saved bank lost its measured layout the moment the real bank closed.** A last
+snapshot is taken at closing, and by then the game has already hidden the bank window, so that
+snapshot could measure nothing and wrote "unknown" over the good measurement, dropping the Bag
+Slots row into the classic guess and squashing it. A measurement is now carried forward through
+snapshots that cannot take one, a partial one never replaces a fuller one, and the freshest one is
+kept for the account so other characters' saved banks use this client's real geometry too. A
+closing read that comes back empty (the client can let go of the bank's contents at that point)
+no longer replaces a real snapshot either.
+
+**Fixed: the class icon on a character tab showed through the tab frame's corners.** It is now
+clipped to the tab window's shape with the same mask the game uses for its own icon frames,
+rounded along the top and flat along the bottom, drawn a quarter larger than the icon as that
+atlas needs.
+
 ## 1.2.1 - 2026-09-24
 
 **Fixed: the saved bank and bags framed every item in a fat border.** Only uncommon and better

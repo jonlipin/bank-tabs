@@ -376,7 +376,7 @@ function GetInventoryItemTexture(unit, inv) return INVENTORY[inv] and INVENTORY[
 function GetInventoryItemLink(unit, inv) return INVENTORY[inv] and INVENTORY[inv].link or nil end
 
 -- Atlases this client is known to carry. A bare client carries none.
-KNOWN_ATLASES = { ["bags-item-slot64"] = true, ["spellbook-Tab-Frame-C60"] = true,
+KNOWN_ATLASES = { ["bags-item-slot64"] = true, ["UI-HUD-ActionBar-IconFrame-Mask"] = true, ["spellbook-Tab-Frame-C60"] = true,
   ["spellbook-Tab-Frame-Glow-C60"] = true, ["spellbook-Tab-Frame-glow-gradient-C60"] = true }
 C_Texture = {
   GetAtlasInfo = function(name)
@@ -943,6 +943,7 @@ RunTimers(1)
 check("closing the panel leaves the top bar working", #TopStrips() > 0)
 local bar = tab
 
+do -- scope: 4d. Coordinates in the tab
 -- ------------------------------------------------------------------
 -- 4d. Coordinates in the tab, and the copy button
 -- ------------------------------------------------------------------
@@ -1127,6 +1128,8 @@ ns.db.windows.worldmap = true
 ns.db.map.reveal = false
 ns.Reveal.DATA[5] = nil
 ns.Refresh()
+
+end -- scope
 
 -- ------------------------------------------------------------------
 -- 5. Switching a window off
@@ -1352,10 +1355,29 @@ check("a change while the bank is open is picked up", ns.vault.chars[me].bank.it
   ns.vault.chars[me].bank.items)
 check("and the entry keeps its class through a re-read", ns.vault.chars[me].class == "WARLOCK")
 
-fire("BANKFRAME_CLOSED")
+-- The game hides the bank window before addons hear BANKFRAME_CLOSED, so the closing snapshot
+-- cannot measure anything: it has to carry the earlier measurement forward, not drop it.
 BankFrame:Hide()
+fire("BANKFRAME_CLOSED")
 check("the bank is marked shut", ns.Vault.BankIsOpen() == false)
 check("closing the bank takes a last snapshot", ns.vault.chars[me].bank.reason == "bank closed", ns.vault.chars[me].bank.reason)
+local kept = ns.vault.chars[me].bank.layout
+check("the closing snapshot keeps the measured layout", kept and kept.pitchX == 50 and kept.bagOriginY == 359, kept and kept.pitchX)
+check("the measurement is kept for the account too", ns.vault.bankLayout and ns.vault.bankLayout.pitchX == 50)
+
+-- A closed bank the client has already let go of reads as empty; that must not replace a real
+-- snapshot.
+local keepItems = ns.vault.chars[me].bank.items
+-- Every container the scan can reach, the legacy one included (the classic fallback reads it).
+local savedBank = { BANK_ITEMS[6], BANK_ITEMS[7], BANK_ITEMS[-1] }
+BANK_ITEMS[6], BANK_ITEMS[7], BANK_ITEMS[-1] = {}, {}, {}
+fire("BANKFRAME_OPENED")
+BankFrame:Hide()
+fire("BANKFRAME_CLOSED")
+check("an empty read at closing does not replace the real snapshot", ns.vault.chars[me].bank.items == keepItems, ns.vault.chars[me].bank.items)
+check("and the report says why", (ns.report["bank scan"] or ""):find("kept the earlier snapshot") ~= nil, ns.report["bank scan"])
+BANK_ITEMS[6], BANK_ITEMS[7], BANK_ITEMS[-1] = savedBank[1], savedBank[2], savedBank[3]
+RunTimers(1)
 fire("PLAYERBANKSLOTS_CHANGED", 1)
 RunTimers(1)
 check("a change with the bank shut is ignored", ns.vault.chars[me].bank.reason == "bank closed")
@@ -1846,6 +1868,18 @@ else
   check("the glow gradient shows only under the chosen tab", ctabs[1].glow and ctabs[1].glow.shown == true and ctabs[2].glow.shown == false)
 end
 check("the tab tooltip runs", ctabs[3] ~= nil and pcall(ctabs[1].scripts.OnEnter, ctabs[1]) and pcall(ctabs[3].scripts.OnEnter, ctabs[3]))
+
+-- The class icon is clipped to the tab window's shape, so it cannot show through the frame's
+-- open corners. Without the mask atlas (--bare) the icon keeps its corners and the report says so.
+if BARE then
+  check("with no mask atlas the tabs say so", (ns.report["character tab mask"] or ""):find("none") ~= nil, ns.report["character tab mask"])
+else
+  local tabMask = ctabs[1].icon.csMask
+  check("the class icon wears the tab shaped mask", tabMask ~= nil and tabMask.atlas == "UI-HUD-ActionBar-IconFrame-Mask", tabMask and tabMask.atlas)
+  check("drawn a quarter larger than the icon on every side", tabMask and tabMask.points[1] and near(tabMask.points[1][4], -0.26 * 33, 0.01)
+    and near(tabMask.points[1][5], 0.26 * 33, 0.01) and tabMask.points[1][2] == ctabs[1].icon)
+  check("the report names the mask", ns.report["character tab mask"] == "UI-HUD-ActionBar-IconFrame-Mask", ns.report["character tab mask"])
+end
 check("the tab tooltip has something to say", GameTooltip ~= nil)
 
 local played = #PLAYED
@@ -1853,7 +1887,7 @@ ctabs[2].scripts.OnClick(ctabs[2])
 check("clicking a tab changes who is being looked at", ns.VaultUI.Selected() == CHOHAM, ns.VaultUI.Selected())
 grid = Cells(37)
 check("the grid now shows that character's bank", ItemCount(grid) == 2, ItemCount(grid))
-local c0, c4 = CellAt(grid, ClassicXY(0, 0)), CellAt(grid, ClassicXY(4, 0))
+local c0, c4 = CellAt(grid, BankXY(0, 0)), CellAt(grid, BankXY(4, 0))
 check("with their items where they sat", c0 and c0.csItem and c0.csItem.id == 2770 and c4 and c4.csItem and c4.csItem.id == 818)
 check("the chosen tab moved", ctabs[2].icon:GetAlpha() == 1 and ctabs[1].icon:GetAlpha() == 0.85)
 check("a page turned", #PLAYED == played + 1, #PLAYED - played)
@@ -1881,7 +1915,7 @@ end
 ctabs = CharTabs()
 ctabs[3].scripts.OnClick(ctabs[3])
 check("the old style record can be looked at", ns.VaultUI.Selected() == "Oldtoon - Voidpact" and ItemCount(Cells(37)) == 1)
-check("with its item in its slot", CellAt(Cells(37), ClassicXY(5, 0)) and CellAt(Cells(37), ClassicXY(5, 0)).csItem ~= nil)
+check("with its item in its slot", CellAt(Cells(37), BankXY(5, 0)) and CellAt(Cells(37), BankXY(5, 0)).csItem ~= nil)
 check("a record with no bag slots dims the whole row", BagRow()[1]:GetAlpha() == 0.45)
 
 -- Forgetting the character being looked at falls back to this one.
@@ -2101,6 +2135,7 @@ check("the handle can also be asked for outright", grip.shown == true)
 ns.db.map.cornerHandle = false
 ns.Refresh()
 
+do -- scope: 11f. Item tooltips
 -- ------------------------------------------------------------------
 -- 11f. Item tooltips: who has it and where
 -- ------------------------------------------------------------------
@@ -2286,6 +2321,8 @@ ns.db.showGrips = false
 ALT = false
 fire("MODIFIER_STATE_CHANGED", "LALT", 0)
 check("letting go puts it away", mapOverlay.shown == false)
+
+end -- scope
 
 -- ------------------------------------------------------------------
 -- 12. Slash commands

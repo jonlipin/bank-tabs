@@ -530,14 +530,29 @@ function Vault.SnapshotBank(reason)
 	for _, container in ipairs(containers) do
 		record.containers[#record.containers + 1] = ScanContainer(container.id, container.label, container.slots)
 	end
-	record.layout = MeasureBankLayout()
-	record.bagSlots = BankBagSlots(record.layout and record.layout.bagCount)
-	Totals(record)
-
 	local who = ns.Who()
 	local entry = Vault.CharRecord(who, true)
 	StampCharacter(entry)
 	AdoptLegacy(who, entry)
+	local previous = entry.bank
+
+	-- The window can only be measured while it is up. By "bank closed" the game has already hidden
+	-- it, so the last good measurement is carried forward rather than dropped, and a partial one
+	-- (fewer slots than before) never replaces a full one. The freshest measurement is also kept
+	-- for the account, for characters whose bank was saved before the window was ever measured.
+	local layout = MeasureBankLayout()
+	if layout and previous and previous.layout and (layout.slots or 0) < (previous.layout.slots or 0) then layout = nil end
+	record.layout = layout or (previous and previous.layout) or ns.vault.bankLayout
+	if layout then ns.vault.bankLayout = layout end
+	record.bagSlots = BankBagSlots(record.layout and record.layout.bagCount)
+	Totals(record)
+
+	-- Once the bank has closed the client can let go of its contents; an empty read then must not
+	-- replace a real one.
+	if reason == "bank closed" and previous and (previous.items or 0) > 0 and record.items == 0 then
+		report["bank scan"] = "bank closed with nothing readable, kept the earlier snapshot"
+		return previous
+	end
 	entry.bank = record
 
 	report["bank scan"] = record.items .. " items in " .. #record.containers .. " containers ("

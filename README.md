@@ -112,7 +112,7 @@ stand in for the quest panel, so the layering that the resize grip needs is actu
 rather than assumed, and the bank, bags and guild bank replicas are checked slot by slot.
 
 ```
-node tests/casementtest.js              # 503 checks
+node tests/casementtest.js              # 510 checks
 node tests/casementtest.js --bare       # every UI template missing
 node tests/casementtest.js --noenum     # no Enum.BagIndex, classic bank ids
 ```

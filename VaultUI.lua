@@ -42,7 +42,8 @@ local CLASSIC_BANK = { cell = 37, pitchX = 49, pitchY = 47, originX = 48, origin
 	bagCell = 24, bagPitch = 38, bagOriginX = 145 }
 
 local function BankGeometry(record)
-	local layout = record and record.layout
+	-- A record's own measurement, else the account's latest (the same client, the same window).
+	local layout = (record and record.layout) or (ns.vault and ns.vault.bankLayout)
 	if layout and layout.cell and layout.pitchX and layout.pitchY and layout.originX and layout.originY then
 		return {
 			cell = layout.cell, pitchX = layout.pitchX, pitchY = layout.pitchY,
@@ -519,6 +520,33 @@ local function CharTabTooltip(self)
 	GameTooltip:Show()
 end
 
+-- Clips a tab's icon (and the dark plate under it) to the tab window's shape, rounded along the
+-- top and flat along the bottom, which is what this mask atlas cuts. Without it the square icon
+-- shows through the frame's open corners. The atlas's region is larger than its shape, so the
+-- mask is drawn about a quarter larger than the texture it clips.
+local TAB_MASK = "UI-HUD-ActionBar-IconFrame-Mask"
+local MASK_OVER = 0.26
+
+local function MaskTabTexture(tab, texture, size)
+	if not (tab.CreateMaskTexture and HasAtlas(TAB_MASK)) then return false end
+	local ok, mask = pcall(tab.CreateMaskTexture, tab)
+	if not (ok and mask) then return false end
+	if not pcall(mask.SetAtlas, mask, TAB_MASK) then return false end
+	local w = size or (texture.GetWidth and texture:GetWidth()) or 0
+	local h = size or (texture.GetHeight and texture:GetHeight()) or 0
+	if not w or w <= 0 then w = 40 end
+	if not h or h <= 0 then h = 40 end
+	mask:ClearAllPoints()
+	mask:SetPoint("TOPLEFT", texture, "TOPLEFT", -MASK_OVER * w, MASK_OVER * h)
+	mask:SetPoint("BOTTOMRIGHT", texture, "BOTTOMRIGHT", MASK_OVER * w, -MASK_OVER * h)
+	if texture.AddMaskTexture and pcall(texture.AddMaskTexture, texture, mask) then
+		texture.csMask = mask
+		return true
+	end
+	pcall(mask.Hide, mask)
+	return false
+end
+
 local function NewCharTab(index)
 	local tab = CreateFrame("CheckButton", nil, window)
 	tab:SetSize(CTAB_W, CTAB_H)
@@ -534,6 +562,10 @@ local function NewCharTab(index)
 	icon:SetPoint("TOP", 0, -4)
 	icon:SetSize(CTAB_W - 10, CTAB_W - 10)
 	tab.icon = icon
+
+	local masked = MaskTabTexture(tab, icon, CTAB_W - 10)
+	MaskTabTexture(tab, back)
+	report["character tab mask"] = masked and TAB_MASK or "none (the icon keeps its corners)"
 
 	local art = TabArt()
 	if art then
@@ -735,7 +767,9 @@ local function LayoutBank()
 	local tabColumn = LayoutTabs(tabs, geo.originX + cols * geo.pitchX + 4, geo.originY)
 
 	local gridBottom = geo.originY + (rows - 1) * geo.pitchY + geo.cell
-	local rowBottom = LayoutBagRow(record, gridBottom + 6, geo)
+	-- Without a measured place for the Bag Slots they sit a clear gap under the grid, the rule
+	-- between the two.
+	local rowBottom = LayoutBagRow(record, gridBottom + 14, geo)
 	divider:Hide()
 	SizeWindow(cols, rows, tabColumn, true, nil, geo, rowBottom)
 	Footer(record)
