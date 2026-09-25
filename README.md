@@ -97,6 +97,10 @@ or unlock every window, drag it around the rim. `/casement minimap` hides it.
 
 `/cst` works as a short form of all of these.
 
+## Source and issues
+
+https://github.com/jonlipin/casement
+
 ## If something does not work
 
 Run `/casement debug` and send the output. Every part of the addon probes the client before it
