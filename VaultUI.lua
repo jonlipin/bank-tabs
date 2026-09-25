@@ -42,7 +42,7 @@ local CTAB_ART = {
 }
 local CLASS_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
 
-local window, searchBox, moneyText, noteText, bagLabel, inset, divider
+local window, searchBox, moneyText, accountText, noteText, bagLabel, inset, divider
 local cells, bagCells, tabButtons, charTabs = {}, {}, {}, {}
 local mode = "bank"    -- "bank", "bags" or "guild"
 local who = nil        -- the character being looked at; nil means this one
@@ -412,6 +412,15 @@ local function TabArt()
 	return tabArt or nil
 end
 
+-- A character's last seen gold (this one's live), from the snapshot store.
+local function GoldOf(who)
+	local rows = ns.Vault.Gold()
+	for _, row in ipairs(rows) do
+		if row.who == who then return row.money end
+	end
+	return nil
+end
+
 local function CharTabTooltip(self)
 	local entry = self.csEntry or {}
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
@@ -426,6 +435,8 @@ local function CharTabTooltip(self)
 	if entry.bags then
 		GameTooltip:AddLine("Bags: " .. (entry.bags.items or 0) .. " items, " .. Ago(entry.bags.time), 0.6, 0.85, 1)
 	end
+	local gold = GoldOf(self.csWho)
+	if gold then GameTooltip:AddDoubleLine("Gold", ns.Money(gold), 1, 0.82, 0, 1, 1, 1) end
 	GameTooltip:Show()
 end
 
@@ -557,6 +568,14 @@ end
 -- the snapshot was taken lives on the portrait's tooltip and on the character tabs instead.
 local function Footer(record)
 	moneyText:SetText(record and ns.Money(record.money) or "")
+	-- The account's gold, small and grey in the bottom left, unless switched off.
+	if ns.db.vault.showAccountGold and mode ~= "guild" then
+		local _, total = ns.Vault.Gold()
+		accountText:SetText("Account " .. ns.Money(total))
+		accountText:Show()
+	else
+		accountText:Hide()
+	end
 end
 
 local function PortraitTooltip(self)
@@ -573,6 +592,12 @@ local function PortraitTooltip(self)
 		GameTooltip:AddLine("Checked " .. When(record.time), 0.6, 0.85, 1)
 	else
 		GameTooltip:AddLine("Not seen yet", 0.6, 0.85, 1)
+	end
+	if mode ~= "guild" then
+		local gold = GoldOf(Selected())
+		if gold then GameTooltip:AddDoubleLine("Gold", ns.Money(gold), 1, 0.82, 0, 1, 1, 1) end
+		local _, total = ns.Vault.Gold()
+		GameTooltip:AddDoubleLine("Account", ns.Money(total), 1, 0.82, 0, 1, 1, 1)
 	end
 	GameTooltip:Show()
 end
@@ -820,6 +845,11 @@ local function Build()
 	moneyText = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
 	moneyText:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -16, 12)
 	moneyText:SetJustifyH("RIGHT")
+
+	accountText = window:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	accountText:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", MARGIN_X, 14)
+	accountText:SetJustifyH("LEFT")
+	accountText:Hide()
 
 	-- The portrait is a texture, so a small frame over it carries the tooltip.
 	if window.csPortrait then

@@ -12,7 +12,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "1.1.1"
+ns.version = "1.2.0"
 ns.report = {}
 
 local report = ns.report
@@ -75,6 +75,15 @@ ns.defaults = {
 		autoBank = true,
 		autoGuild = true,
 		bagButtons = true,
+		showAccountGold = true, -- the account's gold, small, in the replica's bottom left corner
+	},
+
+	-- Lines on item tooltips: which characters have the item and where, from the snapshots.
+	tooltips = {
+		enabled = true,
+		guild = true,
+		total = true,
+		modifier = "none", -- or shift, ctrl, alt: only add the lines while that key is held
 	},
 
 	-- Where each window was left, in UIParent units, keyed by window or by bag id.
@@ -651,6 +660,10 @@ local function Init()
 		local ok, err = pcall(ns.Reveal.Init)
 		report["reveal"] = ok and "ok" or ("failed: " .. tostring(err))
 	end
+	if ns.Tooltips and ns.Tooltips.Init then
+		local ok, err = pcall(ns.Tooltips.Init)
+		report["tooltips"] = ok and "ok" or ("failed: " .. tostring(err))
+	end
 	if ns.SetupOptions then
 		local ok, err = pcall(ns.SetupOptions)
 		report["options"] = ok and "ok" or ("failed: " .. tostring(err))
@@ -713,6 +726,7 @@ local function PrintHelp()
 		"|cffffff00/casement reset|r puts every window back where the game had it",
 		"|cffffff00/casement lock|r or |cffffff00unlock|r turns every window switch off or on",
 		"|cffffff00/casement minimap|r shows or hides the minimap button",
+		"|cffffff00/casement gold|r lists every character's gold and the account total",
 		"|cffffff00/casement coords|r puts your coordinates in a box to copy",
 		"|cffffff00/casement mapdata|r reports how much of the shown map the reveal knows; |cffffff00dump|r opens all of it",
 		"|cffffff00/casement debug|r prints what resolved on this client",
@@ -781,6 +795,15 @@ SlashCmdList["CASEMENT"] = function(msg)
 	elseif cmd == "coords" then
 		local text = ns.Map and ns.Map.PlayerCoordText and ns.Map.PlayerCoordText()
 		if text then ns.CopyBox("Your position", text) else Print("your position on the map is not available here.") end
+
+	elseif cmd == "gold" then
+		local rows, total = ns.Vault.Gold()
+		Print("gold across the account:")
+		for _, row in ipairs(rows) do
+			DEFAULT_CHAT_FRAME:AddMessage("   |cffffd200" .. (row.who:gsub(" %- .*$", "")) .. "|r  " .. ns.Money(row.money)
+				.. (row.mine and "  |cff909090(now)|r" or ""))
+		end
+		DEFAULT_CHAT_FRAME:AddMessage("   |cffffd200Total|r  " .. ns.Money(total))
 
 	elseif cmd == "minimap" then
 		local want = not ns.db.minimap.shown

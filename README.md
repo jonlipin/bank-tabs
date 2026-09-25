@@ -61,6 +61,11 @@ saved, and again if you change your resolution or UI scale.
   can be looked at from anywhere.
 - Three icons in your backpack's header open the saved bank, the saved bags and the saved guild
   bank. They sit in a part of the header the game is not already using.
+- Every item tooltip says who has it and where: a line per character with the count in their bank
+  and bags, the guild bank, and an account total. Your own bags are counted live. Switch it off,
+  or have it only while holding a key, in the options.
+- `/casement gold` lists every character's gold and the account total, which also sits in the
+  corner of the saved bank and on the minimap button's tooltip.
 
 **A minimap button**
 
@@ -80,6 +85,7 @@ or unlock every window, drag it around the rim. `/casement minimap` hides it.
 | `/casement scale 120` | Sets the world map size |
 | `/casement lock` / `unlock` | Turns every window switch off or on |
 | `/casement minimap` | Shows or hides the minimap button |
+| `/casement gold` | Lists every character's gold and the account total |
 | `/casement coords` | Puts your coordinates in a box to copy |
 | `/casement mapdata` | Reports how much of the shown map the reveal knows; `dump` opens all of it |
 | `/casement reset` | Puts every window back where the game had it |
@@ -103,7 +109,7 @@ stand in for the quest panel, so the layering that the resize grip needs is actu
 rather than assumed, and the bank, bags and guild bank replicas are checked slot by slot.
 
 ```
-node tests/casementtest.js              # 447 checks
+node tests/casementtest.js              # 474 checks
 node tests/casementtest.js --bare       # every UI template missing
 node tests/casementtest.js --noenum     # no Enum.BagIndex, classic bank ids
 ```

@@ -2,6 +2,22 @@
 
 All notable changes to Casement are listed here. The newest release is at the top.
 
+## 1.2.0 - 2026-09-24
+
+**Item tooltips say who has it and where.** Every item tooltip gets a line per character on the
+account that has the item, with how many are in their bank and their bags, a line for the guild
+bank, and an account total when it is in more than one place. Your own bags are counted live;
+everything else is what was saved the last time that bank or those bags were seen. The lookup runs
+off an index that is rebuilt only when a snapshot changes, so hovering costs nothing. Switches in
+the options: on or off, include the guild bank, add the total, and only while holding shift, ctrl
+or alt to keep tooltips short until asked. Uses the game's modern tooltip pipeline, with the older
+tooltip script as the fallback.
+
+**Gold across the account.** `/casement gold` lists every character's gold (yours live, the rest
+as last seen) and the total. The total sits small in the bottom left corner of the saved bank and
+bags (switchable), and on the portrait tooltip; each character tab's tooltip shows that character's
+gold; the minimap button's tooltip carries the total too.
+
 ## 1.1.1 - 2026-09-24
 
 **The reveal now ships the full overlay table.** `Data/MapOverlays.lua`: 84 maps, 1,073 overlays,

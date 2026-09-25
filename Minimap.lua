@@ -74,6 +74,10 @@ local function Tooltip(self)
 	for _ in pairs(ns.vault.guilds or {}) do guilds = guilds + 1 end
 	GameTooltip:AddLine(banks .. " saved bank" .. (banks == 1 and "" or "s") .. ", " .. bags .. " saved bag"
 		.. (bags == 1 and "" or "s") .. ", " .. guilds .. " guild bank" .. (guilds == 1 and "" or "s"), 0.6, 0.85, 1)
+	if ns.Vault and ns.Vault.Gold then
+		local _, total = ns.Vault.Gold()
+		GameTooltip:AddDoubleLine("Account gold", ns.Money(total), 1, 0.82, 0, 1, 1, 1)
+	end
 
 	GameTooltip:AddLine(" ")
 	GameTooltip:AddLine("Left-click: the options", 0.7, 0.7, 0.7)

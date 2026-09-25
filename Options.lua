@@ -381,6 +381,31 @@ local function BuildVaultPage(parent)
 		function() return ns.db.vault.bagButtons end,
 		function(value) ns.db.vault.bagButtons = value end)
 
+	Check(layout, "Account gold in the corner of the saved bank", "A small line in the bottom left of the saved bank and bags with every character's gold added up. /casement gold lists them one by one.",
+		function() return ns.db.vault.showAccountGold end,
+		function(value) ns.db.vault.showAccountGold = value end)
+
+	Check(layout, "Item tooltips: who has it and where", "Lines on every item tooltip with each character that has the item, how many in their bank and bags, and the guild bank, from the snapshots. Your own bags are counted live.",
+		function() return ns.db.tooltips.enabled end,
+		function(value) ns.db.tooltips.enabled = value end)
+
+	Check(layout, "Include the guild bank", nil,
+		function() return ns.db.tooltips.guild end,
+		function(value) ns.db.tooltips.guild = value end, 24)
+
+	Check(layout, "Add an account total", "Only when the item is in more than one place.",
+		function() return ns.db.tooltips.total end,
+		function(value) ns.db.tooltips.total = value end, 24)
+
+	Choice(layout, "Only while holding", {
+		{ value = "none", label = "Always" },
+		{ value = "shift", label = "Shift" },
+		{ value = "ctrl", label = "Ctrl" },
+		{ value = "alt", label = "Alt" },
+	}, function() return ns.db.tooltips.modifier end,
+		function(value) ns.db.tooltips.modifier = value end,
+		"Keeps tooltips short until you ask.", 24)
+
 	local status = Note(layout, "", 0, 2)
 	widgets[#widgets + 1] = { refresh = function()
 		local chars, guilds = 0, 0

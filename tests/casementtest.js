@@ -12,7 +12,7 @@ const fs = require('fs');
 const { lua, lauxlib, lualib, to_luastring } = require('fengari');
 const DIR = (process.argv.slice(2).find(a => !a.startsWith('--')) || 'C:/Users/jonli/casement/');
 const L = lauxlib.luaL_newstate(); lualib.luaL_openlibs(L);
-const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Data/MapOverlays.lua', 'Reveal.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Options.lua'];
+const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Data/MapOverlays.lua', 'Reveal.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Tooltips.lua', 'Options.lua'];
 
 const stub = String.raw`
 local VERBS = { "Set", "Get", "Is", "Create", "Register", "Enable", "Clear", "Hook", "Start", "Stop", "Has", "Num", "Add", "Unregister", "Disable", "Raise", "Lower", "Lock", "Unlock", "Show", "Hide", "Insert", "Toggle" }
@@ -477,6 +477,33 @@ rawset(CHAT_EDIT, "Insert", function(self, text) self.inserted = (self.inserted 
 function ChatEdit_GetActiveWindow() return CHAT_EDIT end
 OPENED_CHAT = nil
 function ChatFrame_OpenChat(text) OPENED_CHAT = text end
+
+-- Tooltips: the modern pipeline hands item tooltips to registered post calls; the lines added
+-- are recorded so they can be read back.
+TOOLTIP_CALLBACKS = {}
+Enum.TooltipDataType = { Item = 0 }
+TooltipDataProcessor = {
+  AddTooltipPostCall = function(kind, fn) TOOLTIP_CALLBACKS[kind] = fn end,
+}
+local function tooltipObj(name)
+  local t = obj("GameTooltip", nil, name)
+  t.csLines = {}
+  rawset(t, "SetOwner", function(self) self.csLines = {} end)
+  rawset(t, "AddLine", function(self, text) self.csLines[#self.csLines + 1] = { text } end)
+  rawset(t, "AddDoubleLine", function(self, left, right) self.csLines[#self.csLines + 1] = { left, right } end)
+  rawset(t, "GetItem", function(self) return self.csItemName, self.csItemLink end)
+  _G[name] = t
+  return t
+end
+GameTooltip = tooltipObj("GameTooltip")
+ItemRefTooltip = tooltipObj("ItemRefTooltip")
+ShoppingTooltip1 = tooltipObj("ShoppingTooltip1")
+ShoppingTooltip2 = tooltipObj("ShoppingTooltip2")
+RAID_CLASS_COLORS = { WARLOCK = { r = 0.53, g = 0.53, b = 0.93 }, WARRIOR = { r = 0.78, g = 0.61, b = 0.43 } }
+-- What this character is carrying right now, by item id.
+LIVE_COUNTS = {}
+C_Item = C_Item or {}
+C_Item.GetItemCount = function(id, includeBank) return LIVE_COUNTS[id] or 0 end
 WorldMapFrame:Hide()
 
 -- The map's own top bar: a nav bar on the left and buttons on the right, both taking the mouse.
@@ -1575,12 +1602,17 @@ check("the money is written in the window", TextOn(vault, ns.Money(1234567)) ~= 
 -- taken is on the portrait's tooltip instead.
 check("nothing but the money is written along the bottom", TextOn(vault, me .. ", checked", true) == nil
   and TextOn(vault, "Checked", true) == nil)
-local portraitHit
-for _, f in ipairs(FRAMES) do
-  if f.parent == vault and f.allPoints == vault.csPortrait and f.scripts.OnEnter then portraitHit = f end
+-- Without the portrait template (--bare) there is no portrait and nothing to hover.
+if vault.csPortrait then
+  local portraitHit
+  for _, f in ipairs(FRAMES) do
+    if f.parent == vault and f.allPoints == vault.csPortrait and f.scripts.OnEnter then portraitHit = f end
+  end
+  check("the portrait carries a tooltip", portraitHit ~= nil)
+  check("and it runs", portraitHit and pcall(portraitHit.scripts.OnEnter, portraitHit))
+else
+  check("no portrait on this client, so no portrait tooltip", true)
 end
-check("the portrait carries a tooltip", portraitHit ~= nil)
-check("and it runs", portraitHit and pcall(portraitHit.scripts.OnEnter, portraitHit))
 
 -- Searching dims what does not match, exactly as the real bank does, rather than hiding it.
 CasementVaultSearch:SetText("wool")
@@ -1990,6 +2022,137 @@ ns.Refresh()
 check("the handle can also be asked for outright", grip.shown == true)
 ns.db.map.cornerHandle = false
 ns.Refresh()
+
+-- ------------------------------------------------------------------
+-- 11f. Item tooltips: who has it and where
+-- ------------------------------------------------------------------
+check("the tooltips took the modern pipeline", ns.report["item tooltips"] == "TooltipDataProcessor", ns.report["item tooltips"])
+local onItem = TOOLTIP_CALLBACKS[0]
+check("a post call was registered for items", type(onItem) == "function")
+
+local function Hover(id, name, link)
+  GameTooltip:SetOwner(nil)
+  GameTooltip.csTooltipStamp = nil
+  GameTooltip.csItemName, GameTooltip.csItemLink = name, link
+  onItem(GameTooltip, { id = id })
+  return GameTooltip.csLines
+end
+local function LineFor(lines, left)
+  for _, l in ipairs(lines) do if l[1] == left then return l end end
+  return nil
+end
+
+-- Linen Cloth: 20 in this character's bank (saved), 7 carried right now (live), 40 in the guild bank.
+ns.vault.guilds["Night Owls - Voidpact"] = { time = time(), money = 100, tabs = { [1] = { name = "Vault 1", items = {
+  { slot = 3, id = 2589, name = "Linen Cloth", count = 40, icon = 1 } } } } }
+ns.Vault.Changed()
+LIVE_COUNTS[2589] = 7
+local lines = Hover(2589, "Linen Cloth")
+local mine = LineFor(lines, "Vatik")
+check("this character's line names them without the realm", mine ~= nil, lines[1] and (lines[1][1] .. " / " .. tostring(lines[1][2])))
+check("with the saved bank count and the live bag count", mine and mine[2] == "bank 20, bags 7", mine and mine[2])
+check("this character comes first", lines[1] and lines[1][1] == "Vatik")
+local guildLine = LineFor(lines, "Night Owls")
+check("the guild bank has its own line", guildLine and guildLine[2] == "guild bank 40", guildLine and guildLine[2])
+-- The total is the sum of every other line (another saved character may hold some too).
+local totalLine = LineFor(lines, "Total")
+local summed = 0
+for _, l in ipairs(lines) do
+  if l[1] ~= "Total" then for n in tostring(l[2]):gmatch("%d+") do summed = summed + tonumber(n) end end
+end
+check("the account total adds it all up", totalLine and tonumber(totalLine[2]) == summed and summed >= 67, totalLine and totalLine[2])
+check("nothing about characters that do not have it", LineFor(lines, "Choham") == nil)
+
+-- An item nobody has adds nothing.
+lines = Hover(999999, "Nothing")
+check("an item nobody has adds no lines", #lines == 0, #lines)
+
+-- The same hover is not written twice, but a cleared tooltip is.
+local firstCount = #Hover(2589, "Linen Cloth")
+onItem(GameTooltip, { id = 2589 })
+check("the lines are not repeated on a second call for the same item", #GameTooltip.csLines == firstCount, #GameTooltip.csLines .. " vs " .. firstCount)
+GameTooltip.scripts.OnTooltipCleared(GameTooltip)
+check("clearing the tooltip lets the next hover write again", GameTooltip.csTooltipStamp == nil)
+
+-- Only the name is known: the index falls back to it.
+lines = Hover(nil, "Linen Cloth")
+check("an item known only by name is still found", LineFor(lines, "Vatik") ~= nil)
+
+-- The switches.
+ns.db.tooltips.guild = false
+lines = Hover(2589, "Linen Cloth")
+check("the guild bank can be left out", LineFor(lines, "Night Owls") == nil and LineFor(lines, "Vatik") ~= nil)
+ns.db.tooltips.guild = true
+ns.db.tooltips.total = false
+lines = Hover(2589, "Linen Cloth")
+check("the total can be left out", LineFor(lines, "Total") == nil)
+ns.db.tooltips.total = true
+ns.db.tooltips.modifier = "shift"
+SHIFT = false
+lines = Hover(2589, "Linen Cloth")
+check("with a key chosen, nothing shows until it is held", #lines == 0, #lines)
+SHIFT = true
+lines = Hover(2589, "Linen Cloth")
+check("and everything shows while it is", LineFor(lines, "Vatik") ~= nil)
+SHIFT = false
+ns.db.tooltips.modifier = "none"
+ns.db.tooltips.enabled = false
+lines = Hover(2589, "Linen Cloth")
+check("the whole feature can be switched off", #lines == 0, #lines)
+ns.db.tooltips.enabled = true
+
+-- A new snapshot changes the answer on the next hover.
+ns.vault.guilds["Night Owls - Voidpact"].tabs[1].items[1].count = 41
+ns.Vault.Changed()
+lines = Hover(2589, "Linen Cloth")
+check("a changed snapshot is reflected on the next hover", LineFor(lines, "Night Owls")[2] == "guild bank 41")
+ns.vault.guilds["Night Owls - Voidpact"] = nil
+ns.Vault.Changed()
+LIVE_COUNTS[2589] = nil
+
+-- ------------------------------------------------------------------
+-- 11g. Gold across the account
+-- ------------------------------------------------------------------
+local goldRows, goldTotal = ns.Vault.Gold()
+check("every character with a snapshot has a gold row", #goldRows >= 2, #goldRows)
+check("this character comes first and is read live", goldRows[1].who == me and goldRows[1].money == 1234567 and goldRows[1].mine == true)
+local choham
+for _, row in ipairs(goldRows) do if row.who == CHOHAM then choham = row end end
+check("another character's gold is their last seen", choham and choham.money == 5500, choham and choham.money)
+local expectedTotal = 0
+for _, row in ipairs(goldRows) do expectedTotal = expectedTotal + row.money end
+check("the total is the sum", goldTotal == expectedTotal and goldTotal >= 1234567 + 5500, goldTotal)
+
+SlashCmdList["CASEMENT"]("gold")
+local sawChoham, sawTotal = false, false
+for i = #CHAT - 6, #CHAT do
+  local line = CHAT[i] or ""
+  if line:find("Choham") then sawChoham = true end
+  if line:find("Total") then sawTotal = true end
+end
+check("/casement gold lists each character and the total", sawChoham and sawTotal)
+
+ns.VaultUI.Show("bank")
+check("the saved bank shows the account gold in its corner", TextOn(vault, "Account ", true) ~= nil)
+ns.db.vault.showAccountGold = false
+ns.VaultUI.Refresh()
+check("which can be switched off", TextOn(vault, "Account ", true) == nil)
+ns.db.vault.showAccountGold = true
+ns.VaultUI.Refresh()
+if vault.csPortrait then
+  local portraitHit2
+  for _, f in ipairs(FRAMES) do
+    if f.parent == vault and f.allPoints == vault.csPortrait and f.scripts.OnEnter then portraitHit2 = f end
+  end
+  GameTooltip:SetOwner(nil)
+  portraitHit2.scripts.OnEnter(portraitHit2)
+  check("the portrait tooltip carries the account gold", LineFor(GameTooltip.csLines, "Account") ~= nil and LineFor(GameTooltip.csLines, "Gold") ~= nil)
+end
+local ctabsGold = CharTabs()
+GameTooltip:SetOwner(nil)
+ctabsGold[2].scripts.OnEnter(ctabsGold[2])
+check("a character tab tooltip carries that character's gold", LineFor(GameTooltip.csLines, "Gold") ~= nil)
+CasementVault:Hide()
 
 -- ------------------------------------------------------------------
 -- 12. Slash commands

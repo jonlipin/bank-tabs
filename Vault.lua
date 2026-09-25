@@ -133,6 +133,51 @@ end
 -- The store
 -- ------------------------------------------------------------------
 
+-- Everything that reads the snapshots is told when one changes: the replica window redraws and
+-- the tooltip index is thrown away to be rebuilt on the next hover.
+function Vault.Changed()
+	if ns.Tooltips and ns.Tooltips.Invalidate then pcall(ns.Tooltips.Invalidate) end
+	if ns.VaultUI and ns.VaultUI.Refresh then pcall(ns.VaultUI.Refresh) end
+end
+
+-- Gold: every character's last seen money (this character's live), and the account total. The
+-- freshest of a character's bank and bags snapshots is the one trusted.
+function Vault.Gold()
+	local me = ns.Who()
+	local out, total = {}, 0
+	for who in pairs(ns.vault.chars or {}) do
+		-- Through the table rather than the local, which is declared further down this file.
+		local entry = Vault.CharRecord(who)
+		if entry then
+			local best
+			for _, kind in ipairs({ "bank", "bags" }) do
+				local record = entry[kind]
+				if record and type(record.money) == "number" and (not best or (record.time or 0) > (best.time or 0)) then
+					best = record
+				end
+			end
+			if best then out[#out + 1] = { who = who, money = best.money, time = best.time, mine = who == me } end
+		end
+	end
+	-- This character's purse is read live and replaces whatever was saved.
+	if GetMoney then
+		local ok, money = pcall(GetMoney)
+		if ok and type(money) == "number" then
+			local found
+			for _, row in ipairs(out) do
+				if row.who == me then row.money, row.time, found = money, time(), true end
+			end
+			if not found then out[#out + 1] = { who = me, money = money, time = time(), mine = true } end
+		end
+	end
+	table.sort(out, function(a, b)
+		if a.mine ~= b.mine then return a.mine end
+		return a.money > b.money
+	end)
+	for _, row in ipairs(out) do total = total + row.money end
+	return out, total
+end
+
 -- 1.0.x kept the bank record itself under the character's name. That shape is lifted into the
 -- `bank` field the first time it is seen, so nothing already saved is lost.
 local function Migrate(who, entry)
@@ -352,7 +397,7 @@ function Vault.SnapshotBank(reason)
 
 	report["bank scan"] = record.items .. " items in " .. #record.containers .. " containers ("
 		.. tostring(reason) .. ")"
-	if ns.VaultUI and ns.VaultUI.Refresh then pcall(ns.VaultUI.Refresh) end
+	Vault.Changed()
 	return record
 end
 
@@ -389,7 +434,7 @@ function Vault.SnapshotBags(reason)
 	entry.bags = record
 
 	report["bags scan"] = record.items .. " items in " .. #record.containers .. " bags (" .. tostring(reason) .. ")"
-	if ns.VaultUI and ns.VaultUI.Refresh then pcall(ns.VaultUI.Refresh) end
+	Vault.Changed()
 	return record
 end
 
@@ -498,7 +543,7 @@ function Vault.SnapshotGuildBank(reason)
 				record.items = 0
 				for _, bucket in pairs(record.tabs) do record.items = record.items + #bucket.items end
 				report["guild bank scan"] = record.items .. " items over " .. tabs .. " tabs (" .. tostring(reason) .. ")"
-				if ns.VaultUI and ns.VaultUI.Refresh then pcall(ns.VaultUI.Refresh) end
+				Vault.Changed()
 			end
 		end)
 	end
@@ -537,7 +582,7 @@ function Vault.Forget(kind, key)
 	elseif kind == "guild" then
 		ns.vault.guilds[key] = nil
 	end
-	if ns.VaultUI and ns.VaultUI.Refresh then pcall(ns.VaultUI.Refresh) end
+	Vault.Changed()
 end
 
 -- ------------------------------------------------------------------
@@ -618,7 +663,7 @@ function Vault.OnEvent(event, ...)
 		if info then
 			record.tabs[tab] = info
 			record.time = time()
-			if ns.VaultUI and ns.VaultUI.Refresh then pcall(ns.VaultUI.Refresh) end
+			Vault.Changed()
 		end
 	end
 end
