@@ -1828,8 +1828,12 @@ if BARE then
 else
   local tabMask = ctabs[1].icon.csMask
   check("the class icon wears the tab shaped mask", tabMask ~= nil and tabMask.atlas == "UI-HUD-ActionBar-IconFrame-Mask", tabMask and tabMask.atlas)
-  check("drawn a quarter larger than the icon on every side", tabMask and tabMask.points[1] and near(tabMask.points[1][4], -0.26 * 33, 0.01)
-    and near(tabMask.points[1][5], 0.26 * 33, 0.01) and tabMask.points[1][2] == ctabs[1].icon)
+  check("drawn a quarter larger than the icon on every side", tabMask and tabMask.points[1] and near(tabMask.points[1][4], -0.26 * 36, 0.01)
+    and near(tabMask.points[1][5], 0.26 * 36, 0.01) and tabMask.points[1][2] == ctabs[1].icon)
+  local plateMask = ctabs[1].plate and ctabs[1].plate.csMask
+  check("the dark plate wears the mask too, sized from the plate's own box", plateMask ~= nil and plateMask.points[1]
+    and near(plateMask.points[1][4], -0.26 * 41, 0.01) and near(plateMask.points[1][5], 0.26 * 36, 0.01) and plateMask.points[1][2] == ctabs[1].plate,
+    plateMask and plateMask.points[1] and (plateMask.points[1][4] .. "," .. plateMask.points[1][5]))
   check("the report names the mask", ns.report["tab mask"] == "UI-HUD-ActionBar-IconFrame-Mask", ns.report["tab mask"])
 end
 check("the tab tooltip has something to say", GameTooltip ~= nil)
@@ -2228,8 +2232,23 @@ for _, t in ipairs(htabs) do
   if not t.csTab or t.kind ~= "CheckButton" or t.w ~= 43 or t.h ~= 37 or type(t.SetChosen) ~= "function" then same = false end
 end
 check("they come from the character tabs' builder, at the spellbook's 43 by 37", same)
-check("with the icon in the same place, at the same size", bankTab.icon.w == 33 and bankTab.icon.h == 33
-  and bankTab.icon.points[1] and bankTab.icon.points[1][1] == "TOP" and bankTab.icon.points[1][5] == -4)
+check("with the icon in the same place, at the same size", bankTab.icon.w == 36 and bankTab.icon.h == 36
+  and bankTab.icon.points[1] and bankTab.icon.points[1][1] == "TOP" and bankTab.icon.points[1][5] == -2)
+-- The user saw the dark plate stop short of the frame's window on the backpack's tabs, with the
+-- world showing round it. It now runs to 1 pixel in from every edge but the foot, under the frame
+-- art's own edges, on both kinds of tab.
+local function PlateFills(t)
+  local p = t.plate and t.plate.points
+  if not p then return false end
+  local tl, br
+  for _, pt in ipairs(p) do
+    if pt[1] == "TOPLEFT" then tl = pt elseif pt[1] == "BOTTOMRIGHT" then br = pt end
+  end
+  return tl and br and tl[4] == 1 and tl[5] == -1 and br[4] == -1 and br[5] == 0
+end
+check("the backpack tab's dark plate fills the frame's window, 1 pixel in", PlateFills(bankTab))
+check("and so does a character tab's", ctabs and ctabs[1] and PlateFills(ctabs[1]))
+check("the icon is wider than the old plate, so its edges run under the frame art", bankTab.icon.w > 43 - 8)
 if BARE then
   check("with no spellbook atlas they go without it, as the character tabs do", bankTab.frameTex == nil and bankTab.glow == nil)
 else
