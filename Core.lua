@@ -159,12 +159,20 @@ function ns.Label(who)
 		local realm = entry.realm
 		return entry.name .. ((realm and realm ~= "") and (" - " .. realm) or "")
 	end
+	if who == ns.Who() then return ns.NameKey() end
 	return tostring(who)
 end
 
+-- The character's name alone, no realm: what the character tabs' tooltips and the saved windows'
+-- titles say. This character is named live when nothing has been saved for it yet, rather than by
+-- its GUID.
 function ns.ShortLabel(who)
 	local entry = ns.vault and ns.vault.chars and ns.vault.chars[who]
 	if type(entry) == "table" and type(entry.name) == "string" then return entry.name end
+	if who == ns.Who() and UnitName then
+		local ok, name = pcall(UnitName, "player")
+		if ok and type(name) == "string" and name ~= "" then return name end
+	end
 	return (tostring(who):gsub(" %- .*$", ""))
 end
 
@@ -518,6 +526,169 @@ function ns.TextureExists(path)
 	return ok and id ~= nil
 end
 
+-- SetAtlas does not raise for a name the client lacks, so the atlas table is asked instead.
+function ns.HasAtlas(atlas)
+	if not (C_Texture and C_Texture.GetAtlasInfo) then return false end
+	local ok, info = pcall(C_Texture.GetAtlasInfo, atlas)
+	return ok and info ~= nil
+end
+
+-- ------------------------------------------------------------------
+-- Tabs in the spellbook's style
+--
+-- Every tab this addon hangs off a window comes from here: the character tabs above the saved
+-- bank and bags, and the Bank, Bags and Guild tabs above the real backpack. One builder and one
+-- placer, so the two kinds cannot drift apart: the spellbook's 43 by 37, the game's own spellbook
+-- tab atlas with its chosen and glowing states, the icon clipped to the tab's shape, and a plain
+-- bevel where a client does not carry the atlas.
+-- ------------------------------------------------------------------
+
+-- w, h: the tab. gap: between two tabs. start: how far in from the window's left edge the row
+-- starts, clear of the portrait. tuck: how much of the tab's foot hides behind the window's
+-- border. rowStep: how far a second row sits above the first.
+ns.TAB = { w = 43, h = 37, gap = 2, start = 64, tuck = 8, rowStep = 31 }
+
+local TAB_ART = {
+	tab = "spellbook-Tab-Frame-C60",
+	tabActive = "spellbook-Tab-Frame-Glow-C60",
+	tabActiveGlow = "spellbook-Tab-Frame-glow-gradient-C60",
+}
+local tabArt = nil -- false once probed and missing
+
+local function TabArt()
+	if tabArt ~= nil then return tabArt or nil end
+	tabArt = false
+	if ns.HasAtlas(TAB_ART.tab) then
+		tabArt = { tab = TAB_ART.tab }
+		if ns.HasAtlas(TAB_ART.tabActive) then tabArt.tabActive = TAB_ART.tabActive end
+		if ns.HasAtlas(TAB_ART.tabActiveGlow) then tabArt.tabActiveGlow = TAB_ART.tabActiveGlow end
+		report["tab art"] = "spellbook atlas"
+	else
+		report["tab art"] = "plain bevel (no spellbook atlas on this client)"
+	end
+	return tabArt or nil
+end
+
+-- Clips a tab's icon (and the dark plate under it) to the tab window's shape, rounded along the
+-- top and flat along the bottom, which is what this mask atlas cuts. Without it the square icon
+-- shows through the frame's open corners. The atlas's region is larger than its shape, so the
+-- mask is drawn about a quarter larger than the texture it clips.
+local TAB_MASK = "UI-HUD-ActionBar-IconFrame-Mask"
+local MASK_OVER = 0.26
+
+local function MaskTabTexture(tab, texture, size)
+	if not (tab.CreateMaskTexture and ns.HasAtlas(TAB_MASK)) then return false end
+	local ok, mask = pcall(tab.CreateMaskTexture, tab)
+	if not (ok and mask) then return false end
+	if not pcall(mask.SetAtlas, mask, TAB_MASK) then return false end
+	local w = size or (texture.GetWidth and texture:GetWidth()) or 0
+	local h = size or (texture.GetHeight and texture:GetHeight()) or 0
+	if not w or w <= 0 then w = 40 end
+	if not h or h <= 0 then h = 40 end
+	mask:ClearAllPoints()
+	mask:SetPoint("TOPLEFT", texture, "TOPLEFT", -MASK_OVER * w, MASK_OVER * h)
+	mask:SetPoint("BOTTOMRIGHT", texture, "BOTTOMRIGHT", MASK_OVER * w, -MASK_OVER * h)
+	if texture.AddMaskTexture and pcall(texture.AddMaskTexture, texture, mask) then
+		texture.csMask = mask
+		return true
+	end
+	pcall(mask.Hide, mask)
+	return false
+end
+
+-- Hangs a tab off the top edge of `host`, in column `col` of row `row` (a second row sits above
+-- the first): clear of the portrait, its feet tucked behind the window's border, and one level
+-- under the window so that border covers them.
+function ns.HangTab(tab, host, col, row)
+	local T = ns.TAB
+	tab:ClearAllPoints()
+	tab:SetPoint("BOTTOMLEFT", host, "TOPLEFT", T.start + (col or 0) * (T.w + T.gap), -T.tuck + (row or 0) * T.rowStep)
+	tab:SetFrameLevel(math.max(0, (host:GetFrameLevel() or 1) - 1))
+end
+
+-- A tab on `host`, with an `icon` texture for the caller to paint and the scripts left to the
+-- caller. tab:SetChosen(on) wears the chosen state (the glowing frame); tab:SetDimmed(on) greys the
+-- icon for a tab with nothing behind it.
+function ns.CreateTab(host)
+	local T = ns.TAB
+	local tab = CreateFrame("CheckButton", nil, host)
+	tab.csOurs = true
+	tab.csTab = true
+	tab:SetSize(T.w, T.h)
+	tab:SetFrameLevel(math.max(0, (host:GetFrameLevel() or 1) - 1))
+
+	local back = tab:CreateTexture(nil, "BACKGROUND")
+	back:SetPoint("TOPLEFT", 4, -3)
+	back:SetPoint("BOTTOMRIGHT", -4, 0)
+	back:SetColorTexture(0.02, 0.02, 0.02, 1)
+
+	local icon = tab:CreateTexture(nil, "ARTWORK")
+	icon:SetPoint("TOP", 0, -4)
+	icon:SetSize(T.w - 10, T.w - 10)
+	tab.icon = icon
+
+	local masked = MaskTabTexture(tab, icon, T.w - 10)
+	MaskTabTexture(tab, back)
+	report["tab mask"] = masked and TAB_MASK or "none (the icon keeps its corners)"
+
+	local art = TabArt()
+	if art then
+		tab.frameTex = tab:CreateTexture(nil, "OVERLAY")
+		tab.frameTex:SetAllPoints()
+		pcall(tab.frameTex.SetAtlas, tab.frameTex, art.tab)
+		if art.tabActiveGlow then
+			tab.glow = tab:CreateTexture(nil, "OVERLAY", nil, -1)
+			tab.glow:SetPoint("TOPLEFT", 0, 1)
+			tab.glow:SetPoint("BOTTOMRIGHT", 0, 0)
+			pcall(tab.glow.SetAtlas, tab.glow, art.tabActiveGlow)
+			tab.glow:Hide()
+		end
+	else
+		-- Plain fallback: a dark bevel, gold when chosen.
+		local okBevel, bevel = pcall(CreateFrame, "Frame", nil, tab, "BackdropTemplate")
+		if okBevel and bevel and bevel.SetBackdrop then
+			bevel:SetAllPoints()
+			bevel:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 })
+			bevel:SetBackdropBorderColor(0.45, 0.4, 0.33)
+			bevel:EnableMouse(false)
+			tab.bevel = bevel
+		end
+		local okSel, sel = pcall(CreateFrame, "Frame", nil, tab, "BackdropTemplate")
+		if okSel and sel and sel.SetBackdrop then
+			sel:SetAllPoints()
+			sel:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 9 })
+			sel:SetBackdropBorderColor(1, 0.85, 0.1)
+			sel:SetFrameLevel(tab:GetFrameLevel() + 2)
+			sel:EnableMouse(false)
+			sel:Hide()
+			tab.sel = sel
+		end
+	end
+
+	local hover = tab:CreateTexture(nil, "HIGHLIGHT")
+	hover:SetAllPoints(icon)
+	hover:SetColorTexture(1, 1, 1, 0.15)
+
+	tab.SetChosen = function(self, on)
+		on = on and true or false
+		self.csChosen = on
+		local artNow = TabArt()
+		if self.frameTex and artNow then
+			pcall(self.frameTex.SetAtlas, self.frameTex, (on and artNow.tabActive) or artNow.tab)
+		end
+		if self.glow then self.glow:SetShown(on) end
+		if self.sel then self.sel:SetShown(on) end
+		if self.bevel then self.bevel:SetShown(not on) end
+		self.icon:SetAlpha((self.csDimmed and 0.4) or (on and 1) or 0.85)
+	end
+	tab.SetDimmed = function(self, on)
+		self.csDimmed = on and true or false
+		self:SetChosen(self.csChosen)
+	end
+	tab:SetChosen(false)
+	return tab
+end
+
 function ns.Tooltip(widget, title, body)
 	if not title and not body then return end
 	widget:SetScript("OnEnter", function(self)
@@ -631,7 +802,7 @@ local function Init()
 	end
 	if ns.BagHeader and ns.BagHeader.Init then
 		local ok, err = pcall(ns.BagHeader.Init)
-		report["bag header buttons"] = ok and "ok" or ("failed: " .. tostring(err))
+		report["bag header"] = ok and "ok" or ("failed: " .. tostring(err))
 	end
 	if ns.Minimap and ns.Minimap.Init then
 		local ok, err = pcall(ns.Minimap.Init)
@@ -701,7 +872,7 @@ local function PrintHelp()
 	Print("commands:")
 	local lines = {
 		"|cffffff00/banktabs|r opens the options",
-		"|cffffff00/banktabs bank|r opens the saved bank, |cffffff00/banktabs bags|r the saved bags, |cffffff00/banktabs guild|r the guild bank",
+		"|cffffff00/banktabs bank|r, |cffffff00bags|r or |cffffff00guild|r opens that saved window, or closes it when it is in front; they can be open together",
 		"|cffffff00/banktabs snapshot|r saves your bags, and the bank or guild bank if one is open",
 		"|cffffff00/banktabs gold|r lists every character's gold and the account total",
 		"|cffffff00/banktabs reset|r puts every bag and bank window back where the game had it",
@@ -733,8 +904,9 @@ SlashCmdList["BANKTABS"] = function(msg)
 		if ns.ToggleOptions then ns.ToggleOptions(true) end
 
 	elseif cmd == "vault" or cmd == "bank" or cmd == "bags" or cmd == "guild" then
-		if not (ns.VaultUI and ns.VaultUI.Toggle) then Print("The saved bank window is not built on this client.") return end
-		-- "vault" alone opens whatever was showing last; "vault bags" and the like still work.
+		if not (ns.VaultUI and ns.VaultUI.Toggle) then Print("The saved windows are not built on this client.") return end
+		-- Each is its own window. "vault" alone toggles the one in front, or the one opened last;
+		-- "vault bags" and the like still work.
 		local which = (cmd ~= "vault") and cmd or rest
 		if which == "guildbank" then which = "guild" end
 		if which ~= "bank" and which ~= "bags" and which ~= "guild" then which = nil end

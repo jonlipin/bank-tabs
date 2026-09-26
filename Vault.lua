@@ -8,7 +8,7 @@
 --   record     = { time, money, containers = { { id, label, slots, items = { {slot, id, ...} } } },
 --                  bagSlots or equipped = the bags themselves, items, slots, free }
 --
--- Every item is stored with the slot it sat in, so the vault window can draw it exactly where it
+-- Every item is stored with the slot it sat in, so the saved windows can draw it exactly where it
 -- was rather than packing things together.
 --
 -- Two things about this client shape the bank scan:
@@ -133,11 +133,13 @@ end
 -- The store
 -- ------------------------------------------------------------------
 
--- Everything that reads the snapshots is told when one changes: the replica window redraws and
--- the tooltip index is thrown away to be rebuilt on the next hover.
+-- Everything that reads the snapshots is told when one changes: every saved window that is open
+-- redraws, the backpack's tabs brighten or dim, and the tooltip index is thrown away to be rebuilt
+-- on the next hover.
 function Vault.Changed()
 	if ns.Tooltips and ns.Tooltips.Invalidate then pcall(ns.Tooltips.Invalidate) end
 	if ns.VaultUI and ns.VaultUI.Refresh then pcall(ns.VaultUI.Refresh) end
+	if ns.BagHeader and ns.BagHeader.Refresh then pcall(ns.BagHeader.Refresh) end
 end
 
 -- Gold: every character's last seen money (this character's live), and the account total. The

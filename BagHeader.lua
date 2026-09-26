@@ -1,11 +1,17 @@
 -- Bank Tabs
--- BagHeader: the three icons in the backpack's header that open the saved bank, the saved bags
--- and the saved guild bank.
+-- BagHeader: the Bank, Bags and Guild tabs hanging off the top of the real backpack, which open
+-- the saved bank, the saved bags and the saved guild bank.
 --
--- Where they go is worked out rather than guessed: the header band is measured for a stretch that
--- none of the game's own buttons are sitting on, and the widest clear stretch at the right hand
--- end wins. If the header is full, they sit just above the window instead. They are also raised
--- above the drag strip, which would otherwise swallow their clicks.
+-- They are the character tabs' own kind, built by the same function (ns.CreateTab) and hung by
+-- the same one (ns.HangTab): the spellbook's 43 by 37, its tab atlas with the chosen and glowing
+-- states, the icon clipped to the tab's shape, a plain bevel where the atlas is missing. They sit
+-- above the window's top edge, clear of the portrait, with their feet tucked behind its border one
+-- level under the window, so they cover none of the backpack's own title, close button or
+-- portrait, and never meet the drag strip, which lies inside the top bar. Being the backpack's
+-- children, anchored to it, they go wherever it goes, in the same frame, and hide with it.
+--
+-- A tab wears its chosen state while its saved window is open, and is dimmed while there is
+-- nothing saved for it to show.
 
 local ADDON, ns = ...
 
@@ -13,31 +19,20 @@ local report = ns.report
 local BagHeader = {}
 ns.BagHeader = BagHeader
 
-local holders = {}
+local sets = {}   -- frame -> { list = { tab, tab, tab }, byKey = { bank = tab, ... } }
 local hooked = {}
 
-local BAND = 26
-local ICON = 20
-local ICON_GAP = 3
-
--- Each button tries the game's own atlas first and falls back to an icon file that every client
--- carries. The bag icon is the one the game's own bag button uses.
--- The fallback lists never share a file, so the three stay telling apart even with no atlas.
-local BUTTONS = {
-	{ key = "bank", mode = "bank", label = "Saved bank", atlas = "Banker",
+-- Left to right. Each tries the game's own atlas first and falls back to an icon file that every
+-- client carries; the bag icon is the one the game's own bag button uses. The fallback lists
+-- never share a file, so the three stay telling apart even with no atlas.
+local TABS = {
+	{ key = "bank", label = "Saved bank", atlas = "Banker",
 		icons = { "Interface\\Icons\\INV_Misc_Coin_01", "Interface\\Icons\\INV_Misc_Coin_02" } },
-	{ key = "bags", mode = "bags", label = "Saved bags",
+	{ key = "bags", label = "Saved bags",
 		icons = { "Interface\\Icons\\INV_Misc_Bag_08", "Interface\\Icons\\INV_Misc_Bag_10" } },
-	{ key = "guild", mode = "guild", label = "Saved guild bank", atlas = "GuildBanker",
+	{ key = "guild", label = "Saved guild bank", atlas = "GuildBanker",
 		icons = { "Interface\\Icons\\INV_Box_01", "Interface\\Icons\\INV_Crate_01" } },
 }
-
--- SetAtlas does not raise for a name the client lacks, so the atlas table is asked first.
-local function HasAtlas(atlas)
-	if not (C_Texture and C_Texture.GetAtlasInfo) then return false end
-	local ok, info = pcall(C_Texture.GetAtlasInfo, atlas)
-	return ok and info ~= nil
-end
 
 local function IsBackpack(frame)
 	if frame == _G.ContainerFrameCombinedBags then return true end
@@ -68,112 +63,87 @@ local function CountItems(record, isGuild)
 	return total
 end
 
--- What each button reports about itself when hovered.
+local function Plural(n, word)
+	return n .. " " .. word .. (n == 1 and "" or "s")
+end
+
+-- What each tab says about itself when hovered, and whether it has anything to show.
 local function Describe(spec)
-	local entry = ns.Vault.CharRecord(ns.Who())
 	if spec.key == "bank" then
-		local record = entry and entry.bank
-		if record then return CountItems(record) .. " items, checked " .. Ago(record), true end
-		return "Nothing saved yet. Open your bank once.", false
+		local mine = ns.Vault.CharRecord(ns.Who())
+		mine = mine and mine.bank
+		local others = #ns.Vault.Characters("bank") - (mine and 1 or 0)
+		local text = mine and ("Yours: " .. CountItems(mine) .. " items, checked " .. Ago(mine) .. ".")
+			or "Yours is not saved yet: open your bank once."
+		if others > 0 then text = text .. " And " .. Plural(others, "other character") .. "." end
+		return text, (mine or others > 0) and true or false
 	elseif spec.key == "bags" then
-		local record = entry and entry.bags
-		local others = #ns.Vault.Characters("bags")
-		if record then
-			return CountItems(record) .. " items, checked " .. Ago(record)
-				.. (others > 1 and (", and " .. (others - 1) .. " other character" .. (others == 2 and "" or "s")) or ""), true
+		-- The saved bags are the other characters': this one's are the backpack in front of it.
+		local others = ns.VaultUI and ns.VaultUI.Characters("bags") or {}
+		if #others == 0 then
+			return "No other characters saved yet. Log in on another character and its bags are saved a few seconds later.", false
 		end
-		return "Read a few seconds after you log in.", false
+		if #others == 1 then
+			return ns.ShortLabel(others[1].who) .. "'s bags, checked " .. Ago(others[1].entry.bags) .. ".", true
+		end
+		return Plural(#others, "other character") .. "' bags.", true
 	else
 		local key, record = GuildRecord()
-		if record then return key .. ": " .. CountItems(record, true) .. " items, checked " .. Ago(record), true end
-		return "Nothing saved yet. Open the guild bank once.", false
+		if record then return key .. ": " .. CountItems(record, true) .. " items, checked " .. Ago(record) .. ".", true end
+		return "Nothing saved yet: open the guild bank once.", false
 	end
 end
 
 local function PaintIcon(texture, spec)
-	if spec.atlas and HasAtlas(spec.atlas) and pcall(texture.SetAtlas, texture, spec.atlas) then
-		report["bag icon " .. spec.key] = "atlas " .. spec.atlas
+	if spec.atlas and ns.HasAtlas(spec.atlas) and pcall(texture.SetAtlas, texture, spec.atlas) then
+		report["backpack tab icon " .. spec.key] = "atlas " .. spec.atlas
 		return
 	end
 	for _, path in ipairs(spec.icons) do
 		if ns.TextureExists(path) then
 			texture:SetTexture(path)
 			texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
-			report["bag icon " .. spec.key] = path
+			report["backpack tab icon " .. spec.key] = path
 			return
 		end
 	end
 	texture:SetColorTexture(0.6, 0.5, 0.3, 0.9)
-	report["bag icon " .. spec.key] = "painted (no art resolved)"
+	report["backpack tab icon " .. spec.key] = "painted (no art resolved)"
 end
 
-local function BuildHolder(frame)
-	local holder = CreateFrame("Frame", nil, frame)
-	holder.csOurs = true
-	holder:SetSize(#BUTTONS * ICON + (#BUTTONS - 1) * ICON_GAP, ICON)
-	holder.buttons = {}
-
-	local x = 0
-	for _, spec in ipairs(BUTTONS) do
-		local button = CreateFrame("Button", nil, holder)
-		button.csOurs = true
-		button:SetSize(ICON, ICON)
-		button:SetPoint("LEFT", x, 0)
-		x = x + ICON + ICON_GAP
-
-		local backing = button:CreateTexture(nil, "BACKGROUND")
-		backing:SetPoint("TOPLEFT", -1, 1)
-		backing:SetPoint("BOTTOMRIGHT", 1, -1)
-		backing:SetColorTexture(0, 0, 0, 0.7)
-
-		local icon = button:CreateTexture(nil, "ARTWORK")
-		icon:SetAllPoints()
-		PaintIcon(icon, spec)
-		button.icon = icon
-
-		local hover = button:CreateTexture(nil, "HIGHLIGHT")
-		hover:SetAllPoints()
-		hover:SetColorTexture(1, 1, 1, 0.2)
-
-		button:SetScript("OnClick", function()
-			if ns.VaultUI then ns.VaultUI.Show(spec.mode) end
+local function BuildSet(frame)
+	local set = { list = {}, byKey = {} }
+	for index, spec in ipairs(TABS) do
+		local tab = ns.CreateTab(frame)
+		tab.csHeaderKind = spec.key
+		PaintIcon(tab.icon, spec)
+		tab:SetScript("OnClick", function(self)
+			self:SetChecked(false)
+			if ns.VaultUI then ns.VaultUI.Toggle(spec.key) end
 		end)
-		button:SetScript("OnEnter", function(self)
-			GameTooltip:SetOwner(self, "ANCHOR_BOTTOM")
+		tab:SetScript("OnEnter", function(self)
+			GameTooltip:SetOwner(self, "ANCHOR_TOP")
 			GameTooltip:SetText(spec.label, 1, 1, 1)
 			local detail, has = Describe(spec)
 			GameTooltip:AddLine(detail, has and 0.7 or 0.8, has and 0.85 or 0.8, has and 1 or 0.8, true)
 			GameTooltip:Show()
 		end)
-		button:SetScript("OnLeave", function() GameTooltip:Hide() end)
-		holder.buttons[spec.key] = button
+		tab:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		set.list[index] = tab
+		set.byKey[spec.key] = tab
 	end
-
-	holders[frame] = holder
-	return holder
+	sets[frame] = set
+	return set
 end
 
--- Finds somewhere in the header this can sit without covering one of the game's own buttons.
-local function PlaceHolder(frame, holder, width)
-	local left, bottom, frameWidth = ns.Windows.Measure(frame)
-	local ratio = ns.Windows.Ratio(frame)
-	if left and frameWidth and frameWidth > 0 then
-		local gaps = ns.Windows.HeaderGaps(frame, BAND, width + 8)
-		-- The rightmost clear stretch, which on a bag window is the space before the close button.
-		local pick = gaps[#gaps]
-		if pick then
-			holder:ClearAllPoints()
-			local inset = (pick[2] - pick[1] - width) / 2
-			holder:SetPoint("TOPLEFT", frame, "TOPLEFT", (pick[1] - left + inset) * ratio, -4 * ratio)
-			report["bag buttons"] = "in the header"
-			return true
-		end
+-- Chosen while the saved window is open, dimmed while there is nothing saved for it.
+local function Paint(set)
+	for index, spec in ipairs(TABS) do
+		local tab = set.list[index]
+		local _, has = Describe(spec)
+		tab:SetDimmed(not has)
+		tab:SetChosen(ns.VaultUI and ns.VaultUI.IsShown(spec.key))
 	end
-	-- The header is full, so they go just above the window where nothing else is drawn.
-	holder:ClearAllPoints()
-	holder:SetPoint("BOTTOMLEFT", frame, "TOPLEFT", 8, 2)
-	report["bag buttons"] = "above the window (the header had no room)"
-	return false
 end
 
 function BagHeader.Update(frame)
@@ -182,37 +152,44 @@ function BagHeader.Update(frame)
 	if IsBackpack(frame) then ns.HookMoneyFrame(frame, "bags") end
 
 	-- The game hands its bag frames out as it needs them, so the frame that was the backpack last
-	-- time can be bag 1 this time; a holder built on it then has to go away.
+	-- time can be bag 1 this time; the tabs built on it then have to go away.
 	local wanted = ns.db.enabled and ns.db.vault.bagButtons and IsBackpack(frame)
-	local holder = holders[frame]
+	local set = sets[frame]
 
 	if not wanted then
-		if holder then holder:Hide() end
+		if set then for _, tab in ipairs(set.list) do tab:Hide() end end
 		return
 	end
-	if not holder then holder = BuildHolder(frame) end
+	if not set then set = BuildSet(frame) end
 
-	-- A button with nothing behind it is dimmed rather than hidden, so the row keeps its shape.
-	for _, spec in ipairs(BUTTONS) do
-		local _, has = Describe(spec)
-		holder.buttons[spec.key].icon:SetAlpha(has and 1 or 0.4)
+	-- Hung again every time, so they stay one level under the window whatever level the game
+	-- has raised it to.
+	for index, tab in ipairs(set.list) do
+		ns.HangTab(tab, frame, index - 1, 0)
+		tab:Show()
 	end
+	Paint(set)
+	report["backpack tabs"] = "above the top edge of " .. tostring(frame.GetName and frame:GetName() or "the backpack")
+end
 
-	local width = holder:GetWidth() or 66
-	if frame:IsShown() then PlaceHolder(frame, holder, width) end
-	-- Above the drag strip, which covers this same band and would take the clicks otherwise.
-	ns.RaiseOver(holder, frame, 6)
-	local level = (holder:GetFrameLevel() or 1) + 1
-	for _, button in pairs(holder.buttons) do pcall(button.SetFrameLevel, button, level) end
-	holder:Show()
+-- The chosen and dimmed states again, after a saved window opens or closes or a snapshot lands.
+function BagHeader.Refresh()
+	for _, set in pairs(sets) do
+		if set.list[1] and set.list[1]:IsShown() then Paint(set) end
+	end
 end
 
 function BagHeader.Apply()
-	for frame in pairs(holders) do pcall(BagHeader.Update, frame) end
+	for frame in pairs(sets) do pcall(BagHeader.Update, frame) end
 	BagHeader.Sweep()
 end
 
--- Hooks every bag window once, so the buttons appear whether or not that window is being moved.
+-- The tabs on a bag window, keyed "bank", "bags" and "guild", or nil if it has none.
+function BagHeader.Tabs(frame)
+	return sets[frame] and sets[frame].byKey or nil
+end
+
+-- Hooks every bag window once, so the tabs appear whether or not that window is being moved.
 function BagHeader.Sweep()
 	-- The bank's money readout too, once the bank window exists.
 	if _G.BankFrame then ns.HookMoneyFrame(_G.BankFrame, "bank") end

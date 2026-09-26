@@ -236,7 +236,7 @@ local function BuildVaultPage(parent)
 	local layout = NewLayout(parent)
 	Header(layout, "Bank snapshots")
 
-	Note(layout, "What your bank and your guild bank hold is saved every time you open them, and your bags a few seconds after you log in and whenever they settle. Every character on this account is remembered, and the saved bank has a tab for each, so any character's bank or bags can be looked at from anywhere.", 0, 4)
+	Note(layout, "What your bank and your guild bank hold is saved every time you open them, and your bags a few seconds after you log in and whenever they settle. Every character on this account is remembered. The saved bank, the saved bags and the saved guild bank are windows of their own that can be open together, with a tab per character, so any character's bank, or another character's bags, can be looked at from anywhere.", 0, 5)
 
 	Check(layout, "Remember the bank when I open it", nil,
 		function() return ns.db.vault.autoBank end,
@@ -246,7 +246,7 @@ local function BuildVaultPage(parent)
 		function() return ns.db.vault.autoGuild end,
 		function(value) ns.db.vault.autoGuild = value end)
 
-	Check(layout, "Icons on the bag window", "Three icons in the header of your backpack: the saved bank, the saved bags and the saved guild bank. They go somewhere the game is not already using.",
+	Check(layout, "Tabs above the backpack", "Three tabs along the top of your backpack, the same as the character tabs: the saved bank, the saved bags and the saved guild bank. A tab glows while its window is open, and is dimmed while there is nothing saved for it.",
 		function() return ns.db.vault.bagButtons end,
 		function(value) ns.db.vault.bagButtons = value end)
 
@@ -309,7 +309,7 @@ local function BuildAboutPage(parent)
 	local lines = {
 		"/banktabs opens these options",
 		"/banktabs window opens them in a window of their own",
-		"/banktabs bank, bags or guild open the saved bank, bags or guild bank",
+		"/banktabs bank, bags or guild open the saved bank, bags or guild bank, each a window of its own",
 		"/banktabs snapshot saves what is open in front of you",
 		"/banktabs gold lists every character's gold",
 		"/banktabs lock or unlock turns every window switch off or on",

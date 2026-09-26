@@ -238,6 +238,16 @@ GameTooltip = obj("GameTooltip")
 DEFAULT_CHAT_FRAME = { AddMessage = function(_, m) CHAT[#CHAT + 1] = m if VERBOSE then print(m) end end }
 CHAT = {}
 SlashCmdList = {} UISpecialFrames = {} tinsert = table.insert
+-- Escape, as the game does it: every shown window named in UISpecialFrames is hidden, the list
+-- walked with pairs, so an addon may only overwrite an entry while this runs.
+function CloseSpecialWindows()
+  local found
+  for _, name in pairs(UISpecialFrames) do
+    local f = _G[name]
+    if f and f.IsShown and f:IsShown() then f:Hide() found = 1 end
+  end
+  return found
+end
 time = os.time
 date = os.date
 
@@ -1355,7 +1365,7 @@ fire("GUILDBANKFRAME_CLOSED")
 GuildBankFrame:Hide()
 
 -- ------------------------------------------------------------------
--- 11. The vault window: a replica of the bank
+-- 11. The saved bank: a replica of the bank
 -- ------------------------------------------------------------------
 local CLASS_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
 local vault
@@ -1443,15 +1453,23 @@ check("the others follow by name", list[2] and list[2].who == "Choham - Voidpact
 check("only characters with bags saved are listed for bags", #ns.Vault.Characters("bags") == 2, #ns.Vault.Characters("bags"))
 check("with no kind every character is listed", #ns.Vault.Characters() == 3, #ns.Vault.Characters())
 
+local function Listed(name)
+  local n = 0
+  for _, v in pairs(UISpecialFrames) do if v == name then n = n + 1 end end
+  return n
+end
+
+check("no saved window is built before it is first opened", BankTabsBank == nil and BankTabsBags == nil and BankTabsGuild == nil)
 ns.VaultUI.Show("bank")
-vault = BankTabsVault
-check("the vault window opened", vault ~= nil and vault.shown == true)
-check("it wears a portrait window", (ns.report["vault panel"] or "") ~= "", ns.report["vault panel"])
-check("the report calls it a replica", ns.report["vault window"] == "ok, replica", ns.report["vault window"])
-check("the window is titled like the bank", vault.csTitle and vault.csTitle.text == "Bank", vault.csTitle and vault.csTitle.text)
-check("it opened in bank mode", ns.VaultUI.Mode() == "bank", ns.VaultUI.Mode())
-check("looking at this character", ns.VaultUI.Selected() == me, ns.VaultUI.Selected())
-check("it closes on escape", UISpecialFrames[#UISpecialFrames] == "BankTabsVault")
+vault = BankTabsBank
+check("the saved bank opened", vault ~= nil and vault.shown == true)
+check("it wears a portrait window", (ns.report["saved bank panel"] or "") ~= "", ns.report["saved bank panel"])
+check("the report calls it a replica", ns.report["saved bank window"] == "ok, replica", ns.report["saved bank window"])
+check("the window is titled with the character's name: Vatik's Bank", vault.csTitle and vault.csTitle.text == "Vatik's Bank", vault.csTitle and vault.csTitle.text)
+check("only the saved bank opened; the other two are not even built", ns.VaultUI.IsShown("bank") and not ns.VaultUI.IsShown("bags")
+  and not ns.VaultUI.IsShown("guild") and BankTabsBags == nil and BankTabsGuild == nil)
+check("looking at this character", ns.VaultUI.Selected("bank") == me, ns.VaultUI.Selected("bank"))
+check("it closes on escape", Listed("BankTabsBank") == 1)
 
 -- Without Enum the classic ids give three main containers, so the real tab has to be picked from
 -- the side column first. With Enum there is one main tab and no column.
@@ -1575,8 +1593,8 @@ else
 end
 
 -- Searching dims what does not match, exactly as the real bank does, rather than hiding it.
-BankTabsVaultSearch:SetText("wool")
-BankTabsVaultSearch.scripts.OnTextChanged(BankTabsVaultSearch)
+BankTabsBankSearch:SetText("wool")
+BankTabsBankSearch.scripts.OnTextChanged(BankTabsBankSearch)
 grid = Cells(37)
 check("searching keeps every cell on screen", #grid == 48, #grid)
 local wool = CellWith(grid, 2592)
@@ -1586,15 +1604,15 @@ check("a non-match is dimmed to a quarter, not hidden", linen and linen.shown an
 local dimCount = 0
 for _, c in ipairs(grid) do if c.csItem and c:GetAlpha() == 0.25 then dimCount = dimCount + 1 end end
 check("every other item is dimmed", dimCount == 3, dimCount)
-BankTabsVaultSearch:SetText("WOOL")
-BankTabsVaultSearch.scripts.OnTextChanged(BankTabsVaultSearch)
+BankTabsBankSearch:SetText("WOOL")
+BankTabsBankSearch.scripts.OnTextChanged(BankTabsBankSearch)
 check("the search ignores case", CellWith(Cells(37), 2592):GetAlpha() == 1 and CellWith(Cells(37), 2589):GetAlpha() == 0.25)
-BankTabsVaultSearch:SetText("")
-BankTabsVaultSearch.scripts.OnTextChanged(BankTabsVaultSearch)
+BankTabsBankSearch:SetText("")
+BankTabsBankSearch.scripts.OnTextChanged(BankTabsBankSearch)
 local bright = true
 for _, c in ipairs(Cells(37)) do if c:GetAlpha() ~= 1 then bright = false end end
 check("clearing the search brightens everything", bright)
-BankTabsVaultSearch.scripts.OnEscapePressed(BankTabsVaultSearch)
+BankTabsBankSearch.scripts.OnEscapePressed(BankTabsBankSearch)
 
 -- Shift-clicking an item drops its link into chat.
 INSERTED = nil
@@ -1608,7 +1626,10 @@ check("the item tooltip runs", pcall(first.scripts.OnEnter, first) and pcall(sec
 -- 11a. The guild bank replica: seven columns of fourteen, filled down each column
 -- ------------------------------------------------------------------
 ns.VaultUI.Show("guild")
-check("the window switches to guild mode", ns.VaultUI.Mode() == "guild")
+vault = BankTabsGuild
+check("the saved guild bank opens as a window of its own, the saved bank staying open", BankTabsGuild ~= nil and BankTabsGuild.shown == true
+  and BankTabsBank.shown == true and BankTabsGuild ~= BankTabsBank)
+check("it answers for the guild it shows", ns.VaultUI.Selected("guild") == "Night Owls - Voidpact", ns.VaultUI.Selected("guild"))
 check("the title names the guild", vault.csTitle.text == "Guild Bank: Night Owls", vault.csTitle.text)
 grid = Cells(37)
 check("a guild tab is drawn as 98 cells", #grid == 98, #grid)
@@ -1640,21 +1661,38 @@ check("and it is the one outlined now", side[3].border.shown == true and side[1]
 side[2].scripts.OnClick(side[2])
 local ruby = CellWith(Cells(37), 7910)
 check("tab two shows the star ruby in slot 3, third down", ruby ~= nil and ruby == CellAt(Cells(37), GridXY(0, 2)))
-check("the character tabs are hidden in guild mode", #CharTabs() == 0, #CharTabs())
-check("there is no Bag Slots row in guild mode", #BagRow() == 0 and TextOn(vault, "Bag Slots:") == nil)
+check("the guild bank has no character tabs", #CharTabs() == 0, #CharTabs())
+check("and no Bag Slots row", #BagRow() == 0 and TextOn(vault, "Bag Slots:") == nil)
 check("the guild money is shown", TextOn(vault, ns.Money(9876543)) ~= nil)
 
 -- ------------------------------------------------------------------
 -- 11b. The bags replica: the combined backpack, filled from the bottom right
 -- ------------------------------------------------------------------
 ns.VaultUI.Show("bags")
-check("the window switches to bags mode", ns.VaultUI.Mode() == "bags")
-check("it is titled like the combined backpack", vault.csTitle.text == "Combined Backpack", vault.csTitle.text)
+vault = BankTabsBags
+check("the saved bags open as a third window, the other two staying open", BankTabsBags ~= nil and BankTabsBags.shown == true
+  and BankTabsBank.shown == true and BankTabsGuild.shown == true)
+-- This character's bags are the real backpack in front of it, so the saved bags are the others'.
+check("they open on the first other character with bags saved", ns.VaultUI.Selected("bags") == CHOHAM, ns.VaultUI.Selected("bags"))
+check("titled with that character's name: Choham's Backpack", vault.csTitle.text == "Choham's Backpack", vault.csTitle.text)
+check("with no tab for this character", #CharTabs() == 1 and CharTabs()[1].csWho == CHOHAM, #CharTabs())
+ns.VaultUI.Show("bags", me)
+check("and this character is never shown, even when asked for", ns.VaultUI.Selected("bags") == CHOHAM and vault.csTitle.text == "Choham's Backpack",
+  ns.VaultUI.Selected("bags"))
+
+-- The combined backpack's shape, on an alt carrying exactly this character's bags.
+local OLDTOON = "Oldtoon - Voidpact"
+ns.vault.chars[OLDTOON].bags = ns.DeepCopy(ns.vault.chars[me].bags)
+ns.VaultUI.Show("bags", OLDTOON)
+check("Show can name the character, and the title follows it: Oldtoon's Backpack", ns.VaultUI.Selected("bags") == OLDTOON
+  and vault.csTitle.text == "Oldtoon's Backpack", vault.csTitle.text)
+check("both other characters have a tab now, still not this one", #CharTabs() == 2 and CharTabs()[1].csWho == CHOHAM
+  and CharTabs()[2].csWho == OLDTOON, #CharTabs())
 grid = Cells(37)
 local ORDINARY = 16 + 16 + 16 + 14 + 12
 local EXPECT_CELLS = ORDINARY + (NO_ENUM and 0 or 12)
 check("every carried slot is drawn", #grid == EXPECT_CELLS, #grid)
-check("that is the sum of the bag sizes", #grid == ns.vault.chars[me].bags.slots)
+check("that is the sum of the bag sizes", #grid == ns.vault.chars[OLDTOON].bags.slots)
 local hearth = CellWith(grid, 6948)
 check("backpack slot 1 is the bottom right cell of the grid", hearth ~= nil and hearth == CellAt(grid, GridXY(9, 7)),
   hearth and (hearth.points[1][4] .. "," .. hearth.points[1][5]))
@@ -1692,11 +1730,16 @@ else
 end
 check("no Bag Slots row for the bags", #BagRow() == 0)
 check("no side tabs for the bags", #SideTabs() == 0)
+ns.vault.chars[OLDTOON].bags = nil
+ns.VaultUI.Refresh()
+check("a character whose bags are forgotten falls back to the first other one", ns.VaultUI.Selected("bags") == CHOHAM and #CharTabs() == 1,
+  ns.VaultUI.Selected("bags"))
 
 -- ------------------------------------------------------------------
 -- 11c. The character tabs along the top
 -- ------------------------------------------------------------------
 ns.VaultUI.Show("bank")
+vault = BankTabsBank
 local ctabs = CharTabs()
 check("three characters have a bank saved, so three tabs", #ctabs == 3, #ctabs)
 local sized, hung = true, true
@@ -1706,6 +1749,9 @@ for i, t in ipairs(ctabs) do
   if not (p and p[1] == "BOTTOMLEFT" and p[2] == vault and p[3] == "TOPLEFT" and near(p[4], 64 + (i - 1) * 45) and near(p[5], -8)) then hung = false end
 end
 check("the tabs are the spellbook's size", sized)
+local sharedKind = true
+for _, t in ipairs(ctabs) do if not t.csTab then sharedKind = false end end
+check("and come from the shared tab builder", sharedKind)
 check("they hang off the top edge of the window, in a row", hung)
 check("the first is this character", ctabs[1] and ctabs[1].csWho == me, ctabs[1] and ctabs[1].csWho)
 check("and is the chosen one", ctabs[1] and ctabs[1].icon:GetAlpha() == 1 and ctabs[2].icon:GetAlpha() == 0.85)
@@ -1718,11 +1764,11 @@ check("the warrior gets the warrior's corner of the sheet", ctabs[2] and ctabs[2
 check("a class the sheet does not know falls back to a plain icon", ctabs[3] ~= nil and ctabs[3].icon.texture ~= CLASS_SHEET
   and (ctabs[3].icon.texture or ""):find("Interface") ~= nil, ctabs[3] and ctabs[3].icon.texture)
 if BARE then
-  check("with no spellbook atlas the tabs use a plain bevel", ns.report["character tab art"] == "plain bevel (no spellbook atlas on this client)",
-    ns.report["character tab art"])
+  check("with no spellbook atlas the tabs use a plain bevel", ns.report["tab art"] == "plain bevel (no spellbook atlas on this client)",
+    ns.report["tab art"])
   check("and no atlas texture was made", ctabs[1].frameTex == nil)
 else
-  check("the tabs wear the spellbook atlas", ns.report["character tab art"] == "spellbook atlas", ns.report["character tab art"])
+  check("the tabs wear the spellbook atlas", ns.report["tab art"] == "spellbook atlas", ns.report["tab art"])
   check("the chosen tab wears the glowing frame, the rest the plain one", ctabs[1].frameTex and ctabs[1].frameTex.atlas == "spellbook-Tab-Frame-Glow-C60"
     and ctabs[2].frameTex.atlas == "spellbook-Tab-Frame-C60", ctabs[1].frameTex and ctabs[1].frameTex.atlas)
   check("the glow gradient shows only under the chosen tab", ctabs[1].glow and ctabs[1].glow.shown == true and ctabs[2].glow.shown == false)
@@ -1732,19 +1778,20 @@ check("the tab tooltip runs", ctabs[3] ~= nil and pcall(ctabs[1].scripts.OnEnter
 -- The class icon is clipped to the tab window's shape, so it cannot show through the frame's
 -- open corners. Without the mask atlas (--bare) the icon keeps its corners and the report says so.
 if BARE then
-  check("with no mask atlas the tabs say so", (ns.report["character tab mask"] or ""):find("none") ~= nil, ns.report["character tab mask"])
+  check("with no mask atlas the tabs say so", (ns.report["tab mask"] or ""):find("none") ~= nil, ns.report["tab mask"])
 else
   local tabMask = ctabs[1].icon.csMask
   check("the class icon wears the tab shaped mask", tabMask ~= nil and tabMask.atlas == "UI-HUD-ActionBar-IconFrame-Mask", tabMask and tabMask.atlas)
   check("drawn a quarter larger than the icon on every side", tabMask and tabMask.points[1] and near(tabMask.points[1][4], -0.26 * 33, 0.01)
     and near(tabMask.points[1][5], 0.26 * 33, 0.01) and tabMask.points[1][2] == ctabs[1].icon)
-  check("the report names the mask", ns.report["character tab mask"] == "UI-HUD-ActionBar-IconFrame-Mask", ns.report["character tab mask"])
+  check("the report names the mask", ns.report["tab mask"] == "UI-HUD-ActionBar-IconFrame-Mask", ns.report["tab mask"])
 end
 check("the tab tooltip has something to say", GameTooltip ~= nil)
 
 local played = #PLAYED
 ctabs[2].scripts.OnClick(ctabs[2])
-check("clicking a tab changes who is being looked at", ns.VaultUI.Selected() == CHOHAM, ns.VaultUI.Selected())
+check("clicking a tab changes who is being looked at", ns.VaultUI.Selected("bank") == CHOHAM, ns.VaultUI.Selected("bank"))
+check("and the title follows: Choham's Bank", vault.csTitle.text == "Choham's Bank", vault.csTitle.text)
 grid = Cells(37)
 check("the grid now shows that character's bank", ItemCount(grid) == 2, ItemCount(grid))
 local c0, c4 = CellAt(grid, BankXY(0, 0)), CellAt(grid, BankXY(4, 0))
@@ -1759,14 +1806,16 @@ if not BARE then
   check("the portrait shows their class rather than our face", portrait and portrait.texture == CLASS_SHEET and portrait.texCoord[2] == 0.25)
 end
 
-ns.VaultUI.Show("bags")
-check("bags mode keeps the chosen character", ns.VaultUI.Selected() == CHOHAM)
-check("only characters with bags saved get a tab in bags mode", #CharTabs() == 2, #CharTabs())
-check("and the grid is theirs", ItemCount(Cells(37)) == 1 and #Cells(37) == 16)
-ns.VaultUI.Show("guild")
-check("guild mode hides the character tabs", #CharTabs() == 0)
+-- The saved bags are a window of their own: the bank's choice does not reach them.
+vault = BankTabsBags
+check("the saved bags keep their own character", ns.VaultUI.Selected("bags") == CHOHAM and vault.csTitle.text == "Choham's Backpack")
+check("and list only the other characters with bags saved", #CharTabs() == 1 and CharTabs()[1].csWho == CHOHAM, #CharTabs())
+check("with that character's grid", ItemCount(Cells(37)) == 1 and #Cells(37) == 16)
+vault = BankTabsGuild
+check("the guild bank still has no character tabs", #CharTabs() == 0)
+vault = BankTabsBank
 ns.VaultUI.Show("bank", me)
-check("Show can name the character to look at", ns.VaultUI.Selected() == me)
+check("Show can name the character to look at", ns.VaultUI.Selected("bank") == me and vault.csTitle.text == "Vatik's Bank")
 check("and the grid is ours again", ItemCount(Cells(37)) == (NO_ENUM and 1 or 4))
 if not BARE then
   local portrait = vault.PortraitContainer and vault.PortraitContainer.portrait
@@ -1774,7 +1823,8 @@ if not BARE then
 end
 ctabs = CharTabs()
 ctabs[3].scripts.OnClick(ctabs[3])
-check("the old style record can be looked at", ns.VaultUI.Selected() == "Oldtoon - Voidpact" and ItemCount(Cells(37)) == 1)
+check("the old style record can be looked at", ns.VaultUI.Selected("bank") == "Oldtoon - Voidpact" and ItemCount(Cells(37)) == 1)
+check("titled with the name kept in its key: Oldtoon's Bank", vault.csTitle.text == "Oldtoon's Bank", vault.csTitle.text)
 check("with its item in its slot", CellAt(Cells(37), BankXY(5, 0)) and CellAt(Cells(37), BankXY(5, 0)).csItem ~= nil)
 check("a record with no bag slots dims the whole row", BagRow()[1]:GetAlpha() == 0.45)
 
@@ -1782,10 +1832,203 @@ check("a record with no bag slots dims the whole row", BagRow()[1]:GetAlpha() ==
 local choham = ns.vault.chars[CHOHAM]
 ctabs[2].scripts.OnClick(ctabs[2])
 ns.Vault.Forget("char", CHOHAM)
-check("a forgotten character falls back to this one", ns.VaultUI.Selected() == me and #CharTabs() == 2, ns.VaultUI.Selected())
+check("a forgotten character falls back to this one", ns.VaultUI.Selected("bank") == me and #CharTabs() == 2, ns.VaultUI.Selected("bank"))
 ns.vault.chars[CHOHAM] = choham
 ns.VaultUI.Refresh()
 check("and comes back when restored", #CharTabs() == 3)
+
+do -- scope: 11c2. Three saved windows, open at once
+local function HideAll() for _, kind in ipairs({ "bank", "bags", "guild" }) do ns.VaultUI.Hide(kind) end end
+local function Rect(f) return ns.Windows.Measure(f) end
+local function InFront() local open = ns.VaultUI.Open() return open[#open] end
+local function Clear(al, aw, cl, cw) return al + aw <= cl + 0.5 or cl + cw <= al + 0.5 end
+-- Drags a saved window by its title so its top left corner lands at (left, top).
+local function DragWindow(f, left, top)
+  f.scripts.OnDragStart(f)
+  local _, _, _, h = ns.Windows.Measure(f)
+  f:ClearAllPoints()
+  f:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", left, top - h)
+  f.scripts.OnDragStop(f)
+end
+
+HideAll()
+check("closing them empties the list of open windows", #ns.VaultUI.Open() == 0 and not ns.VaultUI.IsShown("bank"))
+
+-- A third character with bags, so the bags window has a choice to keep.
+local RELIC = "Relic - Voidpact"
+ns.vault.chars[RELIC] = { class = "PRIEST", level = 12, name = "Relic", realm = "Voidpact",
+  bags = { time = time() - 600, reason = "logout", money = 70, items = 1, slots = 16, free = 15,
+    containers = { { id = 0, label = "Backpack", slots = 16, items = {
+      { slot = 1, id = 2589, icon = 2689, count = 3, quality = 1, link = link(2589, "Linen Cloth"), name = "Linen Cloth" } } } } } }
+ns.VaultUI.Show("bank", OLDTOON)
+ns.VaultUI.Show("bags", RELIC)
+ns.VaultUI.Show("guild")
+check("all three saved windows are open at once", BankTabsBank.shown and BankTabsBags.shown and BankTabsGuild.shown)
+check("each on its own character", ns.VaultUI.Selected("bank") == OLDTOON and ns.VaultUI.Selected("bags") == RELIC
+  and ns.VaultUI.Selected("guild") == GUILD_KEY)
+check("and each title says whose it is", BankTabsBank.csTitle.text == "Oldtoon's Bank" and BankTabsBags.csTitle.text == "Relic's Backpack"
+  and BankTabsGuild.csTitle.text == "Guild Bank: Night Owls")
+
+-- A character tab on one window leaves the others alone.
+vault = BankTabsBank
+CharTabs()[2].scripts.OnClick(CharTabs()[2])
+check("choosing a character on the bank leaves the bags where they were", ns.VaultUI.Selected("bank") == CHOHAM
+  and ns.VaultUI.Selected("bags") == RELIC)
+vault = BankTabsBags
+CharTabs()[1].scripts.OnClick(CharTabs()[1])
+check("and choosing one on the bags leaves the bank", ns.VaultUI.Selected("bags") == CHOHAM and ns.VaultUI.Selected("bank") == CHOHAM
+  and BankTabsBags.csTitle.text == "Choham's Backpack")
+CharTabs()[2].scripts.OnClick(CharTabs()[2])
+check("the bags title follows their own choice", ns.VaultUI.Selected("bags") == RELIC and BankTabsBags.csTitle.text == "Relic's Backpack")
+
+-- Each window has its own search.
+BankTabsBankSearch:SetText("copper")
+BankTabsBankSearch.scripts.OnTextChanged(BankTabsBankSearch)
+vault = BankTabsBank
+check("a search on the bank dims the bank", CellWith(Cells(37), 2770):GetAlpha() == 1 and CellWith(Cells(37), 818):GetAlpha() == 0.25)
+vault = BankTabsBags
+check("and leaves the bags bright", CellWith(Cells(37), 2589):GetAlpha() == 1)
+BankTabsBagsSearch:SetText("wool")
+BankTabsBagsSearch.scripts.OnTextChanged(BankTabsBagsSearch)
+check("the bags search dims the bags", CellWith(Cells(37), 2589):GetAlpha() == 0.25)
+-- Everything redrawn, as a snapshot would: each window still answers to its own search.
+ns.VaultUI.Refresh()
+check("the bags still answer to theirs after a redraw", CellWith(Cells(37), 2589):GetAlpha() == 0.25)
+vault = BankTabsBank
+check("and the bank keeps its own", BankTabsBankSearch:GetText() == "copper" and CellWith(Cells(37), 2770):GetAlpha() == 1
+  and CellWith(Cells(37), 818):GetAlpha() == 0.25)
+BankTabsBankSearch:SetText("") BankTabsBankSearch.scripts.OnTextChanged(BankTabsBankSearch)
+BankTabsBagsSearch:SetText("") BankTabsBagsSearch.scripts.OnTextChanged(BankTabsBagsSearch)
+ns.VaultUI.Hide("bags")
+ns.VaultUI.Show("bags")
+check("a window closed and opened again is still on the character it was left on", ns.VaultUI.Selected("bags") == RELIC)
+
+-- A new snapshot redraws every window that is open.
+table.insert(ns.vault.chars[CHOHAM].bank.containers[1].items,
+  { slot = 10, id = 4306, icon = 4406, count = 2, quality = 1, link = link(4306, "Silk Cloth"), name = "Silk Cloth" })
+table.insert(ns.vault.chars[RELIC].bags.containers[1].items,
+  { slot = 2, id = 2592, icon = 2692, count = 1, quality = 1, link = link(2592, "Wool Cloth"), name = "Wool Cloth" })
+ns.Vault.Changed()
+vault = BankTabsBank
+check("a new snapshot redraws the open bank", CellWith(Cells(37), 4306) ~= nil)
+vault = BankTabsBags
+check("and the open bags with it", CellWith(Cells(37), 2592) ~= nil)
+table.remove(ns.vault.chars[CHOHAM].bank.containers[1].items)
+
+-- Escape closes the one opened last first, as the game does with its own panels.
+HideAll()
+ns.VaultUI.Show("bank")
+ns.VaultUI.Show("guild")
+ns.VaultUI.Show("bags")
+check("one entry names the saved window in front for Escape", Listed("BankTabsBags") == 1
+  and Listed("BankTabsBank") + Listed("BankTabsGuild") == 0)
+check("and the report says which are open and which goes first", (ns.report["saved windows"] or ""):find("^open: bank, guild, bags; Escape closes bags first") ~= nil,
+  ns.report["saved windows"])
+CloseSpecialWindows()
+check("Escape closes the one opened last first", not BankTabsBags.shown and BankTabsGuild.shown and BankTabsBank.shown)
+CloseSpecialWindows()
+check("then the one before it", not BankTabsGuild.shown and BankTabsBank.shown)
+CloseSpecialWindows()
+check("then the first", not BankTabsBank.shown)
+check("after which the report says none are open", ns.report["saved windows"] == "none open", ns.report["saved windows"])
+ns.VaultUI.Show("bank")
+ns.VaultUI.Show("guild")
+ns.VaultUI.Show("bags")
+ns.VaultUI.Show("bank")
+check("opening a window that is already open brings it to the front instead of closing it", BankTabsBank.shown and InFront() == "bank")
+CloseSpecialWindows()
+check("so Escape closes it first", not BankTabsBank.shown and BankTabsBags.shown and BankTabsGuild.shown)
+ns.VaultUI.Toggle("guild")
+check("a toggle brings forward a window open behind another", BankTabsGuild.shown and InFront() == "guild")
+ns.VaultUI.Toggle("guild")
+check("and closes it once it is in front", not BankTabsGuild.shown and BankTabsBags.shown)
+ns.VaultUI.Show("bank")
+BankTabsBags.scripts.OnMouseDown(BankTabsBags)
+check("clicking a window brings it to the front", InFront() == "bags")
+ns.VaultUI.Toggle("bags")
+check("so its toggle closes it", not BankTabsBags.shown and BankTabsBank.shown)
+
+-- Where they open, and where they are left.
+HideAll()
+ns.db.positions.savedBank, ns.db.positions.savedBags, ns.db.positions.savedGuild = nil, nil, nil
+ns.VaultUI.Show("bank", me)
+local bl, bb, bw, bh = Rect(BankTabsBank)
+check("until moved, the bank opens where the single window did, in the middle of the screen", near(bl + bw / 2, SCREEN_W / 2)
+  and near(bb + bh / 2, SCREEN_H / 2), bl .. "," .. bb)
+ns.VaultUI.Show("bags")
+local gl, gb, gw, gh = Rect(BankTabsBags)
+check("the bags open beside the bank, tops level", near(gl, bl + bw + 12) and near(gb + gh, bb + bh), gl .. "," .. (gb + gh))
+check("opening them did not move the bank", near(Rect(BankTabsBank), bl) and near(select(2, Rect(BankTabsBank)), bb))
+ns.VaultUI.Show("guild")
+local ul, ub, uw, uh = Rect(BankTabsGuild)
+check("the guild bank opens beside what is open, covering neither", Clear(ul, uw, bl, bw) and Clear(ul, uw, gl, gw)
+  and ul >= -0.5 and ul + uw <= SCREEN_W + 0.5 and near(ub + uh, bb + bh), ul)
+check("and moved neither", near(Rect(BankTabsBank), bl) and near(Rect(BankTabsBags), gl))
+check("a window never moved saves no place", ns.db.positions.savedBank == nil and ns.db.positions.savedBags == nil
+  and ns.db.positions.savedGuild == nil)
+-- The whole interface hidden and shown again (the game's Alt-Z): the windows stay open, and stay put.
+for _, f in ipairs({ BankTabsBank, BankTabsBags, BankTabsGuild }) do f.scripts.OnHide(f) end
+for _, f in ipairs({ BankTabsGuild, BankTabsBags, BankTabsBank }) do f.scripts.OnShow(f) end
+check("coming back into view with the interface moves none of them", near(Rect(BankTabsBank), bl) and near(Rect(BankTabsBags), gl)
+  and near(Rect(BankTabsGuild), ul), tostring(Rect(BankTabsGuild)))
+
+DragWindow(BankTabsBags, 100, 900)
+local pos = ns.db.positions.savedBags
+check("dragging a saved window by its title remembers where it was left", pos and near(pos.x, 100) and near(pos.top, 900),
+  pos and (pos.x .. "," .. pos.top))
+check("anchored by its top, so switching characters keeps the title and tabs in place", BankTabsBags.points[1]
+  and BankTabsBags.points[1][1] == "TOPLEFT" and BankTabsBags.points[1][2] == UIParent)
+check("in the saved settings, mirrored account wide", BankTabsAccountDB.profile.positions.savedBags ~= nil)
+check("the other windows stay put and save nothing", ns.db.positions.savedBank == nil and near(Rect(BankTabsBank), bl))
+ns.VaultUI.Hide("bags")
+ns.VaultUI.Show("bags")
+local l2, b2, w2, h2 = Rect(BankTabsBags)
+check("closed and opened again, it comes back where it was left", near(l2, 100) and near(b2 + h2, 900), l2 .. "," .. (b2 + h2))
+DragWindow(BankTabsBank, 600, 700)
+check("each window remembers its own place", ns.db.positions.savedBank and near(ns.db.positions.savedBank.x, 600)
+  and near(ns.db.positions.savedBags.x, 100))
+DragWindow(BankTabsBags, 5000, 5000)
+local l3, b3, w3, h3 = Rect(BankTabsBags)
+check("dragged off the screen it is pulled back on, its character tabs included", near(l3 + w3, SCREEN_W) and near(b3 + h3 + 31 + 8, SCREEN_H),
+  (l3 + w3) .. "," .. (b3 + h3))
+DragWindow(BankTabsBags, 100, 900)
+
+-- Nobody else saved: the bags show a line instead of a grid.
+local chohamBags = ns.vault.chars[CHOHAM].bags
+ns.vault.chars[CHOHAM].bags = nil
+ns.vault.chars[RELIC] = nil
+ns.Vault.Changed()
+vault = BankTabsBags
+check("with no other character saved the bags show nobody", ns.VaultUI.Selected("bags") == nil and #CharTabs() == 0)
+check("and a short line instead of a grid", TextOn(vault, "No other characters saved yet.", true) ~= nil and #Cells(37) == 0)
+check("under a plain title", vault.csTitle.text == "Saved Bags", vault.csTitle.text)
+ns.vault.chars[CHOHAM].bags = chohamBags
+ns.Vault.Changed()
+check("the grid comes back once another character is saved", ns.VaultUI.Selected("bags") == CHOHAM and #Cells(37) == 16
+  and TextOn(vault, "No other characters saved yet.", true) == nil)
+
+-- This character's bank not saved yet: its tab is still first, with a line instead of a grid.
+local myEntry = ns.vault.chars[me]
+local myBank = myEntry.bank
+myEntry.bank = nil
+ns.VaultUI.Show("bank", me)
+vault = BankTabsBank
+check("the saved bank lists this character first before its bank is saved", CharTabs()[1] and CharTabs()[1].csWho == me
+  and #CharTabs() == 3, #CharTabs())
+check("and shows a short line for it instead of an empty grid", TextOn(vault, "Visit a banker once and your bank is saved here.") ~= nil
+  and #Cells(37) == 0 and #BagRow() == 0)
+check("under this character's name", vault.csTitle.text == "Vatik's Bank", vault.csTitle.text)
+ns.vault.chars[me] = nil
+ns.VaultUI.Refresh()
+check("a character with nothing saved at all still gets its tab, its class read live", CharTabs()[1] and CharTabs()[1].csWho == me
+  and CharTabs()[1].icon.texture == CLASS_SHEET and CharTabs()[1].icon.texCoord[2] == 0.75)
+check("and its name read live for the title", vault.csTitle.text == "Vatik's Bank", vault.csTitle.text)
+ns.vault.chars[me] = myEntry
+myEntry.bank = myBank
+ns.Vault.Changed()
+check("the grid is back once the bank is saved", #Cells(37) > 0 and TextOn(vault, "Visit a banker once", true) == nil)
+HideAll()
+end -- scope
 
 -- ------------------------------------------------------------------
 -- 11f. The minimap button
@@ -1810,15 +2053,23 @@ check("dragging left puts it on the left of the rim", near(ns.db.minimap.angle, 
 mm.scripts.OnDragStop(mm)
 check("the angle is saved", near(BankTabsAccountDB.profile.minimap.angle, 180, 1))
 
-BankTabsVault:Hide()
+for _, kind in ipairs({ "bank", "bags", "guild" }) do ns.VaultUI.Hide(kind) end
 mm.scripts.OnClick(mm, "LeftButton")
-check("left-click opens the saved bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bank", ns.VaultUI.Mode())
+check("left-click opens the saved bank", BankTabsBank.shown == true and ns.VaultUI.IsShown("bank") and not ns.VaultUI.IsShown("bags"))
 mm.scripts.OnClick(mm, "LeftButton")
-check("and closes it again", BankTabsVault.shown == false)
+check("and closes it again", BankTabsBank.shown == false)
+ns.VaultUI.Show("bank")
+ns.VaultUI.Show("bags")
+mm.scripts.OnClick(mm, "LeftButton")
+check("with the saved bags in front of it, left-click brings the bank forward instead", BankTabsBank.shown == true
+  and ns.VaultUI.Open()[#ns.VaultUI.Open()] == "bank")
+mm.scripts.OnClick(mm, "LeftButton")
+ns.VaultUI.Hide("bags")
+check("and closes it from the front", BankTabsBank.shown == false)
 mm.scripts.OnClick(mm, "RightButton")
 local optionsPage = CATEGORIES[1] and CATEGORIES[1].frame
 check("right-click opens the options", (optionsPage and optionsPage.shown == true) or (BankTabsWindow and BankTabsWindow.shown == true))
-check("and not the saved bank", BankTabsVault.shown == false)
+check("and not the saved bank", BankTabsBank.shown == false)
 if optionsPage then optionsPage:Hide() end
 SettingsPanel:Hide()
 if BankTabsWindow then BankTabsWindow:Hide() end
@@ -1830,7 +2081,7 @@ check("shift and left-click locks everything", ns.db.enabled ~= wasEnabled)
 mm.scripts.OnClick(mm, "LeftButton")
 SHIFT = false
 check("and unlocks it again", ns.db.enabled == wasEnabled)
-check("without opening the saved bank", BankTabsVault.shown == false)
+check("without opening the saved bank", BankTabsBank.shown == false)
 
 GameTooltip:SetOwner(nil)
 check("the minimap tooltip runs", pcall(mm.scripts.OnEnter, mm))
@@ -1848,100 +2099,175 @@ ns.db.minimap.shown = true
 ns.Refresh()
 
 -- ------------------------------------------------------------------
--- 11d. The three icons in the backpack's header
+-- 11d. The Bank, Bags and Guild tabs above the backpack
 -- ------------------------------------------------------------------
-BankTabsVault:Hide()
+do -- scope: 11d
+for _, kind in ipairs({ "bank", "bags", "guild" }) do ns.VaultUI.Hide(kind) end
 backpack:Hide()
 backpack:Show()
 RunTimers(0.1)
 
-local function HolderOn(frame)
+local function HeaderTabs(frame)
+  local out = {}
   for _, f in ipairs(FRAMES) do
-    if f.parent == frame and f.kind == "Frame" and f.csOurs and f.buttons then return f end
+    if f.parent == frame and f.csHeaderKind then out[#out + 1] = f end
   end
-  return nil
+  return out
 end
-local holder = HolderOn(backpack)
-check("the backpack got a holder for the icons", holder ~= nil)
-local icons = {}
-for _, f in ipairs(FRAMES) do
-  if holder and f.parent == holder and f.kind == "Button" then icons[#icons + 1] = f end
+local function Alpha(tab) return tab.icon:GetAlpha() end
+local htabs = HeaderTabs(backpack)
+check("the backpack has three tabs", #htabs == 3, #htabs)
+check("Bank, Bags and Guild, left to right", htabs[1] ~= nil and htabs[1].csHeaderKind == "bank" and htabs[2].csHeaderKind == "bags"
+  and htabs[3].csHeaderKind == "guild")
+local bankTab, bagsTab, guildTab = htabs[1], htabs[2], htabs[3]
+check("they are the tabs BagHeader reports for the backpack", ns.BagHeader.Tabs(backpack) ~= nil and ns.BagHeader.Tabs(backpack).bank == bankTab
+  and ns.BagHeader.Tabs(backpack).guild == guildTab)
+check("all three are shown", bankTab.shown and bagsTab.shown and guildTab.shown)
+
+-- The character tabs' own kind, from the same builder.
+local same = true
+for _, t in ipairs(htabs) do
+  if not t.csTab or t.kind ~= "CheckButton" or t.w ~= 43 or t.h ~= 37 or type(t.SetChosen) ~= "function" then same = false end
 end
-check("it holds exactly three buttons", #icons == 3, #icons)
-local iconSize = true
-for _, b in ipairs(icons) do if b.w ~= 20 or b.h ~= 20 or not b.shown then iconSize = false end end
-check("each is a 20 pixel icon", iconSize)
-check("the holder is as wide as its three icons", holder and holder.w == 3 * 20 + 2 * 3, holder and holder.w)
-check("it is shown", holder and holder.shown == true)
-check("the report says where it went", (ns.report["bag buttons"] or ""):find("header") or (ns.report["bag buttons"] or ""):find("above"),
-  ns.report["bag buttons"])
-check("the icons found their art", (ns.report["bag icon bank"] or ""):find("atlas") or (ns.report["bag icon bank"] or ""):find("Interface"),
-  ns.report["bag icon bank"])
-check("the holder sits above the drag strip", holder and holder.level > (bagGrip.level or 1), holder and holder.level)
+check("they come from the character tabs' builder, at the spellbook's 43 by 37", same)
+check("with the icon in the same place, at the same size", bankTab.icon.w == 33 and bankTab.icon.h == 33
+  and bankTab.icon.points[1] and bankTab.icon.points[1][1] == "TOP" and bankTab.icon.points[1][5] == -4)
+if BARE then
+  check("with no spellbook atlas they go without it, as the character tabs do", bankTab.frameTex == nil and bankTab.glow == nil)
+else
+  check("they wear the same spellbook atlas", bankTab.frameTex and bankTab.frameTex.atlas == "spellbook-Tab-Frame-C60"
+    and bankTab.glow ~= nil, bankTab.frameTex and bankTab.frameTex.atlas)
+  check("with the icon clipped by the same mask", bankTab.icon.csMask ~= nil and bankTab.icon.csMask.atlas == "UI-HUD-ActionBar-IconFrame-Mask")
+end
+check("the icons found their art", (ns.report["backpack tab icon bank"] or ""):find("atlas") or (ns.report["backpack tab icon bank"] or ""):find("Interface"),
+  ns.report["backpack tab icon bank"])
 
--- It has to keep clear of the game's own close button in that header.
-local hl, hb, hw = ns.Windows.Measure(holder)
-local cl, cb, cw = ns.Windows.Measure(backpack.testClose)
-check("the icons keep clear of the game's close button", hl and cl and (hl + hw <= cl + 0.5 or cl + cw <= hl + 0.5),
-  tostring(hl) .. "+" .. tostring(hw) .. " vs " .. tostring(cl))
-local ht = hb and (hb + (select(4, ns.Windows.Measure(holder)) or 0))
-local bl, bb, bw, bh = ns.Windows.Measure(backpack)
-check("and sits in the header band of the backpack", ht and bb and ht <= bb + bh + 0.5 and hb >= bb + bh - 26 - 0.5, ht)
+-- Hanging off the top edge, clear of the portrait, their feet behind the border.
+local function Hung(frame, tabs)
+  local fl, fb, fw, fh = ns.Windows.Measure(frame)
+  local top = fb + fh
+  for i, t in ipairs(tabs) do
+    local tl, tb, tw, th = ns.Windows.Measure(t)
+    if not (near(tl, fl + 64 + (i - 1) * 45) and near(tb, top - 8) and near(tb + th, top + 29)) then return false end
+  end
+  return #tabs == 3
+end
+check("they hang off the backpack's top edge, clear of the portrait, only their feet behind the border", Hung(backpack, htabs))
+check("placed exactly as the character tabs are on a saved window", bankTab.points[1][1] == "BOTTOMLEFT" and bankTab.points[1][2] == backpack
+  and bankTab.points[1][3] == "TOPLEFT" and near(bagsTab.points[1][4], 64 + 45) and near(bagsTab.points[1][5], -8))
+local levels = true
+for _, t in ipairs(htabs) do if t.level ~= math.max(0, backpack.level - 1) then levels = false end end
+check("one level under the window, so its border covers their feet", levels)
+check("under the close button and the drag strip, which keep their clicks", bankTab.level < backpack.testClose.level and bankTab.level < bagGrip.level)
+local cl, _, cw = ns.Windows.Measure(backpack.testClose)
+local clear = true
+for _, t in ipairs(htabs) do
+  local tl, _, tw = ns.Windows.Measure(t)
+  if not (tl + tw <= cl + 0.5 or cl + cw <= tl + 0.5) then clear = false end
+end
+check("and clear of the close button along the top", clear)
+check("they are the backpack's own children, so they hide with it", bankTab.parent == backpack and guildTab.parent == backpack)
+check("the report says where they went", (ns.report["backpack tabs"] or ""):find("ContainerFrame1", 1, true) ~= nil, ns.report["backpack tabs"])
 
-local bankIcon, bagsIcon, guildIcon = holder.buttons.bank, holder.buttons.bags, holder.buttons.guild
-check("the buttons are keyed by what they open", bankIcon ~= nil and bagsIcon ~= nil and guildIcon ~= nil)
-check("the bank icon is bright: a bank is saved", bankIcon.icon:GetAlpha() == 1, bankIcon.icon:GetAlpha())
-check("the bags icon is bright: bags are saved", bagsIcon.icon:GetAlpha() == 1, bagsIcon.icon:GetAlpha())
-check("the guild icon is bright: a guild bank is saved", guildIcon.icon:GetAlpha() == 1, guildIcon.icon:GetAlpha())
+-- They go wherever the backpack goes, in the same frame.
+DragTo(backpack, bagGrip, 700, 250)
+check("dragging the backpack carries them along at once", Hung(backpack, htabs) and near(ns.Windows.Measure(bankTab), 700 + 64),
+  ns.Windows.Measure(bankTab))
+check("and the drag strip still works with them up", near(ns.db.positions["bag0"].x, 700), ns.db.positions["bag0"].x)
+UpdateContainerFrameAnchors()
+check("the game re-stacking the bags leaves them on the backpack", Hung(backpack, htabs) and near(ns.Windows.Measure(bankTab), 700 + 64))
+DragTo(backpack, bagGrip, 500, 300)
 
--- With nothing saved an icon is dimmed rather than hidden, so the row keeps its shape.
+-- Bright while there is something to open, dimmed while there is not.
+check("all three are bright: a bank, another character's bags and a guild bank are saved", Alpha(bankTab) == 0.85
+  and Alpha(bagsTab) == 0.85 and Alpha(guildTab) == 0.85, Alpha(bankTab) .. "/" .. Alpha(bagsTab) .. "/" .. Alpha(guildTab))
 local savedGuild = ns.vault.guilds[GUILD_KEY]
 ns.vault.guilds[GUILD_KEY] = nil
-ns.BagHeader.Update(backpack)
-check("the guild icon dims with nothing saved", guildIcon.icon:GetAlpha() == 0.4, guildIcon.icon:GetAlpha())
-check("but stays on screen", guildIcon.shown == true and holder.shown == true)
-check("the others stay bright", bankIcon.icon:GetAlpha() == 1 and bagsIcon.icon:GetAlpha() == 1)
+ns.Vault.Changed()
+check("the guild tab dims with no guild bank saved", Alpha(guildTab) == 0.4, Alpha(guildTab))
+check("but stays on screen", guildTab.shown == true)
+check("the others stay bright", Alpha(bankTab) == 0.85 and Alpha(bagsTab) == 0.85)
 ns.vault.guilds[GUILD_KEY] = savedGuild
-ns.BagHeader.Update(backpack)
-check("and brightens once a guild bank is saved", guildIcon.icon:GetAlpha() == 1)
-local savedBags = ns.vault.chars[me].bags
-ns.vault.chars[me].bags = nil
-ns.BagHeader.Update(backpack)
-check("the bags icon dims when this character's bags are unknown", bagsIcon.icon:GetAlpha() == 0.4)
-ns.vault.chars[me].bags = savedBags
-ns.BagHeader.Update(backpack)
-check("and brightens again", bagsIcon.icon:GetAlpha() == 1)
+ns.Vault.Changed()
+check("and brightens once one is saved", Alpha(guildTab) == 0.85)
+local chohamBags = ns.vault.chars[CHOHAM].bags
+ns.vault.chars[CHOHAM].bags = nil
+ns.Vault.Changed()
+check("the bags tab dims when no other character has bags saved, this one's own not counting", Alpha(bagsTab) == 0.4
+  and ns.vault.chars[me].bags ~= nil, Alpha(bagsTab))
+ns.vault.chars[CHOHAM].bags = chohamBags
+ns.Vault.Changed()
+check("and brightens again", Alpha(bagsTab) == 0.85)
+local banks = {}
+for who, entry in pairs(ns.vault.chars) do
+  if type(entry) == "table" and entry.bank then banks[who] = entry.bank end
+end
+for who in pairs(banks) do ns.vault.chars[who].bank = nil end
+ns.Vault.Changed()
+check("the bank tab dims with no bank saved at all", Alpha(bankTab) == 0.4, Alpha(bankTab))
+for who, record in pairs(banks) do ns.vault.chars[who].bank = record end
+ns.Vault.Changed()
+check("and brightens once there is one", Alpha(bankTab) == 0.85)
+check("the tab tooltips run", pcall(bankTab.scripts.OnEnter, bankTab) and pcall(bagsTab.scripts.OnEnter, bagsTab)
+  and pcall(guildTab.scripts.OnEnter, guildTab))
+guildTab.scripts.OnLeave(guildTab)
 
-check("the icon tooltips run", pcall(bankIcon.scripts.OnEnter, bankIcon) and pcall(bagsIcon.scripts.OnEnter, bagsIcon)
-  and pcall(guildIcon.scripts.OnEnter, guildIcon))
-guildIcon.scripts.OnLeave(guildIcon)
+-- Chosen while the window is open, however it closes.
+local function Chosen(tab)
+  if Alpha(tab) ~= 1 then return false end
+  if BARE then return true end
+  return tab.frameTex.atlas == "spellbook-Tab-Frame-Glow-C60" and tab.glow.shown == true
+end
+bankTab.scripts.OnClick(bankTab)
+check("clicking the Bank tab opens the saved bank", BankTabsBank.shown == true)
+check("and the tab shows it chosen, glowing", Chosen(bankTab) and not Chosen(bagsTab) and not Chosen(guildTab))
+check("it never stays checked the way a plain check box would", bankTab.checked == false)
+bagsTab.scripts.OnClick(bagsTab)
+check("the Bags tab opens the saved bags as well", BankTabsBags.shown == true and BankTabsBank.shown == true)
+check("and both tabs are chosen", Chosen(bankTab) and Chosen(bagsTab))
+CloseSpecialWindows()
+check("Escape closes the bags, and their tab lets go", BankTabsBags.shown == false and not Chosen(bagsTab) and Chosen(bankTab))
+BankTabsBank:Hide()
+check("the bank's close button (a plain hide) lets go of the Bank tab", not Chosen(bankTab) and Alpha(bankTab) == 0.85)
+guildTab.scripts.OnClick(guildTab)
+check("the Guild tab opens the saved guild bank, chosen", BankTabsGuild.shown == true and Chosen(guildTab))
+guildTab.scripts.OnClick(guildTab)
+check("clicked again with it in front, it closes it and lets go", BankTabsGuild.shown == false and not Chosen(guildTab))
+SlashCmdList["BANKTABS"]("bank")
+check("opened any other way, the tab still shows it", Chosen(bankTab))
+ns.VaultUI.Toggle("bank")
+check("and closed by a toggle, lets go", BankTabsBank.shown == false and not Chosen(bankTab))
 
-BankTabsVault:Hide()
-bankIcon.scripts.OnClick(bankIcon)
-check("clicking the bank icon opens the vault at the bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bank", ns.VaultUI.Mode())
-bagsIcon.scripts.OnClick(bagsIcon)
-check("the bags icon switches it to the bags", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bags", ns.VaultUI.Mode())
-guildIcon.scripts.OnClick(guildIcon)
-check("the guild icon switches it to the guild bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "guild", ns.VaultUI.Mode())
-BankTabsVault:Hide()
-
+-- The switch in the options.
 ns.db.vault.bagButtons = false
 ns.Refresh()
-check("the icons can be switched off", holder.shown == false)
+check("the tabs can be switched off", not bankTab.shown and not bagsTab.shown and not guildTab.shown)
 ns.db.vault.bagButtons = true
 ns.Refresh()
-check("and back on", holder.shown == true)
+check("and back on", bankTab.shown and bagsTab.shown and guildTab.shown)
+
+-- The game hands its bag frames out as it needs them: one that is showing some other bag has none.
+backpack:SetID(3)
+backpack:Hide()
+backpack:Show()
+check("a pooled frame showing some other bag hides them", not bankTab.shown and not guildTab.shown)
+backpack:SetID(0)
+backpack:Hide()
+backpack:Show()
+RunTimers(0.1)
+check("and they come back when it is the backpack again", bankTab.shown and Hung(backpack, htabs))
 
 -- The combined bag window is a backpack too; an ordinary bag is not.
 ContainerFrameCombinedBags:Show()
 RunTimers(0.1)
-local combinedHolder = HolderOn(ContainerFrameCombinedBags)
-check("the combined bag window gets the icons too", combinedHolder ~= nil and combinedHolder.shown == true)
+local combined = HeaderTabs(ContainerFrameCombinedBags)
+check("the combined bag window gets the tabs too", #combined == 3 and combined[1].shown and Hung(ContainerFrameCombinedBags, combined))
 ContainerFrameCombinedBags:Hide()
 ContainerFrame2:Show()
 RunTimers(0.1)
-check("an ordinary bag does not", HolderOn(ContainerFrame2) == nil)
+check("an ordinary bag does not", #HeaderTabs(ContainerFrame2) == 0)
 ContainerFrame2:Hide()
+end -- scope
 
 do -- scope: 11f. Item tooltips
 -- ------------------------------------------------------------------
@@ -2054,6 +2380,7 @@ end
 check("/banktabs gold lists each character and the total", sawChoham and sawTotal)
 
 ns.VaultUI.Show("bank")
+vault = BankTabsBank
 check("the saved bank shows the account gold in its corner", TextOn(vault, "Account ", true) ~= nil)
 ns.db.vault.showAccountGold = false
 ns.VaultUI.Refresh()
@@ -2073,7 +2400,8 @@ local ctabsGold = CharTabs()
 GameTooltip:SetOwner(nil)
 ctabsGold[2].scripts.OnEnter(ctabsGold[2])
 check("a character tab tooltip carries that character's gold", LineFor(GameTooltip.csLines, "Gold") ~= nil)
-BankTabsVault:Hide()
+check("and is headed with the name alone, as the titles are", GameTooltip.text == "Choham", GameTooltip.text)
+ns.VaultUI.Hide("bank")
 
 -- ------------------------------------------------------------------
 -- 11h. Hovering the money on the game's own windows
@@ -2099,13 +2427,14 @@ ns.db.vault.moneyTooltip = true
 
 -- The replica's own money too.
 ns.VaultUI.Show("bank")
+vault = BankTabsBank
 local moneyHit
 for _, f in ipairs(FRAMES) do if f.parent == vault and f.csMoneyHit then moneyHit = f end end
 check("the saved bank's money carries the same tooltip", moneyHit ~= nil)
 GameTooltip:SetOwner(nil)
 moneyHit.scripts.OnEnter(moneyHit)
 check("and it lists the account", LineFor(GameTooltip.csLines, "Total") ~= nil)
-BankTabsVault:Hide()
+ns.VaultUI.Hide("bank")
 
 -- ------------------------------------------------------------------
 -- 11i. The drag anywhere overlay stays unseen unless asked for
@@ -2172,15 +2501,23 @@ for i = helpStart + 1, #CHAT do
 end
 check("the help names the short form", mentionsShort)
 check("and keeps the old names quiet", mentionsOld == false)
-BankTabsVault:Hide()
+for _, kind in ipairs({ "bank", "bags", "guild" }) do ns.VaultUI.Hide(kind) end
 slash("bank")
-check("/banktabs bank opens the saved bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bank")
+check("/banktabs bank opens the saved bank", BankTabsBank.shown == true and not BankTabsBags.shown and not BankTabsGuild.shown)
 slash("bags")
-check("/banktabs bags switches it to the bags", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bags")
+check("/banktabs bags opens the saved bags as well, the bank staying open", BankTabsBags.shown == true and BankTabsBank.shown == true)
 slash("guild")
-check("/banktabs guild switches it to the guild bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "guild")
+check("/banktabs guild opens the guild bank too", BankTabsGuild.shown == true and BankTabsBags.shown == true and BankTabsBank.shown == true)
 slash("guild")
-check("and the same command again closes it", BankTabsVault.shown == false)
+check("and the same command again closes the one in front", BankTabsGuild.shown == false and BankTabsBags.shown == true)
+slash("bank")
+check("a command for a window behind another brings it forward rather than closing it", BankTabsBank.shown == true
+  and ns.VaultUI.Open()[#ns.VaultUI.Open()] == "bank")
+slash("vault")
+check("/banktabs vault alone closes the one in front", BankTabsBank.shown == false and BankTabsBags.shown == true)
+slash("vault guild")
+check("and /banktabs vault guild still names one", BankTabsGuild.shown == true)
+for _, kind in ipairs({ "bank", "bags", "guild" }) do ns.VaultUI.Hide(kind) end
 slash("scale 140")
 check("the old map commands say where the map went", CHAT[#CHAT]:find("Map Tab") ~= nil, CHAT[#CHAT])
 check("and change nothing here", ns.db.map == nil)
@@ -2196,9 +2533,10 @@ end -- scope
 ns.SyncOptions()
 -- The vault's character tabs are CheckButtons too, and every item cell is a Button, so only the
 -- widgets on the option pages are counted here.
+local SAVED = { [BankTabsBank] = true, [BankTabsBags] = true, [BankTabsGuild] = true }
 local optionChecks, optionButtons = 0, 0
 for _, f in ipairs(FRAMES) do
-  if f.parent ~= BankTabsVault and (not f.parent or f.parent.parent ~= BankTabsVault) then
+  if not SAVED[f.parent] and (not f.parent or not SAVED[f.parent.parent]) then
     if f.kind == "CheckButton" and (f.name or ""):find("^BankTabsCheck") then optionChecks = optionChecks + 1 end
     if f.kind == "Button" and f.text ~= nil then optionButtons = optionButtons + 1 end
   end
@@ -2214,6 +2552,12 @@ check("and the snapshot button", vaultButtons["Snapshot now"])
 local forgetButton = false
 for _, f in ipairs(FRAMES) do if f.kind == "Button" and f.text == "Forget" then forgetButton = true end end
 check("the old Forget button is gone", forgetButton == false)
+local tabsLabel, iconsLabel = false, false
+for _, fs in ipairs(FONTSTRINGS) do
+  if fs.text == "Tabs above the backpack" then tabsLabel = true end
+  if fs.text == "Icons on the bag window" then iconsLabel = true end
+end
+check("the backpack switch talks about tabs now", tabsLabel and not iconsLabel)
 
 -- Clicking the master switch off turns everything off and back on again. The master is the
 -- switch labelled as such, never the first CheckButton found, since the vault's character tabs
@@ -2226,7 +2570,7 @@ for _, f in ipairs(FRAMES) do
     end
   end
 end
-check("the master switch is the one labelled so", master ~= nil and master.parent ~= BankTabsVault)
+check("the master switch is the one labelled so", master ~= nil and not SAVED[master.parent])
 master:SetChecked(false)
 master.scripts.OnClick(master)
 check("the master switch writes through", ns.db.enabled == false)
@@ -2301,10 +2645,13 @@ end
 table.sort(stray)
 check("every global Bank Tabs made is named for it", #stray == 0, table.concat(stray, ", "))
 local named = 0
-for _, key in ipairs({ "BankTabsFrame", "BankTabsOptions", "BankTabsWindow", "BankTabsMinimapButton", "BankTabsVault", "BankTabsVaultSearch" }) do
+for _, key in ipairs({ "BankTabsFrame", "BankTabsOptions", "BankTabsWindow", "BankTabsMinimapButton", "BankTabsBank", "BankTabsBags",
+  "BankTabsGuild", "BankTabsBankSearch", "BankTabsBagsSearch", "BankTabsGuildSearch" }) do
   if _G[key] ~= nil then named = named + 1 end
 end
-check("its frames are the BankTabs ones", named == 6, named)
+check("its frames are the BankTabs ones", named == 10, named)
+check("the single saved window of before is gone, and its API with it", _G["BankTabsVault"] == nil and _G["BankTabsVaultSearch"] == nil
+  and ns.VaultUI.Mode == nil)
 end -- scope
 
 MAIN_DONE = true
@@ -2668,6 +3015,22 @@ const parts = [];
   check('the interface number is this client\'s', field(toc, 'Interface') === '16001');
   check('it lists exactly the files this harness loads, in order', codeLines(toc).join(',') === files.join(','), codeLines(toc).join(','));
   check('none of the map half ships', ['Map.lua', 'Reveal.lua', 'Data/MapOverlays.lua', 'tools/overlays-from-csv.js'].every(rel => read(rel) === null));
+
+  // The saved windows' API: nothing still calls the single window of before, or calls one
+  // window's function without saying which window.
+  const oldCallers = files.filter(f => /VaultUI\.Mode\b|BankTabsVault\b|VaultUI\.(Show|Toggle|Hide|IsShown|Selected|Characters)\(\s*\)/.test(sources[f]));
+  check('every caller of the old single window API is updated', oldCallers.length === 0, oldCallers.join(', '));
+  check('the minimap, the backpack tabs, the slash commands and the options all go through it', /VaultUI\.Toggle\("bank"\)/.test(sources['Minimap.lua'])
+    && /VaultUI\.Toggle\(spec\.key\)/.test(sources['BagHeader.lua']) && /VaultUI\.Toggle\(which\)/.test(sources['Core.lua'])
+    && ['bank', 'bags', 'guild'].every(k => sources['Options.lua'].includes('VaultUI.Show("' + k + '")')));
+  // Both kinds of tab from one builder and one placer, so they cannot drift apart.
+  const tabUsers = ['VaultUI.lua', 'BagHeader.lua'];
+  check('the character tabs and the backpack tabs come from the one builder and the one placer',
+    tabUsers.every(f => /ns\.CreateTab\(/.test(sources[f]) && /ns\.HangTab\(/.test(sources[f])));
+  check('and neither makes or dresses a tab of its own', tabUsers.every(f => !/CheckButton|spellbook-Tab|IconFrame-Mask/.test(sources[f])),
+    tabUsers.filter(f => /CheckButton|spellbook-Tab|IconFrame-Mask/.test(sources[f])).join(', '));
+  check('the builder is defined once, in Core', (sources['Core.lua'].match(/function ns\.CreateTab\(/g) || []).length === 1
+    && files.filter(f => /function ns\.CreateTab\(|function ns\.HangTab\(/.test(sources[f])).join(',') === 'Core.lua');
 
   if (read('.pkgmeta') !== null) {
     const holder = read('Legacy/Casement/Casement.toc');

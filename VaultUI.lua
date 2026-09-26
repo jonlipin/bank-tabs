@@ -1,16 +1,23 @@
 -- Bank Tabs
--- VaultUI: your bank and your bags, drawn the way the game draws them, from wherever you are.
+-- VaultUI: every character's bank, bags and guild bank, drawn the way the game draws them, from
+-- wherever you are.
 --
--- These are replicas rather than lists. The bank has the same portrait-and-title frame as the
--- real one, the search box top right, the slots in the same grid with every empty slot drawn, the
--- Bag Slots row underneath and the money bottom right. The bags come as the combined backpack does.
--- The guild bank is seven columns of fourteen filled down each column, tabs down the right hand
--- side. Every item is drawn in the slot it was actually in when it was last seen, never packed.
+-- These are replicas rather than lists. The saved bank has the same portrait-and-title frame as
+-- the real one, the search box top right, the slots in the same grid with every empty slot drawn,
+-- the Bag Slots row underneath and the money bottom right. The saved bags come as the combined
+-- backpack does. The guild bank is seven columns of fourteen filled down each column, tabs down
+-- the right hand side. Every item is drawn in the slot it was actually in when it was last seen,
+-- never packed.
 --
--- A row of tabs in the spellbook's style hangs off the top of the window, one per character on
--- this account that has been saved, so any character's bank or bags can be looked at. The art is
--- the game's own spellbook tab atlas with the class icon in it, and a plain bevel where a client
--- does not carry that atlas.
+-- The three are separate windows (BankTabsBank, BankTabsBags, BankTabsGuild) that open and close
+-- on their own and can all be open at once. Each keeps its own state: the character it shows, the
+-- bank bag or guild tab it is on, its search, its cells and its character tabs. Each is built the
+-- first time it is opened, can be dragged by its title, and remembers where it was left.
+--
+-- A row of tabs in the spellbook's style hangs off the top of the saved bank and the saved bags,
+-- one per character, built by the same function as the backpack's own tabs (ns.CreateTab). The
+-- saved bank has a tab for this character, first, so its own bank can be looked at from anywhere.
+-- The saved bags never show this character: its bags are the real backpack in front of it.
 --
 -- Everything here reads the saved snapshots, never the live bank, so it works anywhere.
 
@@ -32,6 +39,19 @@ local TAB_SIZE, TAB_PITCH = 30, 36
 
 local MARGIN_X, GRID_TOP = 20, 62
 local BAG_ROW_H, FOOTER_H = 46, 36
+
+-- How far apart two saved windows open when one opens beside another.
+local BESIDE_GAP = 12
+
+local KINDS = { "bank", "bags", "guild" }
+local NAMES = { bank = "BankTabsBank", bags = "BankTabsBags", guild = "BankTabsGuild" }
+-- Where each window's place is kept in the saved settings, next to the game windows' places.
+local POS_KEYS = { bank = "savedBank", bags = "savedBags", guild = "savedGuild" }
+
+local windows = {}  -- kind -> that window's state, once it has been opened
+local order = {}    -- the kinds on screen, the one opened or brought forward last at the end
+local lastKind = nil
+local escSlot = nil -- the index in UISpecialFrames that names the front window
 
 -- The grid geometry each shape is drawn with. The bank's is read off the real bank window when a
 -- snapshot is taken (Vault.MeasureBankLayout), so the replica matches this client's bank exactly;
@@ -57,23 +77,9 @@ local function BankGeometry(record)
 	return CLASSIC_BANK
 end
 
--- The character tabs, sized as the spellbook's are.
-local CTAB_W, CTAB_H, CTAB_GAP = 43, 37, 2
-local CTAB_ART = {
-	tab = "spellbook-Tab-Frame-C60",
-	tabActive = "spellbook-Tab-Frame-Glow-C60",
-	tabActiveGlow = "spellbook-Tab-Frame-glow-gradient-C60",
-}
 local CLASS_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
 
-local window, searchBox, moneyText, accountText, noteText, bagLabel, bagRule, inset, divider
-local cells, bagCells, tabButtons, charTabs = {}, {}, {}, {}
-local mode = "bank"    -- "bank", "bags" or "guild"
-local who = nil        -- the character being looked at; nil means this one
-local viewing = nil    -- nil for the first tab, else a main tab index (bank) or a guild tab index
-local viewingBag = nil -- a Bag Slots index while a bank bag is being looked inside; wins over the tab
-local filter = ""
-local tabArt = nil     -- false once probed and missing
+local Refresh -- declared here, defined once the layouts are
 
 -- ------------------------------------------------------------------
 -- Small helpers
@@ -108,18 +114,10 @@ local function QualityColor(quality)
 end
 
 -- With a search in the box the real bank dims every slot that does not match, empty ones too.
-local function Matches(item)
-	if filter == "" then return true end
+local function Matches(W, item)
+	if W.filter == "" then return true end
 	if not item then return false end
-	return (item.name or ""):lower():find(filter, 1, true) ~= nil
-end
-
-local function Selected()
-	return who or ns.Who()
-end
-
-local function CharEntry()
-	return ns.Vault.CharRecord(Selected())
+	return (item.name or ""):lower():find(W.filter, 1, true) ~= nil
 end
 
 local function ClassLabel(token)
@@ -128,10 +126,11 @@ local function ClassLabel(token)
 	return (names and names[token]) or (token:sub(1, 1) .. token:sub(2):lower())
 end
 
-local function HasAtlas(atlas)
-	if not (C_Texture and C_Texture.GetAtlasInfo) then return false end
-	local ok, info = pcall(C_Texture.GetAtlasInfo, atlas)
-	return ok and info ~= nil
+local function LiveClass()
+	if not UnitClass then return nil end
+	local ok, _, token = pcall(UnitClass, "player")
+	if ok then return token end
+	return nil
 end
 
 -- Paints a class icon into a texture: the character creation sheet where the client has it, the
@@ -179,6 +178,197 @@ local function BankParts(record)
 	return mains, bags
 end
 
+-- A character's last seen gold (this one's live), from the snapshot store.
+local function GoldOf(who)
+	local rows = ns.Vault.Gold()
+	for _, row in ipairs(rows) do
+		if row.who == who then return row.money end
+	end
+	return nil
+end
+
+-- ------------------------------------------------------------------
+-- Who each window lists and shows
+-- ------------------------------------------------------------------
+
+-- The characters a window has a tab for, in order. The saved bank: every character with a bank
+-- saved, this one first even before its bank has been seen. The saved bags: every other character
+-- with bags saved, never this one. The guild bank has no character tabs.
+function VaultUI.Characters(kind)
+	local me = ns.Who()
+	if kind == "bank" then
+		local list = ns.Vault.Characters("bank")
+		if not (list[1] and list[1].who == me) then
+			local entry = ns.Vault.CharRecord(me) or { class = LiveClass() }
+			table.insert(list, 1, { who = me, entry = entry, mine = true })
+		end
+		return list
+	elseif kind == "bags" then
+		local list = {}
+		for _, source in ipairs(ns.Vault.Characters("bags")) do
+			if source.who ~= me then list[#list + 1] = source end
+		end
+		return list
+	end
+	return {}
+end
+
+-- The character a window is showing. A choice that no longer has a tab (forgotten, or nothing
+-- saved for this window) falls back: the bank to this character, the bags to the first other
+-- character with bags saved, or to nobody.
+local function Resolve(W)
+	if W.kind == "guild" then
+		local _, key = GuildRecord()
+		return key
+	end
+	local list = VaultUI.Characters(W.kind)
+	if W.who then
+		for _, source in ipairs(list) do
+			if source.who == W.who then return W.who end
+		end
+		W.who = nil
+	end
+	return list[1] and list[1].who or nil
+end
+
+local function CharEntry(W)
+	return W.current and ns.Vault.CharRecord(W.current) or nil
+end
+
+-- ------------------------------------------------------------------
+-- Keeping the windows in order
+-- ------------------------------------------------------------------
+
+local function IsOurName(name)
+	return name == NAMES.bank or name == NAMES.bags or name == NAMES.guild
+end
+
+-- The game's Escape closes every window named in UISpecialFrames at once. To close the one opened
+-- last first, as the game does with its own panels, one entry names whichever of these windows is
+-- in front, and is pointed at the next one as that closes. The entry is only ever overwritten in
+-- place, never added or removed while the game may be walking the list.
+local function SyncEsc()
+	local front = order[#order]
+	if not front then
+		report["saved windows"] = "none open"
+		return
+	end
+	if not (escSlot and IsOurName(UISpecialFrames[escSlot])) then
+		escSlot = nil
+		for index, name in ipairs(UISpecialFrames) do
+			if IsOurName(name) then escSlot = index break end
+		end
+	end
+	if escSlot then
+		UISpecialFrames[escSlot] = NAMES[front]
+	else
+		tinsert(UISpecialFrames, NAMES[front])
+		escSlot = #UISpecialFrames
+	end
+	report["saved windows"] = "open: " .. table.concat(order, ", ") .. "; Escape closes " .. front
+		.. " first (UISpecialFrames entry " .. escSlot .. ")"
+end
+
+local function Unlist(kind)
+	for i = #order, 1, -1 do
+		if order[i] == kind then table.remove(order, i) end
+	end
+end
+
+-- Puts a window in front of the others: last in the order, raised, and the one Escape closes.
+local function Front(W)
+	Unlist(W.kind)
+	if W.frame:IsShown() then order[#order + 1] = W.kind end
+	lastKind = W.kind
+	pcall(W.frame.Raise, W.frame)
+	SyncEsc()
+end
+
+local function FrontKind()
+	return order[#order]
+end
+
+-- ------------------------------------------------------------------
+-- Where each window goes
+-- ------------------------------------------------------------------
+
+-- The window's size in UIParent units, and the room its character tabs need above it.
+local function Size(W)
+	local ratio = ns.Windows.Ratio(W.frame)
+	return (W.frame:GetWidth() or 0) / ratio, (W.frame:GetHeight() or 0) / ratio, W.tabRoom or 0
+end
+
+-- Puts the window's top left corner at (left, top) in UIParent units, kept on screen with its
+-- character tabs. Anchored by the top, so a window that changes size as characters are switched
+-- keeps its title and tabs where they were.
+local function PlaceAt(W, left, top)
+	local frame = W.frame
+	local w, h, room = Size(W)
+	local x, y = ns.Windows.ClampXY(left, top - h, w, h + room)
+	local ratio = ns.Windows.Ratio(frame)
+	frame:ClearAllPoints()
+	frame:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", x * ratio, (y + h) * ratio)
+	return x, y + h
+end
+
+local function SavePosition(W)
+	local left, bottom, _, h = ns.Windows.Measure(W.frame)
+	if not left then return end
+	local x, top = PlaceAt(W, left, bottom + h)
+	ns.db.positions[POS_KEYS[W.kind]] = { x = ns.Round(x, 1), top = ns.Round(top, 1) }
+	ns.MirrorToAccount()
+end
+
+-- Where a window the user has never moved opens. The first one on screen goes where the single
+-- saved window always opened, the middle of the screen. Any other opens beside what is already
+-- open (the bags beside the bank first), on whichever side fits without covering another of
+-- these windows. Nothing already open is moved.
+local function DefaultPlace(W)
+	local w, h, room = Size(W)
+	local uw, uh = UIParent:GetWidth() or 0, UIParent:GetHeight() or 0
+
+	local open = {}
+	if W.kind == "bags" and windows.bank and windows.bank.frame:IsShown() then open[1] = windows.bank end
+	for i = #order, 1, -1 do
+		local other = windows[order[i]]
+		if other and other ~= W and other ~= open[1] and other.frame:IsShown() then open[#open + 1] = other end
+	end
+	if #open == 0 then return PlaceAt(W, (uw - w) / 2, (uh + h) / 2) end
+
+	local rects = {}
+	for index, other in ipairs(open) do
+		local l, b, ow, oh = ns.Windows.Measure(other.frame)
+		if l then rects[#rects + 1] = { l = l, b = b, w = ow, h = oh, room = other.tabRoom or 0 } end
+	end
+	local function Fits(x, top)
+		if x < 0 or x + w > uw or top - h < 0 or top + room > uh then return false end
+		for _, r in ipairs(rects) do
+			local overlapX = x < r.l + r.w and r.l < x + w
+			local overlapY = top - h < r.b + r.h + r.room and r.b < top + room
+			if overlapX and overlapY then return false end
+		end
+		return true
+	end
+	for _, r in ipairs(rects) do
+		local top = r.b + r.h
+		if Fits(r.l + r.w + BESIDE_GAP, top) then return PlaceAt(W, r.l + r.w + BESIDE_GAP, top) end
+		if Fits(r.l - BESIDE_GAP - w, top) then return PlaceAt(W, r.l - BESIDE_GAP - w, top) end
+	end
+	-- Nowhere clear: beside the first one anyway, kept on screen.
+	local r = rects[1]
+	if r then return PlaceAt(W, r.l + r.w + BESIDE_GAP, r.b + r.h) end
+	return PlaceAt(W, (uw - w) / 2, (uh + h) / 2)
+end
+
+local function PlaceOnOpen(W)
+	local pos = ns.db and ns.db.positions and ns.db.positions[POS_KEYS[W.kind]]
+	if type(pos) == "table" and type(pos.x) == "number" and type(pos.top) == "number" then
+		PlaceAt(W, pos.x, pos.top)
+	else
+		DefaultPlace(W)
+	end
+end
+
 -- ------------------------------------------------------------------
 -- Item cells
 -- ------------------------------------------------------------------
@@ -209,8 +399,8 @@ local function SlotBacking(frame)
 	return backing
 end
 
-local function NewCell(parent, size)
-	local cell = CreateFrame("Button", nil, parent)
+local function NewCell(W, size)
+	local cell = CreateFrame("Button", nil, W.frame)
 	cell:SetSize(size, size)
 	SlotBacking(cell)
 
@@ -245,6 +435,7 @@ local function NewCell(parent, size)
 	cell:SetScript("OnEnter", CellTooltip)
 	cell:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	cell:SetScript("OnClick", function(self)
+		Front(W)
 		-- Shift click drops the item link into whatever you are typing, the same as a real bag.
 		if IsShiftKeyDown and IsShiftKeyDown() and self.csItem and self.csItem.link and ChatEdit_InsertLink then
 			pcall(ChatEdit_InsertLink, self.csItem.link)
@@ -277,7 +468,7 @@ local function SetOutline(cell, on)
 	PaintBorder(cell, on and true or false, 0.35, 0.72, 1)
 end
 
-local function SetCellItem(cell, item)
+local function SetCellItem(W, cell, item)
 	cell.csItem = item
 	if item then
 		cell.icon:SetTexture(item.icon)
@@ -290,36 +481,36 @@ local function SetCellItem(cell, item)
 		SetQualityBorder(cell, nil)
 	end
 	-- The real bank dims what does not match the search rather than hiding it.
-	cell:SetAlpha(Matches(item) and 1 or 0.25)
+	cell:SetAlpha(Matches(W, item) and 1 or 0.25)
 end
 
-local function GetCell(index)
-	local cell = cells[index]
+local function GetCell(W, index)
+	local cell = W.cells[index]
 	if not cell then
-		cell = NewCell(window, CELL)
-		cells[index] = cell
+		cell = NewCell(W, CELL)
+		W.cells[index] = cell
 	end
 	return cell
 end
 
-local function HideCellsFrom(index)
-	for i = index, #cells do cells[i]:Hide() end
+local function HideCellsFrom(W, index)
+	for i = index, #W.cells do W.cells[i]:Hide() end
 end
 
 -- Places cell `index` at grid position (col, row), row 0 at the top, in the given geometry.
-local function PlaceCell(index, col, row, item, geo)
+local function PlaceCell(W, index, col, row, item, geo)
 	geo = geo or PLAIN
-	local cell = GetCell(index)
+	local cell = GetCell(W, index)
 	cell:SetSize(geo.cell, geo.cell)
 	cell:ClearAllPoints()
-	cell:SetPoint("TOPLEFT", window, "TOPLEFT", geo.originX + col * geo.pitchX, -(geo.originY + row * geo.pitchY))
-	SetCellItem(cell, item)
+	cell:SetPoint("TOPLEFT", W.frame, "TOPLEFT", geo.originX + col * geo.pitchX, -(geo.originY + row * geo.pitchY))
+	SetCellItem(W, cell, item)
 	cell:Show()
 end
 
 -- One container's slots from the top left, one per slot in the slot's own position. The guild
 -- bank fills down each column first, the bank fills across each row first.
-local function LayoutGrid(slots, cols, columnMajor, items, geo)
+local function LayoutGrid(W, slots, cols, columnMajor, items, geo)
 	local bySlot = {}
 	for _, item in ipairs(items or {}) do bySlot[item.slot] = item end
 
@@ -334,9 +525,9 @@ local function LayoutGrid(slots, cols, columnMajor, items, geo)
 			col = (i - 1) % cols
 			row = math.floor((i - 1) / cols)
 		end
-		PlaceCell(i, col, row, bySlot[i], geo)
+		PlaceCell(W, i, col, row, bySlot[i], geo)
 	end
-	HideCellsFrom(slots + 1)
+	HideCellsFrom(W, slots + 1)
 	return rows
 end
 
@@ -362,51 +553,53 @@ local function BagTooltip(self)
 	GameTooltip:Show()
 end
 
-local function GetBagCell(index)
-	local cell = bagCells[index]
+local function GetBagCell(W, index)
+	local cell = W.bagCells[index]
 	if not cell then
-		cell = NewCell(window, BAG_CELL)
+		cell = NewCell(W, BAG_CELL)
 		cell:SetScript("OnEnter", BagTooltip)
 		cell:SetScript("OnClick", function(self)
+			Front(W)
 			local slot = self.csSlot
 			if slot and (slot.slots or 0) > 0 then
 				-- Clicking the bag being looked at goes back to the tab that was showing before.
-				viewingBag = (viewingBag ~= index) and index or nil
-				VaultUI.Refresh()
+				W.viewingBag = (W.viewingBag ~= index) and index or nil
+				Refresh(W)
 			end
 		end)
-		bagCells[index] = cell
+		W.bagCells[index] = cell
 	end
 	return cell
 end
 
 -- The Bag Slots row, at the measured place when there is one, else just under the grid. Returns
 -- the bottom edge of the row.
-local function LayoutBagRow(record, y, geo)
+local function LayoutBagRow(W, record, y, geo)
 	geo = geo or CLASSIC_BANK
+	local frame = W.frame
 	local count = (record and record.bagSlots and #record.bagSlots > 0 and #record.bagSlots)
 		or geo.bagCount or tonumber(_G.NUM_BANKBAGSLOTS) or NUM_BAG_SLOTS
 	local size, pitch = geo.bagCell or BAG_CELL, geo.bagPitch or BAG_PITCH
 	local x0 = geo.bagOriginX or (MARGIN_X + 82)
 	local top = geo.bagOriginY or (y + 4)
 
-	bagLabel:ClearAllPoints()
-	bagLabel:SetPoint("RIGHT", window, "TOPLEFT", x0 - 12, -(top + size / 2))
-	bagLabel:Show()
+	W.bagLabel:ClearAllPoints()
+	W.bagLabel:SetPoint("RIGHT", frame, "TOPLEFT", x0 - 12, -(top + size / 2))
+	W.bagLabel:Show()
 
 	-- The thin rule the real bank draws between the grid and the Bag Slots.
-	bagRule:ClearAllPoints()
-	bagRule:SetPoint("TOPLEFT", window, "TOPLEFT", geo.originX or MARGIN_X, -(top - 12))
-	bagRule:SetWidth(math.max(60, (geo.cols or BANK_COLS) * geo.pitchX - (geo.pitchX - geo.cell)))
-	bagRule:Show()
+	W.bagRule:ClearAllPoints()
+	W.bagRule:SetPoint("TOPLEFT", frame, "TOPLEFT", geo.originX or MARGIN_X, -(top - 12))
+	W.bagRule:SetWidth(math.max(60, (geo.cols or BANK_COLS) * geo.pitchX - (geo.pitchX - geo.cell)))
+	W.bagRule:Show()
 
 	for i = 1, count do
-		local cell = GetBagCell(i)
+		local cell = GetBagCell(W, i)
 		local slot = record and record.bagSlots and record.bagSlots[i]
 		cell.csSlot = slot
 		cell:SetSize(size, size)
 		cell:ClearAllPoints()
-		cell:SetPoint("TOPLEFT", window, "TOPLEFT", x0 + (i - 1) * pitch, -top)
+		cell:SetPoint("TOPLEFT", frame, "TOPLEFT", x0 + (i - 1) * pitch, -top)
 		if slot and slot.icon then
 			cell.icon:SetTexture(slot.icon)
 			cell.icon:Show()
@@ -416,23 +609,23 @@ local function LayoutBagRow(record, y, geo)
 			cell:SetAlpha((slot and slot.purchased) and 1 or 0.45)
 		end
 		cell.count:SetText("")
-		SetOutline(cell, viewingBag == i)
+		SetOutline(cell, W.viewingBag == i)
 		cell:Show()
 	end
-	for i = count + 1, #bagCells do bagCells[i]:Hide() end
+	for i = count + 1, #W.bagCells do W.bagCells[i]:Hide() end
 	return top + size
 end
 
-local function HideBagRow()
-	bagLabel:Hide()
-	bagRule:Hide()
-	for _, cell in ipairs(bagCells) do cell:Hide() end
+local function HideBagRow(W)
+	W.bagLabel:Hide()
+	W.bagRule:Hide()
+	for _, cell in ipairs(W.bagCells) do cell:Hide() end
 end
 
-local function GetTabButton(index)
-	local button = tabButtons[index]
+local function GetTabButton(W, index)
+	local button = W.tabButtons[index]
 	if not button then
-		button = NewCell(window, TAB_SIZE)
+		button = NewCell(W, TAB_SIZE)
 		button:SetScript("OnEnter", function(self)
 			GameTooltip:SetOwner(self, "ANCHOR_LEFT")
 			GameTooltip:SetText(self.csLabel or ("Tab " .. index), 1, 1, 1)
@@ -440,25 +633,26 @@ local function GetTabButton(index)
 			GameTooltip:Show()
 		end)
 		button:SetScript("OnClick", function()
-			viewing = index
-			viewingBag = nil
-			VaultUI.Refresh()
+			Front(W)
+			W.viewing = index
+			W.viewingBag = nil
+			Refresh(W)
 		end)
-		tabButtons[index] = button
+		W.tabButtons[index] = button
 	end
 	return button
 end
 
 -- `tabs` is a list of { label, icon, detail }, laid down the right of a grid whose top is at
 -- `top`. Returns how wide a column they needed.
-local function LayoutTabs(tabs, x, top)
+local function LayoutTabs(W, tabs, x, top)
 	top = top or GRID_TOP
 	for index, tab in ipairs(tabs) do
-		local button = GetTabButton(index)
+		local button = GetTabButton(W, index)
 		button.csLabel, button.csDetail = tab.label, tab.detail
 		button.csItem = nil
 		button:ClearAllPoints()
-		button:SetPoint("TOPLEFT", window, "TOPLEFT", x, -(top + (index - 1) * TAB_PITCH))
+		button:SetPoint("TOPLEFT", W.frame, "TOPLEFT", x, -(top + (index - 1) * TAB_PITCH))
 		if tab.icon then
 			button.icon:SetTexture(tab.icon)
 			button.icon:Show()
@@ -466,11 +660,11 @@ local function LayoutTabs(tabs, x, top)
 			button.icon:Hide()
 		end
 		button.count:SetText("")
-		SetOutline(button, (viewing or 1) == index)
+		SetOutline(button, (W.viewing or 1) == index)
 		button:SetAlpha(1)
 		button:Show()
 	end
-	for i = #tabs + 1, #tabButtons do tabButtons[i]:Hide() end
+	for i = #tabs + 1, #W.tabButtons do W.tabButtons[i]:Hide() end
 	return #tabs > 1 and (TAB_SIZE + 10) or 0
 end
 
@@ -478,39 +672,19 @@ end
 -- The character tabs along the top, in the spellbook's style
 -- ------------------------------------------------------------------
 
-local function TabArt()
-	if tabArt ~= nil then return tabArt or nil end
-	tabArt = false
-	if HasAtlas(CTAB_ART.tab) then
-		tabArt = { tab = CTAB_ART.tab }
-		if HasAtlas(CTAB_ART.tabActive) then tabArt.tabActive = CTAB_ART.tabActive end
-		if HasAtlas(CTAB_ART.tabActiveGlow) then tabArt.tabActiveGlow = CTAB_ART.tabActiveGlow end
-		report["character tab art"] = "spellbook atlas"
-	else
-		report["character tab art"] = "plain bevel (no spellbook atlas on this client)"
-	end
-	return tabArt or nil
-end
-
--- A character's last seen gold (this one's live), from the snapshot store.
-local function GoldOf(who)
-	local rows = ns.Vault.Gold()
-	for _, row in ipairs(rows) do
-		if row.who == who then return row.money end
-	end
-	return nil
-end
-
 local function CharTabTooltip(self)
 	local entry = self.csEntry or {}
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	GameTooltip:SetText(ns.Label(self.csWho or ""), 1, 1, 1)
+	GameTooltip:SetText(ns.ShortLabel(self.csWho or ""), 1, 1, 1)
 	local line = {}
 	if entry.level then line[#line + 1] = "Level " .. entry.level end
 	if entry.class then line[#line + 1] = ClassLabel(entry.class) end
 	if #line > 0 then GameTooltip:AddLine(table.concat(line, " "), 0.8, 0.8, 0.8) end
+	if entry.realm and entry.realm ~= "" then GameTooltip:AddLine(entry.realm, 0.6, 0.6, 0.6) end
 	if entry.bank then
 		GameTooltip:AddLine("Bank: " .. (entry.bank.items or 0) .. " items, " .. Ago(entry.bank.time), 0.6, 0.85, 1)
+	elseif self.csWho == ns.Who() then
+		GameTooltip:AddLine("Bank: not saved yet", 0.6, 0.85, 1)
 	end
 	if entry.bags then
 		GameTooltip:AddLine("Bags: " .. (entry.bags.items or 0) .. " items, " .. Ago(entry.bags.time), 0.6, 0.85, 1)
@@ -520,143 +694,44 @@ local function CharTabTooltip(self)
 	GameTooltip:Show()
 end
 
--- Clips a tab's icon (and the dark plate under it) to the tab window's shape, rounded along the
--- top and flat along the bottom, which is what this mask atlas cuts. Without it the square icon
--- shows through the frame's open corners. The atlas's region is larger than its shape, so the
--- mask is drawn about a quarter larger than the texture it clips.
-local TAB_MASK = "UI-HUD-ActionBar-IconFrame-Mask"
-local MASK_OVER = 0.26
-
-local function MaskTabTexture(tab, texture, size)
-	if not (tab.CreateMaskTexture and HasAtlas(TAB_MASK)) then return false end
-	local ok, mask = pcall(tab.CreateMaskTexture, tab)
-	if not (ok and mask) then return false end
-	if not pcall(mask.SetAtlas, mask, TAB_MASK) then return false end
-	local w = size or (texture.GetWidth and texture:GetWidth()) or 0
-	local h = size or (texture.GetHeight and texture:GetHeight()) or 0
-	if not w or w <= 0 then w = 40 end
-	if not h or h <= 0 then h = 40 end
-	mask:ClearAllPoints()
-	mask:SetPoint("TOPLEFT", texture, "TOPLEFT", -MASK_OVER * w, MASK_OVER * h)
-	mask:SetPoint("BOTTOMRIGHT", texture, "BOTTOMRIGHT", MASK_OVER * w, -MASK_OVER * h)
-	if texture.AddMaskTexture and pcall(texture.AddMaskTexture, texture, mask) then
-		texture.csMask = mask
-		return true
-	end
-	pcall(mask.Hide, mask)
-	return false
-end
-
-local function NewCharTab(index)
-	local tab = CreateFrame("CheckButton", nil, window)
-	tab:SetSize(CTAB_W, CTAB_H)
-	-- One level under the window, so the window's own border covers the tab's feet.
-	tab:SetFrameLevel(math.max(0, (window:GetFrameLevel() or 1) - 1))
-
-	local back = tab:CreateTexture(nil, "BACKGROUND")
-	back:SetPoint("TOPLEFT", 4, -3)
-	back:SetPoint("BOTTOMRIGHT", -4, 0)
-	back:SetColorTexture(0.02, 0.02, 0.02, 1)
-
-	local icon = tab:CreateTexture(nil, "ARTWORK")
-	icon:SetPoint("TOP", 0, -4)
-	icon:SetSize(CTAB_W - 10, CTAB_W - 10)
-	tab.icon = icon
-
-	local masked = MaskTabTexture(tab, icon, CTAB_W - 10)
-	MaskTabTexture(tab, back)
-	report["character tab mask"] = masked and TAB_MASK or "none (the icon keeps its corners)"
-
-	local art = TabArt()
-	if art then
-		tab.frameTex = tab:CreateTexture(nil, "OVERLAY")
-		tab.frameTex:SetAllPoints()
-		pcall(tab.frameTex.SetAtlas, tab.frameTex, art.tab)
-		if art.tabActiveGlow then
-			tab.glow = tab:CreateTexture(nil, "OVERLAY", nil, -1)
-			tab.glow:SetPoint("TOPLEFT", 0, 1)
-			tab.glow:SetPoint("BOTTOMRIGHT", 0, 0)
-			pcall(tab.glow.SetAtlas, tab.glow, art.tabActiveGlow)
-			tab.glow:Hide()
-		end
-	else
-		-- Plain fallback: a dark bevel, gold when chosen.
-		local okBevel, bevel = pcall(CreateFrame, "Frame", nil, tab, "BackdropTemplate")
-		if okBevel and bevel and bevel.SetBackdrop then
-			bevel:SetAllPoints()
-			bevel:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 8 })
-			bevel:SetBackdropBorderColor(0.45, 0.4, 0.33)
-			bevel:EnableMouse(false)
-			tab.bevel = bevel
-		end
-		local okSel, sel = pcall(CreateFrame, "Frame", nil, tab, "BackdropTemplate")
-		if okSel and sel and sel.SetBackdrop then
-			sel:SetAllPoints()
-			sel:SetBackdrop({ edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border", edgeSize = 9 })
-			sel:SetBackdropBorderColor(1, 0.85, 0.1)
-			sel:SetFrameLevel(tab:GetFrameLevel() + 2)
-			sel:EnableMouse(false)
-			tab.sel = sel
-		end
-	end
-
-	local hover = tab:CreateTexture(nil, "HIGHLIGHT")
-	hover:SetAllPoints(icon)
-	hover:SetColorTexture(1, 1, 1, 0.15)
-
-	tab.SetChosen = function(self, on)
-		local artNow = TabArt()
-		if self.frameTex and artNow then
-			pcall(self.frameTex.SetAtlas, self.frameTex, (on and artNow.tabActive) or artNow.tab)
-		end
-		if self.glow then self.glow:SetShown(on) end
-		if self.sel then self.sel:SetShown(on) end
-		if self.bevel then self.bevel:SetShown(not on) end
-		self.icon:SetAlpha(on and 1 or 0.85)
-	end
-
+local function NewCharTab(W, index)
+	local tab = ns.CreateTab(W.frame)
 	tab:SetScript("OnClick", function(self)
 		self:SetChecked(false)
-		who = self.csWho
-		viewing = nil
-		if searchBox then searchBox:SetText("") searchBox:ClearFocus() end
+		Front(W)
+		W.who = self.csWho
+		W.viewing, W.viewingBag = nil, nil
+		W.filter = ""
+		if W.searchBox then W.searchBox:SetText("") W.searchBox:ClearFocus() end
 		if PlaySound and SOUNDKIT and SOUNDKIT.IG_ABILITY_PAGE_TURN then pcall(PlaySound, SOUNDKIT.IG_ABILITY_PAGE_TURN) end
-		VaultUI.Refresh()
+		Refresh(W)
 	end)
 	tab:SetScript("OnEnter", CharTabTooltip)
 	tab:SetScript("OnLeave", function() GameTooltip:Hide() end)
-	charTabs[index] = tab
+	W.charTabs[index] = tab
 	return tab
 end
 
--- One tab per character with something saved for this mode, this character first. Runs after the
--- window has been sized, and wraps into a second row rather than marching past the right edge
--- once an account has more characters than fit along the top.
-local function LayoutCharTabs()
-	if mode == "guild" then
-		for _, tab in ipairs(charTabs) do tab:Hide() end
-		return 0
-	end
-	local list = ns.Vault.Characters(mode)
-	local selected = Selected()
-	local pitch = CTAB_W + CTAB_GAP
-	local perRow = math.max(1, math.floor(((window:GetWidth() or 380) - 64 - 20) / pitch))
+-- One tab per character this window lists. Runs after the window has been sized, and wraps into
+-- a second row rather than marching past the right edge once an account has more characters than
+-- fit along the top.
+local function LayoutCharTabs(W)
+	local list = VaultUI.Characters(W.kind)
+	local T = ns.TAB
+	local pitch = T.w + T.gap
+	local perRow = math.max(1, math.floor(((W.frame:GetWidth() or 380) - T.start - 20) / pitch))
 	for index, source in ipairs(list) do
-		local tab = charTabs[index] or NewCharTab(index)
+		local tab = W.charTabs[index] or NewCharTab(W, index)
 		tab.csWho, tab.csEntry = source.who, source.entry
-		local row = math.floor((index - 1) / perRow)
-		local col = (index - 1) % perRow
-		tab:ClearAllPoints()
-		-- Hanging off the top edge, clear of the portrait, feet tucked behind the border. A second
-		-- row sits above the first.
-		tab:SetPoint("BOTTOMLEFT", window, "TOPLEFT", 64 + col * pitch, -8 + row * (CTAB_H - 6))
-		SetClassIcon(tab.icon, source.entry.class)
-		tab:SetChosen(source.who == selected)
+		ns.HangTab(tab, W.frame, (index - 1) % perRow, math.floor((index - 1) / perRow))
+		SetClassIcon(tab.icon, source.entry and source.entry.class)
+		tab:SetChosen(source.who == W.current)
 		tab:Show()
 	end
-	for i = #list + 1, #charTabs do charTabs[i]:Hide() end
-	local rows = math.max(1, math.ceil(#list / perRow))
-	pcall(window.SetClampRectInsets, window, 0, 0, rows * (CTAB_H - 6) + 8, 0)
+	for i = #list + 1, #W.charTabs do W.charTabs[i]:Hide() end
+	local rows = #list > 0 and math.ceil(#list / perRow) or 0
+	W.tabRoom = rows > 0 and (rows * T.rowStep + T.tuck) or 0
+	pcall(W.frame.SetClampRectInsets, W.frame, 0, 0, W.tabRoom, 0)
 	return #list
 end
 
@@ -666,7 +741,7 @@ end
 
 -- Sizes the window round its contents, or to the measured size of the real window when the bank
 -- was measured and nothing extra (a side column) has to fit.
-local function SizeWindow(cols, rows, tabColumn, withBagRow, extraRows, geo, contentBottom)
+local function SizeWindow(W, cols, rows, tabColumn, withBagRow, extraRows, geo, contentBottom)
 	geo = geo or PLAIN
 	local width, height
 	if geo.width and geo.height and tabColumn == 0 then
@@ -677,86 +752,118 @@ local function SizeWindow(cols, rows, tabColumn, withBagRow, extraRows, geo, con
 		local bottom = contentBottom or (geo.originY + (rows + (extraRows or 0)) * geo.pitchY - (geo.pitchY - geo.cell))
 		height = bottom + (withBagRow and 12 or 6) + FOOTER_H
 	end
-	window:SetSize(math.max(width, 300), math.max(height, 200))
-	if inset then
-		inset:ClearAllPoints()
-		inset:SetPoint("TOPLEFT", window, "TOPLEFT", geo.originX - 8, -(geo.originY - 8))
-		inset:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -(geo.originX - 8), FOOTER_H - 4)
+	W.frame:SetSize(math.max(width, 300), math.max(height, 200))
+	if W.inset then
+		W.inset:ClearAllPoints()
+		W.inset:SetPoint("TOPLEFT", W.frame, "TOPLEFT", geo.originX - 8, -(geo.originY - 8))
+		W.inset:SetPoint("BOTTOMRIGHT", W.frame, "BOTTOMRIGHT", -(geo.originX - 8), FOOTER_H - 4)
 	end
 end
 
 -- The real bank shows nothing but the money down here, so that is all the replica shows. When
 -- the snapshot was taken lives on the portrait's tooltip and on the character tabs instead.
-local function Footer(record)
-	moneyText:SetText(record and ns.Money(record.money) or "")
+local function Footer(W, record)
+	W.moneyText:SetText(record and ns.Money(record.money) or "")
 	-- The account's gold, small and grey in the bottom left, unless switched off.
-	if ns.db.vault.showAccountGold and mode ~= "guild" then
+	if ns.db.vault.showAccountGold and W.kind ~= "guild" then
 		local _, total = ns.Vault.Gold()
-		accountText:SetText("Account " .. ns.Money(total))
-		accountText:Show()
+		W.accountText:SetText("Account " .. ns.Money(total))
+		W.accountText:Show()
 	else
-		accountText:Hide()
+		W.accountText:Hide()
 	end
 end
 
-local function PortraitTooltip(self)
-	local entry = CharEntry()
+-- Nothing to draw: the grid, the Bag Slots and the side tabs go, and a short line says why.
+local function ShowNote(W, text)
+	HideCellsFrom(W, 1)
+	HideBagRow(W)
+	LayoutTabs(W, {}, 0)
+	W.divider:Hide()
+	W.noteText:SetText(text)
+	W.noteText:Show()
+end
+
+local function PortraitTooltip(W, self)
+	local entry = CharEntry(W)
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-	GameTooltip:SetText(ns.Label(Selected()), 1, 1, 1)
+	if W.kind == "guild" then
+		local record, key = GuildRecord()
+		GameTooltip:SetText(key and key:gsub(" %- .*$", "") or "Guild Bank", 1, 1, 1)
+		GameTooltip:AddLine(record and ("Checked " .. When(record.time)) or "Not seen yet", 0.6, 0.85, 1)
+		GameTooltip:Show()
+		return
+	end
+	if not W.current then
+		GameTooltip:SetText("Saved bags", 1, 1, 1)
+		GameTooltip:AddLine("No other characters saved yet", 0.6, 0.85, 1)
+		GameTooltip:Show()
+		return
+	end
+	GameTooltip:SetText(ns.Label(W.current), 1, 1, 1)
 	local line = {}
 	if entry and entry.level then line[#line + 1] = "Level " .. entry.level end
 	if entry and entry.class then line[#line + 1] = ClassLabel(entry.class) end
 	if #line > 0 then GameTooltip:AddLine(table.concat(line, " "), 0.8, 0.8, 0.8) end
-	local record = entry and (mode == "bags" and entry.bags or entry.bank)
-	if mode == "guild" then record = GuildRecord() end
+	local record = entry and (W.kind == "bags" and entry.bags or entry.bank)
 	if record then
 		GameTooltip:AddLine("Checked " .. When(record.time), 0.6, 0.85, 1)
 	else
 		GameTooltip:AddLine("Not seen yet", 0.6, 0.85, 1)
 	end
-	if mode ~= "guild" then
-		local gold = GoldOf(Selected())
-		if gold then GameTooltip:AddDoubleLine("Gold", ns.Money(gold), 1, 0.82, 0, 1, 1, 1) end
-		local _, total = ns.Vault.Gold()
-		GameTooltip:AddDoubleLine("Account", ns.Money(total), 1, 0.82, 0, 1, 1, 1)
-	end
+	local gold = GoldOf(W.current)
+	if gold then GameTooltip:AddDoubleLine("Gold", ns.Money(gold), 1, 0.82, 0, 1, 1, 1) end
+	local _, total = ns.Vault.Gold()
+	GameTooltip:AddDoubleLine("Account", ns.Money(total), 1, 0.82, 0, 1, 1, 1)
 	GameTooltip:Show()
 end
 
-local function Portrait()
-	if not window.csPortrait then return end
-	local entry = CharEntry()
-	if Selected() == ns.Who() then
-		window.csPortrait:SetTexCoord(0, 1, 0, 1)
-		if not ns.SetPlayerPortrait(window.csPortrait) then
-			SetClassIcon(window.csPortrait, entry and entry.class)
-		end
-	else
-		SetClassIcon(window.csPortrait, entry and entry.class)
+-- This character's own face on its bank and on the guild bank, a class icon for anyone else.
+local function Portrait(W)
+	local portrait = W.frame.csPortrait
+	if not portrait then return end
+	local me = ns.Who()
+	if W.kind == "guild" or W.current == me then
+		portrait:SetTexCoord(0, 1, 0, 1)
+		if ns.SetPlayerPortrait(portrait) then return end
+		SetClassIcon(portrait, LiveClass())
+		return
 	end
+	local entry = CharEntry(W)
+	SetClassIcon(portrait, entry and entry.class)
 end
 
-local function LayoutBank()
-	local entry = CharEntry()
+local function LayoutBank(W)
+	local entry = CharEntry(W)
 	local record = entry and entry.bank
-	window.csTitle:SetText("Bank")
+	W.frame.csTitle:SetText(ns.ShortLabel(W.current) .. "'s Bank")
+	local geo = BankGeometry(record)
+	local cols = geo.cols or BANK_COLS
+
+	if not record then
+		-- Only ever this character: every other tab is there because its bank was saved.
+		ShowNote(W, W.current == ns.Who() and "Visit a banker once and your bank is saved here."
+			or "This character's bank has not been seen yet.")
+		SizeWindow(W, cols, 6, 0, true, nil, geo, nil)
+		Footer(W, nil)
+		return
+	end
+	W.noteText:Hide()
 	local mains, bags = BankParts(record)
 
 	-- What the grid is showing: a bag that was clicked, or one of the main tabs. The two are kept
-	-- in separate variables so a tab index can never be read as a bag index.
+	-- in separate fields so a tab index can never be read as a bag index.
 	local container
-	if viewingBag and bags[viewingBag] then
-		container = bags[viewingBag]
+	if W.viewingBag and bags[W.viewingBag] then
+		container = bags[W.viewingBag]
 	else
-		viewingBag = nil
-		if type(viewing) == "number" and not mains[viewing] then viewing = nil end
-		container = mains[viewing or 1]
+		W.viewingBag = nil
+		if type(W.viewing) == "number" and not mains[W.viewing] then W.viewing = nil end
+		container = mains[W.viewing or 1]
 	end
 
-	local geo = BankGeometry(record)
-	local cols = geo.cols or BANK_COLS
 	local slots = container and container.slots or 48
-	local rows = LayoutGrid(slots, cols, false, container and container.items or {}, geo)
+	local rows = LayoutGrid(W, slots, cols, false, container and container.items or {}, geo)
 
 	local tabs = {}
 	if #mains > 1 then
@@ -764,32 +871,32 @@ local function LayoutBank()
 			tabs[index] = { label = bucket.label, detail = #bucket.items .. " of " .. bucket.slots .. " used" }
 		end
 	end
-	local tabColumn = LayoutTabs(tabs, geo.originX + cols * geo.pitchX + 4, geo.originY)
+	local tabColumn = LayoutTabs(W, tabs, geo.originX + cols * geo.pitchX + 4, geo.originY)
 
 	local gridBottom = geo.originY + (rows - 1) * geo.pitchY + geo.cell
 	-- Without a measured place for the Bag Slots they sit a clear gap under the grid, the rule
 	-- between the two.
-	local rowBottom = LayoutBagRow(record, gridBottom + 14, geo)
-	divider:Hide()
-	SizeWindow(cols, rows, tabColumn, true, nil, geo, rowBottom)
-	Footer(record)
-
-	if record then
-		noteText:Hide()
-	else
-		noteText:SetText(Selected() == ns.Who() and "Open your bank once and it will be remembered here."
-			or "This character's bank has not been seen yet.")
-		noteText:Show()
-	end
+	local rowBottom = LayoutBagRow(W, record, gridBottom + 14, geo)
+	W.divider:Hide()
+	SizeWindow(W, cols, rows, tabColumn, true, nil, geo, rowBottom)
+	Footer(W, record)
 end
 
 -- The bags as the combined backpack shows them: one grid, filled from the bottom right corner
 -- upwards and leftwards, the backpack's first slot in the bottom right, each further bag stacked
 -- above. A reagent bag gets its own small grid underneath, the same way round.
-local function LayoutBags()
-	local entry = CharEntry()
+local function LayoutBags(W)
+	if not W.current then
+		W.frame.csTitle:SetText("Saved Bags")
+		ShowNote(W, "No other characters saved yet. Log in on another character and its bags are saved a few seconds later.")
+		SizeWindow(W, BAGS_COLS, 4, 0, false, nil, PLAIN)
+		Footer(W, nil)
+		return
+	end
+	local entry = CharEntry(W)
 	local record = entry and entry.bags
-	window.csTitle:SetText("Combined Backpack")
+	W.frame.csTitle:SetText(ns.ShortLabel(W.current) .. "'s Backpack")
+	W.noteText:Hide()
 
 	local ordinary, reagent = {}, nil
 	for _, bucket in ipairs(record and record.containers or {}) do
@@ -811,7 +918,7 @@ local function LayoutBags()
 			local rowFromBottom = math.floor(k / BAGS_COLS)
 			local row = topRow + (rows - 1 - rowFromBottom)
 			cellIndex = cellIndex + 1
-			PlaceCell(cellIndex, col, row, sequence[k + 1] or nil, PLAIN)
+			PlaceCell(W, cellIndex, col, row, sequence[k + 1] or nil, PLAIN)
 		end
 		return rows, cellIndex
 	end
@@ -822,33 +929,25 @@ local function LayoutBags()
 		-- A gap of half a row with a line through it, then the reagent bag.
 		local reagentRows
 		reagentRows, used = Fill({ reagent }, rows + 0.5, used)
-		divider:ClearAllPoints()
-		divider:SetPoint("TOPLEFT", window, "TOPLEFT", MARGIN_X, -(GRID_TOP + rows * PITCH + 6))
-		divider:SetWidth(BAGS_COLS * PITCH - GAP)
-		divider:Show()
+		W.divider:ClearAllPoints()
+		W.divider:SetPoint("TOPLEFT", W.frame, "TOPLEFT", MARGIN_X, -(GRID_TOP + rows * PITCH + 6))
+		W.divider:SetWidth(BAGS_COLS * PITCH - GAP)
+		W.divider:Show()
 		extra = reagentRows + 0.5
 	else
-		divider:Hide()
+		W.divider:Hide()
 	end
-	HideCellsFrom(used + 1)
+	HideCellsFrom(W, used + 1)
 
-	LayoutTabs({}, 0)
-	HideBagRow()
-	SizeWindow(BAGS_COLS, rows, 0, false, extra, PLAIN)
-	Footer(record)
-
-	if record then
-		noteText:Hide()
-	else
-		noteText:SetText(Selected() == ns.Who() and "Your bags are read a few seconds after you log in."
-			or "This character's bags have not been seen yet.")
-		noteText:Show()
-	end
+	LayoutTabs(W, {}, 0)
+	HideBagRow(W)
+	SizeWindow(W, BAGS_COLS, rows, 0, false, extra, PLAIN)
+	Footer(W, record)
 end
 
-local function LayoutGuild()
+local function LayoutGuild(W)
 	local record, key = GuildRecord()
-	window.csTitle:SetText(key and ("Guild Bank: " .. key:gsub(" %- .*$", "")) or "Guild Bank")
+	W.frame.csTitle:SetText(key and ("Guild Bank: " .. key:gsub(" %- .*$", "")) or "Guild Bank")
 
 	local tabs, tabList = {}, {}
 	if record then
@@ -865,59 +964,54 @@ local function LayoutGuild()
 			}
 		end
 	end
-	if type(viewing) ~= "number" or not tabList[viewing] then viewing = 1 end
-	local tab = tabList[viewing]
+	if type(W.viewing) ~= "number" or not tabList[W.viewing] then W.viewing = 1 end
+	local tab = tabList[W.viewing]
 
-	local rows = LayoutGrid(GUILD_SLOTS, GUILD_COLS, true, tab and tab.items or {}, PLAIN)
-	local tabColumn = LayoutTabs(tabs, MARGIN_X + GUILD_COLS * PITCH + 4)
+	local rows = LayoutGrid(W, GUILD_SLOTS, GUILD_COLS, true, tab and tab.items or {}, PLAIN)
+	local tabColumn = LayoutTabs(W, tabs, MARGIN_X + GUILD_COLS * PITCH + 4)
 	if #tabs == 1 then tabColumn = TAB_SIZE + 10 end
-	HideBagRow()
-	divider:Hide()
-	SizeWindow(GUILD_COLS, rows, tabColumn, false, nil, PLAIN)
-	Footer(record)
+	HideBagRow(W)
+	W.divider:Hide()
+	SizeWindow(W, GUILD_COLS, rows, tabColumn, false, nil, PLAIN)
+	Footer(W, record)
 
 	if record and tab then
-		noteText:Hide()
+		W.noteText:Hide()
 	else
-		noteText:SetText("Open the guild bank once and it will be remembered here.")
-		noteText:Show()
+		W.noteText:SetText("Open the guild bank once and it will be remembered here.")
+		W.noteText:Show()
 	end
 end
 
-function VaultUI.Refresh()
-	if not window or not window:IsShown() then return end
-	-- A character that has since been forgotten, or has nothing saved for this mode (a bank seen
-	-- but bags never read, say), falls back to this one, so the window never opens on a character
-	-- that has no tab in the row.
-	if who and not ns.vault.chars[who] then who = nil end
-	if who and mode ~= "guild" then
-		local entry = ns.Vault.CharRecord(who)
-		if not (entry and entry[mode]) then who = nil end
-	end
-	Portrait()
-	if mode == "guild" then
-		LayoutGuild()
-	elseif mode == "bags" then
-		LayoutBags()
+Refresh = function(W)
+	if not (W and W.frame and W.frame:IsShown()) then return end
+	W.current = Resolve(W)
+	Portrait(W)
+	if W.kind == "guild" then
+		LayoutGuild(W)
+	elseif W.kind == "bags" then
+		LayoutBags(W)
 	else
-		LayoutBank()
+		LayoutBank(W)
 	end
 	-- After the window has its final width, so the tabs know how many fit along the top.
-	LayoutCharTabs()
+	LayoutCharTabs(W)
 end
 
 -- ------------------------------------------------------------------
--- Building the window
+-- Building a window
 -- ------------------------------------------------------------------
 
-local function BuildSearchBox(parent)
+local function BuildSearchBox(W)
+	local name = NAMES[W.kind] .. "Search"
+	local parent = W.frame
 	local box
-	local ok, made = pcall(CreateFrame, "EditBox", "BankTabsVaultSearch", parent, "SearchBoxTemplate")
+	local ok, made = pcall(CreateFrame, "EditBox", name, parent, "SearchBoxTemplate")
 	if ok and made then
 		box = made
 	else
-		local fallbackOK, fallback = pcall(CreateFrame, "EditBox", "BankTabsVaultSearch", parent, "InputBoxTemplate")
-		box = (fallbackOK and fallback) or CreateFrame("EditBox", "BankTabsVaultSearch", parent)
+		local fallbackOK, fallback = pcall(CreateFrame, "EditBox", name, parent, "InputBoxTemplate")
+		box = (fallbackOK and fallback) or CreateFrame("EditBox", name, parent)
 		box:SetAutoFocus(false)
 		box:SetFontObject("ChatFontNormal")
 		if not fallbackOK then
@@ -930,61 +1024,88 @@ local function BuildSearchBox(parent)
 	box:SetSize(120, 20)
 	box:SetScript("OnTextChanged", function(self)
 		if self.Instructions then self.Instructions:SetShown((self:GetText() or "") == "") end
-		filter = (self:GetText() or ""):lower()
-		VaultUI.Refresh()
+		W.filter = (self:GetText() or ""):lower()
+		Refresh(W)
 	end)
 	box:SetScript("OnEscapePressed", function(self) self:SetText("") self:ClearFocus() end)
 	return box
 end
 
-local function Build()
-	if window then return end
-	window = ns.CreatePortraitPanel("BankTabsVault", "vault")
-	window:SetSize(380, 420)
-	window:SetPoint("CENTER")
-	window:SetFrameStrata("HIGH")
-	window:Hide()
-	window.csTitle:SetText("Bank")
-	-- The character tabs stand above the top edge, so the clamp leaves room for them.
-	pcall(window.SetClampRectInsets, window, 0, 0, CTAB_H, 0)
+local function HeaderTabsChanged()
+	if ns.BagHeader and ns.BagHeader.Refresh then pcall(ns.BagHeader.Refresh) end
+end
 
-	inset = window.Inset
-	if not inset then
-		inset = CreateFrame("Frame", nil, window)
-		local plate = inset:CreateTexture(nil, "BACKGROUND")
+local function Build(kind)
+	if windows[kind] then return windows[kind] end
+	local W = { kind = kind, cells = {}, bagCells = {}, tabButtons = {}, charTabs = {}, filter = "", tabRoom = 0 }
+	windows[kind] = W
+
+	local frame = ns.CreatePortraitPanel(NAMES[kind], "saved " .. kind)
+	W.frame = frame
+	frame.csKind = kind
+	frame:SetSize(380, 420)
+	frame:SetFrameStrata("HIGH")
+	frame:Hide()
+	frame.csTitle:SetText(kind == "guild" and "Guild Bank" or kind == "bags" and "Saved Bags" or "Bank")
+	pcall(frame.SetToplevel, frame, true)
+	-- The addon keeps the place itself, per character; the client's own layout cache stays out.
+	pcall(frame.SetDontSavePosition, frame, true)
+
+	-- Dragged by the title area (the panel's own background; everything inside it that takes the
+	-- mouse is a slot or a control), kept on screen with its character tabs, remembered on letting
+	-- go.
+	frame:SetScript("OnDragStart", function(self)
+		Front(W)
+		if not self:IsMovable() then return end
+		self:StartMoving()
+		W.moving = true
+	end)
+	frame:SetScript("OnDragStop", function(self)
+		if not W.moving then return end
+		W.moving = false
+		self:StopMovingOrSizing()
+		SavePosition(W)
+	end)
+	frame:SetScript("OnMouseDown", function() Front(W) end)
+
+	W.inset = frame.Inset
+	if not W.inset then
+		W.inset = CreateFrame("Frame", nil, frame)
+		local plate = W.inset:CreateTexture(nil, "BACKGROUND")
 		plate:SetAllPoints()
 		plate:SetColorTexture(0, 0, 0, 0.45)
 	end
-	inset:SetFrameLevel(window:GetFrameLevel() + 1)
+	W.inset:SetFrameLevel(frame:GetFrameLevel() + 1)
 
-	searchBox = BuildSearchBox(window)
-	searchBox:SetPoint("TOPRIGHT", window, "TOPRIGHT", -34, -30)
+	W.searchBox = BuildSearchBox(W)
+	W.searchBox:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -34, -30)
 
-	bagLabel = window:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-	bagLabel:SetText("Bag Slots:")
+	W.bagLabel = frame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
+	W.bagLabel:SetText("Bag Slots:")
+	W.bagLabel:Hide()
 
-	bagRule = window:CreateTexture(nil, "ARTWORK")
-	bagRule:SetColorTexture(1, 0.82, 0, 0.3)
-	bagRule:SetHeight(1)
-	bagRule:Hide()
+	W.bagRule = frame:CreateTexture(nil, "ARTWORK")
+	W.bagRule:SetColorTexture(1, 0.82, 0, 0.3)
+	W.bagRule:SetHeight(1)
+	W.bagRule:Hide()
 
-	divider = window:CreateTexture(nil, "ARTWORK")
-	divider:SetColorTexture(1, 1, 1, 0.16)
-	divider:SetHeight(1)
-	divider:Hide()
+	W.divider = frame:CreateTexture(nil, "ARTWORK")
+	W.divider:SetColorTexture(1, 1, 1, 0.16)
+	W.divider:SetHeight(1)
+	W.divider:Hide()
 
-	moneyText = window:CreateFontString(nil, "OVERLAY", "GameFontNormal")
-	moneyText:SetPoint("BOTTOMRIGHT", window, "BOTTOMRIGHT", -16, 12)
-	moneyText:SetJustifyH("RIGHT")
+	W.moneyText = frame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+	W.moneyText:SetPoint("BOTTOMRIGHT", frame, "BOTTOMRIGHT", -16, 12)
+	W.moneyText:SetJustifyH("RIGHT")
 
-	accountText = window:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-	accountText:SetPoint("BOTTOMLEFT", window, "BOTTOMLEFT", MARGIN_X, 14)
-	accountText:SetJustifyH("LEFT")
-	accountText:Hide()
+	W.accountText = frame:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
+	W.accountText:SetPoint("BOTTOMLEFT", frame, "BOTTOMLEFT", MARGIN_X, 14)
+	W.accountText:SetJustifyH("LEFT")
+	W.accountText:Hide()
 
 	-- Hovering either money line lists every character's gold, as on the real windows.
-	for _, text in ipairs({ moneyText, accountText }) do
-		local hit = CreateFrame("Frame", nil, window)
+	for _, text in ipairs({ W.moneyText, W.accountText }) do
+		local hit = CreateFrame("Frame", nil, frame)
 		hit:SetPoint("TOPLEFT", text, "TOPLEFT", -4, 4)
 		hit:SetPoint("BOTTOMRIGHT", text, "BOTTOMRIGHT", 4, -4)
 		hit:EnableMouse(true)
@@ -994,50 +1115,114 @@ local function Build()
 	end
 
 	-- The portrait is a texture, so a small frame over it carries the tooltip.
-	if window.csPortrait then
-		local hit = CreateFrame("Frame", nil, window)
-		hit:SetAllPoints(window.csPortrait)
+	if frame.csPortrait then
+		local hit = CreateFrame("Frame", nil, frame)
+		hit:SetAllPoints(frame.csPortrait)
 		hit:EnableMouse(true)
-		hit:SetScript("OnEnter", PortraitTooltip)
+		hit:SetScript("OnEnter", function(self) PortraitTooltip(W, self) end)
 		hit:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	end
 
-	noteText = window:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-	noteText:SetPoint("CENTER", window, "CENTER", 0, 20)
-	noteText:SetWidth(280)
-	noteText:SetWordWrap(true)
-	noteText:Hide()
+	W.noteText = frame:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+	W.noteText:SetPoint("CENTER", frame, "CENTER", 0, 20)
+	W.noteText:SetWidth(280)
+	W.noteText:SetWordWrap(true)
+	W.noteText:Hide()
 
-	window:SetScript("OnShow", function() VaultUI.Refresh() end)
-	tinsert(UISpecialFrames, "BankTabsVault")
-	report["vault window"] = "ok, replica"
+	frame:SetScript("OnShow", function()
+		Refresh(W)
+		-- Placed when it opens, not when it merely comes back into view with the whole interface
+		-- (the interface hidden and shown again leaves the window itself open, and where it was).
+		if not W.placed then
+			PlaceOnOpen(W)
+			W.placed = true
+		end
+		Front(W)
+		HeaderTabsChanged()
+	end)
+	frame:SetScript("OnHide", function(self)
+		if W.moving then
+			W.moving = false
+			self:StopMovingOrSizing()
+			SavePosition(W)
+		end
+		if not self:IsShown() then W.placed = false end
+		Unlist(kind)
+		SyncEsc()
+		HeaderTabsChanged()
+	end)
+	report["saved " .. kind .. " window"] = "ok, replica"
+	return W
 end
 
--- `which` is "bank", "bags" or "guild". Anything else keeps whatever was showing last.
-function VaultUI.Show(which, character)
-	Build()
-	if which == "bank" or which == "bags" or which == "guild" then
-		if mode ~= which then viewing, viewingBag = nil, nil end
-		mode = which
+-- ------------------------------------------------------------------
+-- What the rest of the addon calls
+-- ------------------------------------------------------------------
+
+local function Kind(kind)
+	if kind == "bank" or kind == "bags" or kind == "guild" then return kind end
+	return nil
+end
+
+-- Opens a saved window (`kind` is "bank", "bags" or "guild"), on `character` if one is named. One
+-- that is already open is brought to the front, never closed.
+function VaultUI.Show(kind, character)
+	kind = Kind(kind) or "bank"
+	local W = Build(kind)
+	if character and kind ~= "guild" then
+		W.who = character
+		W.viewing, W.viewingBag = nil, nil
 	end
-	if character then who = character end
-	window:Show()
-	VaultUI.Refresh()
-end
-
-function VaultUI.Toggle(which)
-	Build()
-	if window:IsShown() and (not which or which == mode) then
-		window:Hide()
-		return
+	if W.frame:IsShown() then
+		Front(W)
+		Refresh(W)
+	else
+		W.frame:Show()
 	end
-	VaultUI.Show(which or mode)
+	return W.frame
 end
 
-function VaultUI.Mode()
-	return mode
+function VaultUI.Hide(kind)
+	local W = windows[Kind(kind) or ""]
+	if W and W.frame:IsShown() then W.frame:Hide() end
 end
 
-function VaultUI.Selected()
-	return Selected()
+-- Closes a saved window that is open and in front, opens (or brings forward) any other. With no
+-- kind it is the window in front, else the one opened last, else the bank.
+function VaultUI.Toggle(kind)
+	kind = Kind(kind) or FrontKind() or lastKind or "bank"
+	local W = windows[kind]
+	if W and W.frame:IsShown() and FrontKind() == kind then
+		W.frame:Hide()
+		return false
+	end
+	VaultUI.Show(kind)
+	return true
+end
+
+function VaultUI.IsShown(kind)
+	local W = windows[Kind(kind) or ""]
+	return (W and W.frame:IsShown()) and true or false
+end
+
+-- Redraws every saved window that is open, which is what a new snapshot asks for.
+function VaultUI.Refresh()
+	for _, kind in ipairs(KINDS) do
+		local W = windows[kind]
+		if W then Refresh(W) end
+	end
+end
+
+-- The character a saved window shows (the bank, the bags), or the guild it shows (the guild bank).
+-- The saved bags answer nil when no other character has bags saved.
+function VaultUI.Selected(kind)
+	kind = Kind(kind) or "bank"
+	return Resolve(windows[kind] or { kind = kind })
+end
+
+-- The saved windows on screen, the one in front last.
+function VaultUI.Open()
+	local out = {}
+	for index, kind in ipairs(order) do out[index] = kind end
+	return out
 end

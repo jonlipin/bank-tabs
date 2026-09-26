@@ -19,15 +19,23 @@ brings everything Casement saved over to Bank Tabs, see "Coming from Casement" b
   window itself: the same portrait and title frame, the search box top right, the eight wide grid
   with every empty slot drawn, the Bag Slots row underneath, the money bottom right. Every item is
   in the slot it was actually in. Click a bank bag in the Bag Slots row to look inside it.
-- Your bags are saved too, a few seconds after you log in and whenever they settle, and shown as
-  the combined backpack shows them.
+- Your bags are saved too, a few seconds after you log in and whenever they settle. The saved bags
+  show your other characters' bags, as the combined backpack shows them; the character you are
+  playing already has its real backpack in front of it.
 - The guild bank is saved when you open it, one tab at a time, and shown in its own shape with its
   tabs down the side.
 - Every character on the account is remembered. A row of tabs in the spellbook's style hangs off
-  the top of the window, one per character with their class icon, so any character's bank or bags
-  can be looked at from anywhere.
-- Three icons in your backpack's header open the saved bank, the saved bags and the saved guild
-  bank. They sit in a part of the header the game is not already using.
+  the top of the saved bank and the saved bags, one per character with their class icon. The saved
+  bank's first tab is the character you are playing, so your own bank can be looked at from
+  anywhere too. Each window is titled for the character on show: "Vatik's Bank", "Choham's
+  Backpack".
+- The saved bank, the saved bags and the saved guild bank are separate windows that can be open
+  at the same time, each on its own character with its own search. Drag each by its title; it
+  stays on screen and is remembered where you left it. Escape closes the one opened last first.
+- Three tabs above your backpack, Bank, Bags and Guild, open the saved windows. They are the same
+  tabs as the character tabs, glow while their window is open, and are dimmed while there is
+  nothing saved for them. They hang off the top of the backpack, clear of its title, close button
+  and portrait, and move with it.
 - Every item tooltip says who has it and where: a line per character with the count in their bank
   and bags, the guild bank, and an account total. Your own bags are counted live. Switch it off,
   or have it only while holding a key, in the options.
@@ -61,9 +69,9 @@ the bag and bank windows, drag it around the rim. `/banktabs minimap` hides it.
 | --- | --- |
 | `/banktabs` | Opens the options |
 | `/banktabs window` | Opens the options in a window of their own |
-| `/banktabs bank` | Opens the saved bank, drawn like the bank window |
-| `/banktabs bags` | Opens the saved bags |
-| `/banktabs guild` | Opens the saved guild bank |
+| `/banktabs bank` | Opens the saved bank, drawn like the bank window, or closes it when it is in front |
+| `/banktabs bags` | Opens the saved bags (your other characters'), or closes them when in front |
+| `/banktabs guild` | Opens the saved guild bank, or closes it when it is in front |
 | `/banktabs snapshot` | Saves your bags, and the bank or guild bank if one is open |
 | `/banktabs gold` | Lists every character's gold and the account total |
 | `/banktabs lock` / `unlock` | Turns every window switch off or on |
@@ -108,8 +116,10 @@ what came over from Casement.
 `tests/banktabstest.js` is an offline harness. It stubs the game API in fengari, including a small
 layout engine for points, anchors and scales, and walks the addon's main paths: clamping and
 dragging the bag and bank windows, putting them back after the game re-anchors them, the bag
-switches, all three snapshots, the saved bank, bags and guild bank replicas slot by slot, the
-tooltips, the gold, and the options. It also loads the addon afresh for each way the Casement
+switches, all three snapshots, the saved bank, bags and guild bank replicas slot by slot, the three
+saved windows open together (their own characters and searches, Escape order, where they open and
+are left), the tabs above the backpack, the tooltips, the gold, and the options. It also loads the
+addon afresh for each way the Casement
 import can meet a login (the data holder present, the old addon still running, nothing present,
 already imported, and the ways those go wrong), and checks the package files.
 
