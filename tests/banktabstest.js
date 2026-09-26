@@ -1375,6 +1375,26 @@ check("the tab icons were saved", guild and guild.tabs[1].icon == "icon1")
 check("the guild money was saved", guild and guild.money == 9876543)
 check("the tab the user was looking at was put back", CURRENT_TAB == 2, CURRENT_TAB)
 
+-- A tab this character's rank cannot view comes back empty, which says nothing about what is in
+-- it: what a character who could view it saved is kept, through the full walk and through a change
+-- on that tab while it is on screen. Only its name and icon follow the game.
+guild.tabs[3] = { tab = 3, name = "Officers", icon = "old", viewable = true,
+  items = { { slot = 5, icon = 1, count = 3, id = 2589, name = "Linen Cloth" } } }
+fire("GUILDBANKFRAME_OPENED")
+RunTimers(5)
+check("a tab this character cannot view keeps what another character saved in it", #guild.tabs[3].items == 1 and guild.tabs[3].items[1].id == 2589, #guild.tabs[3].items)
+check("its name and icon still follow the game", guild.tabs[3].name == "Vault 3" and guild.tabs[3].icon == "icon3", guild.tabs[3].name)
+check("and its items still count", guild.items == 4, guild.items)
+CURRENT_TAB = 3
+fire("GUILDBANKBAGSLOTS_CHANGED")
+check("a change on that tab while it is on screen keeps them too", #guild.tabs[3].items == 1)
+CURRENT_TAB = 2
+check("a viewable tab is still replaced by what the game shows", #guild.tabs[1].items == 2 and #guild.tabs[2].items == 1)
+-- Back to the state the rest of this walk expects: tab three seen by nobody.
+guild.tabs[3] = { tab = 3, name = "Vault 3", icon = "icon3", viewable = false, items = {} }
+guild.items = 3
+ns.Vault.Changed()
+
 -- The guild bank window is managed like any other window.
 local guildGrip
 for _, f in ipairs(FRAMES) do
@@ -2115,7 +2135,8 @@ check("the minimap button was built", mm ~= nil)
 check("it sits on the minimap", mm and mm.parent == Minimap)
 check("it is shown by default", mm and mm.shown == true)
 check("it found an icon", (ns.report["minimap icon"] or ""):find("Interface"), ns.report["minimap icon"])
-check("the icon is a bag, not the map", (ns.report["minimap icon"] or ""):find("Bag") ~= nil and (ns.report["minimap icon"] or ""):find("Map") == nil, ns.report["minimap icon"])
+check("the icon is the treasure chest, not Stockpile's bag or the map", (ns.report["minimap icon"] or ""):find("Racial_Dwarf_FindTreasure", 1, true) ~= nil
+  and (ns.report["minimap icon"] or ""):find("Bag") == nil and (ns.report["minimap icon"] or ""):find("Map") == nil, ns.report["minimap icon"])
 
 -- Dragging it round the rim. The angle must stay in degrees: running math.deg over the game's own
 -- atan2, which already answers in degrees, multiplies it by about fifty seven.
@@ -3555,7 +3576,7 @@ const parts = [];
   check('its version is the addon\'s own, 2.0.0', field(toc, 'Version') === '2.0.0' && version === '2.0.0', field(toc, 'Version') + ' / ' + version);
   check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
     && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
-  check('its icon is a bag from the game\'s icons, the path intact', /^Interface\\Icons\\INV_Misc_Bag_\d+$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
+  check('its icon is the treasure chest from the game\'s icons (not Stockpile\'s bag), the path intact', /^Interface\\Icons\\Racial_Dwarf_FindTreasure$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
   check('the interface number is this client\'s', field(toc, 'Interface') === '16001');
   check('it lists exactly the files this harness loads, in order', codeLines(toc).join(',') === files.join(','), codeLines(toc).join(','));
   check('none of the map half ships', ['Map.lua', 'Reveal.lua', 'Data/MapOverlays.lua', 'tools/overlays-from-csv.js'].every(rel => read(rel) === null));

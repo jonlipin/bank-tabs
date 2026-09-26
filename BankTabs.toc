@@ -5,7 +5,7 @@
 ## Version: 2.0.0
 ## SavedVariables: BankTabsAccountDB
 ## SavedVariablesPerCharacter: BankTabsDB
-## IconTexture: Interface\Icons\INV_Misc_Bag_10
+## IconTexture: Interface\Icons\Racial_Dwarf_FindTreasure
 ## X-Category: Inventory
 ## X-Website: https://github.com/jonlipin/bank-tabs
 ## X-License: MIT

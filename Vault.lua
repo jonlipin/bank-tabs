@@ -658,6 +658,20 @@ local function ScanGuildTab(tab)
 	return info
 end
 
+-- A tab this character's rank cannot view comes back empty, which says nothing about what is in
+-- it. Whatever a character who could view it saved is kept; only its name and icon follow the
+-- game. Returns whether the tab was replaced.
+local function StoreGuildTab(record, tab, info)
+	local old = record.tabs[tab]
+	if info.viewable == false and old and type(old.items) == "table" and #old.items > 0 then
+		old.name = info.name or old.name
+		old.icon = info.icon or old.icon
+		return false
+	end
+	record.tabs[tab] = info
+	return true
+end
+
 -- The server only hands over one tab at a time and only after it has been asked for, so the walk
 -- asks for each tab in turn and reads it a moment later. The tab the user was looking at is put
 -- back at the end.
@@ -703,7 +717,7 @@ function Vault.SnapshotGuildBank(reason)
 		ns.After(delay + 0.4, function()
 			local info = ScanGuildTab(tab)
 			if info then
-				record.tabs[tab] = info
+				StoreGuildTab(record, tab, info)
 				record.items = 0
 				for _, bucket in pairs(record.tabs) do record.items = record.items + #bucket.items end
 				report["guild bank scan"] = record.items .. " items over " .. tabs .. " tabs (" .. tostring(reason) .. ")"
@@ -825,7 +839,7 @@ function Vault.OnEvent(event, ...)
 		if not record then return end
 		local info = ScanGuildTab(tab)
 		if info then
-			record.tabs[tab] = info
+			StoreGuildTab(record, tab, info)
 			record.time = time()
 			Vault.Changed()
 		end

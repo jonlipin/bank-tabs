@@ -39,12 +39,14 @@ local function Place()
 	button:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
 end
 
--- A bag first, the bank's coin and crate after it: the icons every client carries.
+-- A treasure chest first, for a bank that goes with you, then a pile of gold and a crate. Not the
+-- brown bag: the author's Stockpile uses that one, and two bags side by side on the minimap rim
+-- cannot be told apart.
 local ICONS = {
-	"Interface\\Icons\\INV_Misc_Bag_10",
-	"Interface\\Icons\\INV_Misc_Bag_08",
-	"Interface\\Icons\\INV_Misc_Coin_01",
+	"Interface\\Icons\\Racial_Dwarf_FindTreasure",
+	"Interface\\Icons\\INV_Misc_Coin_02",
 	"Interface\\Icons\\INV_Box_01",
+	"Interface\\Icons\\INV_Misc_Bag_08",
 	"Interface\\Cooldown\\ping4",
 	"Interface\\Buttons\\WHITE8X8",
 }
