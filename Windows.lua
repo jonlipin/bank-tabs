@@ -439,9 +439,11 @@ end
 -- ------------------------------------------------------------------
 
 -- The old, whole Casement still running beside this addon this session (Import sees it at login).
--- It moves these same windows, and two engines on one window fight over it, so this one lets go
--- of every window until the next session. Nothing the old one set is undone: no points or panel
--- settings are put back; the grips and overlays are hidden and the hooks go quiet.
+-- It moves these same windows, and two engines on one window fight over it, so this one leaves
+-- every window to it until the next session. While such an addon is installed Core holds this
+-- engine back until login (ns.holdWindows), so normally nothing was taken to begin with; should
+-- anything have been, nothing the old one set is undone: no points or panel settings are put
+-- back, the grips and overlays are hidden and the hooks go quiet.
 local function StandAside(entry)
 	entry.active = false
 	if entry.grip then entry.grip:Hide() end
@@ -450,11 +452,16 @@ end
 
 function Windows.Apply()
 	if not ns.db then return end
+	if ns.holdWindows then
+		report["window engine"] = "waiting for login: an old Casement that may still run is installed"
+		return
+	end
 	if ns.oldCasementRunning then
 		for _, entry in ipairs(entries) do StandAside(entry) end
 		report["window engine"] = "standing aside: the old Casement moves these windows this session"
 		return
 	end
+	report["window engine"] = nil
 	for _, entry in ipairs(entries) do
 		local option = OptionKey(entry)
 		local wanted = ns.db.enabled and option and ns.db.windows[option] and true or false

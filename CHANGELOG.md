@@ -28,19 +28,21 @@ and tooltip settings come over the first time that character logs in. Nothing al
 Tabs is overwritten, and a snapshot taken since is never replaced by an older one. The world map's
 settings and the reveal's collected map data are left for Map Tab, which brings its own half over
 the same way. If Casement's files cannot be read yet (the old Casement switched off, say), chat
-says why once and Bank Tabs tries again at each login. Once both addons have loaded on every
+says why once and Bank Tabs tries again at each login. With no Casement folder at all nothing is
+said, and each login looks again in case one turns up later. Once both addons have loaded on every
 character you play, the Casement folder can be deleted; each Bank Tabs update puts it back, which
 does no harm. `/banktabs debug` reports what was found and what came over.
 
 **If the old Casement is still running** (for example Bank Tabs was unzipped next to Casement 1.2.3
 rather than over it), Bank Tabs still brings everything over, switches the old Casement off from
 your next login, and says so once in chat. Until then the old Casement keeps the bag and bank
-windows, the backpack buttons, the minimap button and the tooltip lines, so the two do not fight
-over them; after a /reload Bank Tabs takes over. Map Tab does the same, and only one of the two
-speaks.
+windows, the backpack buttons, the minimap button, the tooltip lines and the `/casement` command,
+so the two do not fight over them; after a /reload Bank Tabs takes over. Map Tab does the same,
+and only one of the two speaks.
 
 **New names.** The commands are `/banktabs` and the short `/btabs`; `/casement` and `/cst` still
-work for old macros. The options are under Esc > Options > AddOns > Bank Tabs. The map commands
+work for old macros once the old Casement is gone. The options are under Esc > Options > AddOns >
+Bank Tabs. The map commands
 (`scale`, `coords`, `mapdata`) now say that the map went to Map Tab.
 
 **Changed: the minimap button.** Left-click opens the saved bank and right-click the options, the
@@ -50,9 +52,11 @@ is a bag rather than the map.
 
 **New: the saved bank, the saved bags and the saved guild bank are separate windows,** so they can
 be open at the same time. Each opens and closes on its own, keeps its own character and its own
-search, can be dragged by its title, stays on screen, and remembers where it was left. Until one
-has been moved, the first opens in the middle of the screen as the single window did, and the
-others open beside whatever is already open without moving it. Escape closes the one opened last
+search, can be dragged by its title, stays on screen, and remembers where it was left. Until it
+has been moved, the saved bank opens in the middle of the screen as the single window did, and so
+do the saved bags unless the bank is showing, when they open beside it; the guild bank opens
+beside whatever is open. None opens on top of another or moves it: with the middle taken, a window
+opens beside what is there. Escape closes the one opened last
 first. Opening a window that is already open brings it to the front; the tabs, the minimap button
 and the slash commands close it when it is in front.
 

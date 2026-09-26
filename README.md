@@ -83,7 +83,7 @@ the bag and bank windows, drag it around the rim. `/banktabs minimap` hides it.
 | `/banktabs debug` | Prints what resolved on this client |
 
 `/btabs` works as a short form of all of these. `/casement` and `/cst` still work too, for macros
-written before 2.0.0.
+written before 2.0.0, once the old Casement is no longer running.
 
 ## Coming from Casement
 
@@ -99,10 +99,11 @@ Casement's saved files where Bank Tabs and Map Tab can read them.
   replaced by an older one. The world map's settings are left for Map Tab.
 - If the old Casement is still running next to Bank Tabs, it is switched off from your next login
   and chat says so once. Until then it keeps the bag and bank windows, the backpack buttons, the
-  minimap button and the tooltip lines, so the two do not fight over them; after a `/reload` Bank
-  Tabs takes over.
+  minimap button, the tooltip lines and the `/casement` command, so the two do not fight over
+  them; after a `/reload` Bank Tabs takes over.
 - If Casement's files cannot be read yet (the old Casement switched off, say), chat says why once
-  and Bank Tabs tries again at each login.
+  and Bank Tabs tries again at each login. With no Casement folder at all nothing is said, and
+  each login looks again in case one turns up later.
 - Once Bank Tabs and Map Tab have both loaded on every character you play, the Casement folder can
   be deleted. Each Bank Tabs update puts it back, which does no harm. `/banktabs debug` shows what
   was found and what came over.

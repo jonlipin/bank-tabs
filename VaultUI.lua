@@ -319,29 +319,33 @@ local function SavePosition(W)
 	ns.MirrorToAccount()
 end
 
--- Where a window the user has never moved opens. The first one on screen goes where the single
--- saved window always opened, the middle of the screen. Any other opens beside what is already
--- open (the bags beside the bank first), on whichever side fits without covering another of
--- these windows. Nothing already open is moved.
+-- Where a window the user has never moved opens. Its home is where the single saved window always
+-- opened, the middle of the screen. The bank goes home; so do the bags while the bank is not
+-- showing; the guild bank opens beside whatever is open. The bags open beside the bank when it is
+-- showing. Nothing already open is moved, and nothing opens on top of another of these windows:
+-- a home spot another window already covers (the bags opened first sit there, say) sends the
+-- window beside what is open instead, on whichever side fits.
 local function DefaultPlace(W)
 	local w, h, room = Size(W)
 	local uw, uh = UIParent:GetWidth() or 0, UIParent:GetHeight() or 0
+	local homeX, homeTop = (uw - w) / 2, (uh + h) / 2
 
 	local open = {}
-	if W.kind == "bags" and windows.bank and windows.bank.frame:IsShown() then open[1] = windows.bank end
+	local besideBank = W.kind == "bags" and windows.bank and windows.bank.frame:IsShown()
+	if besideBank then open[1] = windows.bank end
 	for i = #order, 1, -1 do
 		local other = windows[order[i]]
 		if other and other ~= W and other ~= open[1] and other.frame:IsShown() then open[#open + 1] = other end
 	end
-	if #open == 0 then return PlaceAt(W, (uw - w) / 2, (uh + h) / 2) end
+	if #open == 0 then return PlaceAt(W, homeX, homeTop) end
 
 	local rects = {}
 	for index, other in ipairs(open) do
 		local l, b, ow, oh = ns.Windows.Measure(other.frame)
 		if l then rects[#rects + 1] = { l = l, b = b, w = ow, h = oh, room = other.tabRoom or 0 } end
 	end
-	local function Fits(x, top)
-		if x < 0 or x + w > uw or top - h < 0 or top + room > uh then return false end
+	-- Whether the window, its character tabs included, would cover none of the open ones there.
+	local function Clear(x, top)
 		for _, r in ipairs(rects) do
 			local overlapX = x < r.l + r.w and r.l < x + w
 			local overlapY = top - h < r.b + r.h + r.room and r.b < top + room
@@ -349,15 +353,23 @@ local function DefaultPlace(W)
 		end
 		return true
 	end
+	local function Fits(x, top)
+		if x < 0 or x + w > uw or top - h < 0 or top + room > uh then return false end
+		return Clear(x, top)
+	end
+	local homeClear = Clear(homeX, homeTop)
+	if homeClear and W.kind ~= "guild" and not besideBank then return PlaceAt(W, homeX, homeTop) end
 	for _, r in ipairs(rects) do
 		local top = r.b + r.h
 		if Fits(r.l + r.w + BESIDE_GAP, top) then return PlaceAt(W, r.l + r.w + BESIDE_GAP, top) end
 		if Fits(r.l - BESIDE_GAP - w, top) then return PlaceAt(W, r.l - BESIDE_GAP - w, top) end
 	end
-	-- Nowhere clear: beside the first one anyway, kept on screen.
+	-- Nowhere clear beside them: home if that is clear, else beside the first one anyway, kept on
+	-- screen.
+	if homeClear then return PlaceAt(W, homeX, homeTop) end
 	local r = rects[1]
 	if r then return PlaceAt(W, r.l + r.w + BESIDE_GAP, r.b + r.h) end
-	return PlaceAt(W, (uw - w) / 2, (uh + h) / 2)
+	return PlaceAt(W, homeX, homeTop)
 end
 
 local function PlaceOnOpen(W)
@@ -390,10 +402,14 @@ local function CellTooltip(self)
 	GameTooltip:Show()
 end
 
+-- SetAtlas does not raise for an atlas the client lacks (it just draws nothing), so the atlas
+-- table is asked first and the plain fallbacks stand in wherever it says no.
+local SLOT_ATLAS, GLOW_ATLAS = "bags-item-slot64", "bags-glow-white"
+
 local function SlotBacking(frame)
 	local backing = frame:CreateTexture(nil, "BACKGROUND")
 	backing:SetAllPoints()
-	if not pcall(backing.SetAtlas, backing, "bags-item-slot64") then
+	if not (ns.HasAtlas(SLOT_ATLAS) and pcall(backing.SetAtlas, backing, SLOT_ATLAS)) then
 		backing:SetColorTexture(0.1, 0.1, 0.12, 0.9)
 	end
 	return backing
@@ -415,7 +431,7 @@ local function NewCell(W, size)
 	-- missing, a two pixel ring of four bars stands in.
 	local border = cell:CreateTexture(nil, "OVERLAY")
 	border:SetAllPoints()
-	if pcall(border.SetAtlas, border, "bags-glow-white") then
+	if ns.HasAtlas(GLOW_ATLAS) and pcall(border.SetAtlas, border, GLOW_ATLAS) then
 		cell.borderIsGlow = true
 	else
 		cell.ring = {}
@@ -717,7 +733,6 @@ end
 -- fit along the top.
 local function LayoutCharTabs(W)
 	local list = VaultUI.Characters(W.kind)
-	local T = ns.TAB
 	local perRow = ns.TabsPerRow(W.frame)
 	for index, source in ipairs(list) do
 		local tab = W.charTabs[index] or NewCharTab(W, index)
@@ -729,7 +744,8 @@ local function LayoutCharTabs(W)
 	end
 	for i = #list + 1, #W.charTabs do W.charTabs[i]:Hide() end
 	local rows = #list > 0 and math.ceil(#list / perRow) or 0
-	W.tabRoom = rows > 0 and (rows * T.rowStep + T.tuck) or 0
+	-- How far the top row stands above the window, by the one rule the backpack's tabs use too.
+	W.tabRoom = ns.TabRowsHeight(rows)
 	pcall(W.frame.SetClampRectInsets, W.frame, 0, 0, W.tabRoom, 0)
 	return #list
 end

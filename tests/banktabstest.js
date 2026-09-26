@@ -2,7 +2,7 @@
 //
 //   node tests/banktabstest.js [addon dir] [--bare] [--verbose] [--noenum]
 //
-//   --bare    every UI template is missing, the way an unexpected client build would look
+//   --bare    every UI template and atlas is missing, the way an unexpected client build would look
 //   --noenum  no Enum.BagIndex, so the bank container list has to fall back to fixed ids
 //
 // The stub carries a small layout engine (points, anchors, scales) because much of what this addon
@@ -179,7 +179,9 @@ local function obj(kind, template, name)
     if k == "GetVerticalScroll" then return function(s) return s.scrollY or 0 end end
     if k == "SetTexture" then return function(s, x) s.texture = x end end
     if k == "GetTexture" then return function(s) return s.texture end end
-    if k == "SetAtlas" then return function(s, x) if BAD_ATLAS then error("no atlas " .. tostring(x)) end s.atlas = x end end
+    -- As on the client, an atlas it lacks raises nothing: the texture just stays blank. Only the
+    -- atlas table (C_Texture.GetAtlasInfo) can say whether one is there.
+    if k == "SetAtlas" then return function(s, x) if BAD_ATLAS then s.atlas = nil return end s.atlas = x end end
     if k == "SetColorTexture" then return function(s, r, g, b, a) s.color = { r, g, b, a } s.texture = nil end end
     if k == "SetVertexColor" then return function(s, r, g, b) s.vertex = { r, g, b } end end
     if k == "SetTexCoord" then return function(s, a, b, c, d) s.texCoord = { a, b, c, d } end end
@@ -324,7 +326,14 @@ function MakeSecret() local t = {} SECRETS[t] = true return t end
 ADDONS = ADDONS or {}
 ADDON_CALLS = {}
 LOADED_BY_US = {}
+ENABLE_STATE_ASKED = false -- the addon and the character the last enable state was asked for
 local function addonCall(fn, name) ADDON_CALLS[#ADDON_CALLS + 1] = fn .. " " .. tostring(name) end
+function EnableState(name, character)
+  local a = ADDONS[name]
+  if not a or not a.enabled then return 0 end
+  if character == nil then return (a.offFor and next(a.offFor)) and 1 or 2 end
+  return (a.offFor and a.offFor[character]) and 0 or 2
+end
 C_AddOns = {
   DoesAddOnExist = function(name) addonCall("DoesAddOnExist", name) return ADDONS[name] ~= nil end,
   GetAddOnInfo = function(name)
@@ -336,14 +345,16 @@ C_AddOns = {
   end,
   IsAddOnLoaded = function(name) addonCall("IsAddOnLoaded", name) local a = ADDONS[name] return (a and a.loaded) or false, (a and a.loaded) or false end,
   IsAddOnLoadOnDemand = function(name) addonCall("IsAddOnLoadOnDemand", name) local a = ADDONS[name] return (a and a.lod) or false end,
-  -- The modern argument order: the addon, then the character.
+  -- The modern argument order: the addon, then the character. An addon can be switched off for
+  -- some characters only (offFor, by name): asked for one of those it answers 0, asked with no
+  -- character it answers for the whole account, where 1 means on for some.
   GetAddOnEnableState = function(name, character)
     addonCall("GetAddOnEnableState", name)
-    local a = ADDONS[name]
-    if not a then return 0 end
-    return a.enabled and 2 or 0
+    ENABLE_STATE_ASKED = { name, character }
+    return EnableState(name, character)
   end,
-  EnableAddOn = function(name) addonCall("EnableAddOn", name) if ADDONS[name] then ADDONS[name].enabled = true end end,
+  -- With no character, both switch it for every character.
+  EnableAddOn = function(name) addonCall("EnableAddOn", name) if ADDONS[name] then ADDONS[name].enabled = true ADDONS[name].offFor = nil end end,
   DisableAddOn = function(name) addonCall("DisableAddOn", name) if ADDONS[name] then ADDONS[name].enabled = false end end,
   SaveAddOns = function() addonCall("SaveAddOns", nil) end,
   LoadAddOn = function(name)
@@ -351,7 +362,7 @@ C_AddOns = {
     LOADED_BY_US[#LOADED_BY_US + 1] = name
     local a = ADDONS[name]
     if not a then return false, "MISSING" end
-    if not a.enabled then return false, "DISABLED" end
+    if not a.enabled or (a.offFor and a.offFor[UnitName("player")]) then return false, "DISABLED" end
     if a.refuse then return false, a.refuse end
     if a.loaded then return true end
     a.loaded = true
@@ -450,7 +461,7 @@ function GetInventoryItemTexture(unit, inv) return INVENTORY[inv] and INVENTORY[
 function GetInventoryItemLink(unit, inv) return INVENTORY[inv] and INVENTORY[inv].link or nil end
 
 -- Atlases this client is known to carry. A bare client carries none.
-KNOWN_ATLASES = { ["bags-item-slot64"] = true, ["UI-HUD-ActionBar-IconFrame-Mask"] = true, ["spellbook-Tab-Frame-C60"] = true,
+KNOWN_ATLASES = { ["bags-item-slot64"] = true, ["bags-glow-white"] = true, ["UI-HUD-ActionBar-IconFrame-Mask"] = true, ["spellbook-Tab-Frame-C60"] = true,
   ["spellbook-Tab-Frame-Glow-C60"] = true, ["spellbook-Tab-Frame-glow-gradient-C60"] = true }
 C_Texture = {
   GetAtlasInfo = function(name)
@@ -829,6 +840,11 @@ end
 check("every event registered", ns.report["events"]:find("^%d+/%d+ registered$") ~= nil, ns.report["events"])
 check("bag anchor hook taken", ns.report["bag anchor hook"] == "ok", ns.report["bag anchor hook"])
 check("windows were found", (ns.report["windows found"] or ""):find("^%d+"), ns.report["windows found"])
+-- No old Casement is installed, so nothing holds the window engine back until login.
+check("with no old Casement installed the window engine does not wait for login", ns.holdWindows == nil
+  and ns.report["window engine"] == nil, ns.report["window engine"])
+-- The old Casement's /casement and /cst are only taken once login shows it is not running.
+check("the old commands are not taken before login", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil)
 
 do -- scope: 1b. This is Bank Tabs, and only its half of Casement
 check("the version is 2.0.0", ns.version == "2.0.0", ns.version)
@@ -1249,11 +1265,16 @@ fire("PLAYER_LOGIN")
 check("the bags are read a moment after login, not on the spot", ns.vault.chars[me].bags == nil)
 
 do -- scope: 9a. The Casement import on a clean install
--- No Casement anywhere: nothing is loaded, switched off or said, and the question is closed so
--- the next login does not ask again.
+-- No Casement anywhere: nothing is loaded, switched off or said. The flags say there was nothing
+-- rather than that it was done, so a Casement folder that turns up later is still read.
 check("a clean install finds no Casement", ns.report["casement addon"] == "not installed", ns.report["casement addon"])
-check("and closes the question", ns.report["casement import"] == "nothing to import: no Casement installed", ns.report["casement import"])
-check("the account and the character are flagged", BankTabsAccountDB.importedCasement == true and BankTabsDB.importedCasement == true)
+check("and says it will look again", ns.report["casement import"] == "nothing to import: no Casement installed (looked for again at each login)",
+  ns.report["casement import"])
+check("the account and the character record that there was nothing", BankTabsAccountDB.importedCasement == "none"
+  and BankTabsDB.importedCasement == "none", tostring(BankTabsAccountDB.importedCasement))
+check("and no character is marked as imported", BankTabsAccountDB.importedChars == nil)
+check("the old commands are taken now that the old Casement is known not to be running", SLASH_BANKTABS3 == "/casement"
+  and SLASH_BANKTABS4 == "/cst")
 check("nothing was loaded", #LOADED_BY_US == 0 and not Called("LoadAddOn Casement"))
 check("nothing was switched on or off", not Called("DisableAddOn Casement") and not Called("EnableAddOn Casement"))
 check("and nothing was said about Casement", ChatWith("Casement") == 0, ChatLine("Casement"))
@@ -1527,14 +1548,17 @@ check("an empty cell shows no count", second and second.count.text == "", second
 -- the linen (quality 1) and the empty slot do not.
 check("an uncommon item wears the quality glow", fourth and fourth.border.shown == true)
 check("a common item and an empty slot do not", first and first.border.shown == false and second.border.shown == false)
-check("the glow is the game's own atlas or a ring, never a flat square", first and (first.borderIsGlow == true or first.ring ~= nil))
-
 local backing
 for _, t in ipairs(TEXTURES) do if t.parent == first and t.layer == "BACKGROUND" then backing = t end end
+-- SetAtlas raises nothing for an atlas the client lacks, so only the atlas table can tell the
+-- fallbacks to step in: a probe by pcall would leave a blank slot and no border at all.
 if BARE then
-  check("with no atlas the empty slot is painted", backing and backing.color ~= nil)
+  check("with no atlas the empty slot is painted", backing and backing.color ~= nil and backing.atlas == nil)
+  check("and the quality border is the ring of bars", first and first.ring ~= nil and not first.borderIsGlow)
 else
-  check("empty slots wear the game's slot art", backing and backing.atlas == "bags-item-slot64", backing and backing.atlas)
+  check("empty slots wear the game's slot art", backing and backing.atlas == "bags-item-slot64" and backing.color == nil, backing and backing.atlas)
+  check("the quality border is the game's own glow", first and first.borderIsGlow == true and first.ring == nil
+    and first.border.atlas == "bags-glow-white")
 end
 
 -- The Bag Slots row under the grid.
@@ -2000,8 +2024,15 @@ check("each window remembers its own place", ns.db.positions.savedBank and near(
   and near(ns.db.positions.savedBags.x, 100))
 DragWindow(BankTabsBags, 5000, 5000)
 local l3, b3, w3, h3 = Rect(BankTabsBags)
-check("dragged off the screen it is pulled back on, its character tabs included", near(l3 + w3, SCREEN_W) and near(b3 + h3 + 31 + 8, SCREEN_H),
-  (l3 + w3) .. "," .. (b3 + h3))
+-- Held exactly as far down as its tabs need: the top of the highest tab on the screen's top edge,
+-- by the rule the backpack's tabs are clamped by (not a few pixels short of it).
+vault = BankTabsBags
+local tabTop = 0
+for _, tab in ipairs(CharTabs()) do tabTop = math.max(tabTop, tab:GetTop()) end
+check("dragged off the screen it is pulled back on, its character tabs included", near(l3 + w3, SCREEN_W) and near(tabTop, SCREEN_H),
+  (l3 + w3) .. "," .. tabTop)
+check("the room kept for its tabs is the backpack tabs' own rule", near(b3 + h3 + ns.TabRowsHeight(1), SCREEN_H)
+  and near(select(3, BankTabsBags:GetClampRectInsets()), ns.TabRowsHeight(1)), select(3, BankTabsBags:GetClampRectInsets()))
 DragWindow(BankTabsBags, 100, 900)
 
 -- Nobody else saved: the bags show a line instead of a grid.
@@ -2038,6 +2069,41 @@ ns.vault.chars[me] = myEntry
 myEntry.bank = myBank
 ns.Vault.Changed()
 check("the grid is back once the bank is saved", #Cells(37) > 0 and TextOn(vault, "Visit a banker once", true) == nil)
+
+-- Where a window never moved opens, in the other orders. The bags opened with the bank shut go
+-- home, to the middle of the screen, where the single window of before opened. The bank opened
+-- after them cannot go home without covering them, so it opens beside them, and moves nothing.
+HideAll()
+ns.db.positions.savedBank, ns.db.positions.savedBags, ns.db.positions.savedGuild = nil, nil, nil
+ns.VaultUI.Show("bags")
+local sl, sb, sw, sh = Rect(BankTabsBags)
+check("the bags opened with the bank shut go to the middle of the screen", near(sl + sw / 2, SCREEN_W / 2) and near(sb + sh / 2, SCREEN_H / 2),
+  sl .. "," .. sb)
+ns.VaultUI.Show("bank")
+local kl, kb, kw, kh = Rect(BankTabsBank)
+check("the bank opened after them opens beside them, tops level, covering nothing", Clear(kl, kw, sl, sw) and near(kb + kh, sb + sh)
+  and kl >= -0.5 and kl + kw <= SCREEN_W + 0.5, kl .. "," .. (kb + kh))
+check("and the bags did not move", near(Rect(BankTabsBags), sl) and near(select(2, Rect(BankTabsBags)), sb))
+check("neither saves a place", ns.db.positions.savedBank == nil and ns.db.positions.savedBags == nil)
+-- The guild bank alone goes home too; the bags opened then open beside it, not on top of it.
+HideAll()
+ns.VaultUI.Show("guild")
+local ql, qb, qw, qh = Rect(BankTabsGuild)
+check("the guild bank opened alone goes to the middle of the screen", near(ql + qw / 2, SCREEN_W / 2) and near(qb + qh / 2, SCREEN_H / 2), ql)
+ns.VaultUI.Show("bags")
+local sl2, sb2, sw2, sh2 = Rect(BankTabsBags)
+check("the bags opened while only the guild bank shows open beside it, covering nothing", Clear(sl2, sw2, ql, qw) and near(sb2 + sh2, qb + qh)
+  and near(Rect(BankTabsGuild), ql), sl2)
+-- With the guild bank moved out of the way, the bags go home as before.
+HideAll()
+ns.db.positions.savedGuild = { x = 0, top = qh }
+ns.VaultUI.Show("guild")
+ns.VaultUI.Show("bags")
+local sl3, sb3, sw3, sh3 = Rect(BankTabsBags)
+local gl3, gb3, gw3, gh3 = Rect(BankTabsGuild)
+check("with the guild bank moved clear of the middle, the bags still go there", near(sl3 + sw3 / 2, SCREEN_W / 2)
+  and near(sb3 + sh3 / 2, SCREEN_H / 2) and near(gl3, 0) and near(gb3, 0), sl3 .. "," .. sb3 .. " / " .. gl3 .. "," .. gb3)
+ns.db.positions.savedGuild = nil
 HideAll()
 end -- scope
 
@@ -2689,12 +2755,12 @@ check("positions are not inherited from another character", next(ns.db.positions
 check("the vault survived", ns.vault.chars[me] ~= nil)
 -- The account copy carries this character's import flag, but a character adopting it has not
 -- had its own Casement settings looked at, so it must ask again.
-check("the adopted copy does not carry the import flag", ns.Import.lastRun == "nothing" and BankTabsDB.importedCasement == true, ns.Import.lastRun)
+check("the adopted copy does not carry the import flag", ns.Import.lastRun == "nothing" and BankTabsDB.importedCasement == "none", ns.Import.lastRun)
 
 ns.ResetToDefaults()
 check("a reset keeps the saved banks", ns.vault.chars[me] ~= nil)
 check("a reset puts the settings back", ns.db.dragModifier == "alt")
-check("a reset keeps the Casement import done", ns.db.importedCasement == true)
+check("a reset keeps where the Casement import stands", ns.db.importedCasement == "none")
 
 -- ------------------------------------------------------------------
 -- 15. Nothing broke along the way
@@ -2781,6 +2847,7 @@ check("and names Map Tab as the new home of the world map tab", ChatWith("Map Ta
 check("the report records it", (ns.report["casement import"] or ""):find("^loaded on demand: 3 characters, 1 guild bank, %d+ settings$") ~= nil,
   ns.report["casement import"])
 check("the account and this character are flagged", BankTabsAccountDB.importedCasement == true and BankTabsDB.importedCasement == true)
+check("this character is marked in the account file too", BankTabsAccountDB.importedChars and BankTabsAccountDB.importedChars[VATIK] == true)
 check("the data holder is left switched on", not Called("DisableAddOn Casement") and ADDONS.Casement.enabled == true)
 check("nobody is told Casement is still running", ChatWith("replace Casement") == 0)
 check("the run says how it ended", ns.Import.lastRun == "imported", ns.Import.lastRun)
@@ -2834,7 +2901,8 @@ check("this character's Casement settings win over the adopted copy", ns.db.drag
 check("and its window positions come over", ns.db.positions.bank and near(ns.db.positions.bank.x, 420))
 check("the account part is not run twice", ns.vault.chars["Oldtoon - Voidpact"] == nil and ns.vault.chars[VATIK] == nil)
 check("a snapshot Bank Tabs already holds is kept", ns.vault.chars[CHOHAM_GUID].bank.money == 7777)
-check("this character is flagged", BankTabsDB.importedCasement == true)
+check("this character is flagged, here and in the account file", BankTabsDB.importedCasement == true
+  and BankTabsAccountDB.importedChars and BankTabsAccountDB.importedChars[CHOHAM_GUID] == true)
 check("nothing is said: the account's line was the first time", ChatWith("Casement") == 0, ChatLine("Casement"))
 check("the report says it was this character only", (ns.report["casement import"] or ""):find("this character only", 1, true) ~= nil,
   ns.report["casement import"])
@@ -2879,6 +2947,12 @@ ADDONS.Casement = { lod = false, enabled = true, loaded = true, title = "Casemen
 BankTabsDB, BankTabsAccountDB = nil, nil
 local ns = LoadBankTabs()
 fire("ADDON_LOADED", "BankTabs")
+-- Whether the old addon will run is not known until login, so nothing is taken before then: a
+-- window once taken cannot be handed back the way the old addon would have left it.
+check("with an old Casement installed that may run, the window engine waits for login", ns.holdWindows == true
+  and ns.Windows.Entry(BankFrame) ~= nil and ns.Windows.Entry(BankFrame).active == false
+  and (ns.report["window engine"] or ""):find("^waiting for login") ~= nil, ns.report["window engine"])
+check("so the bank is left in the game's panel stack", BankFrame.attributes == nil or BankFrame.attributes["UIPanelLayout-enabled"] == nil)
 CasementAccountDB = OldCasementAccount()
 CasementDB = OldCasementChar()
 CreateFrame("Frame", "CasementFrame", UIParent)
@@ -2905,16 +2979,19 @@ check("the report records it", (ns.report["old casement"] or ""):find("^was runn
   and (ns.report["old casement"] or ""):find("separate download", 1, true) ~= nil, ns.report["old casement"])
 
 -- For the rest of this session the old addon keeps its windows: two engines on one window fight.
+-- This old addon had its bank switch off, so it left the bank in the game's panel stack, and so
+-- must Bank Tabs.
 local bankEntry = ns.Windows.Entry(BankFrame)
 local bankGrip
 for _, f in ipairs(FRAMES) do if f.parent == BankFrame and f.dragButtons and f.h == 26 then bankGrip = f end end
-check("Bank Tabs lets go of the bag and bank windows until the next session", ns.oldCasementRunning == true and bankEntry ~= nil
-  and bankEntry.active == false and (ns.report["window engine"] or ""):find("^standing aside") ~= nil, ns.report["window engine"])
-check("its drag strip on the bank is put away", bankGrip ~= nil and bankGrip.shown == false)
-check("without undoing what the old addon set on the bank", BankFrame.attributes and BankFrame.attributes["UIPanelLayout-enabled"] == false)
+check("Bank Tabs leaves the bag and bank windows to the old addon until the next session", ns.oldCasementRunning == true and bankEntry ~= nil
+  and bankEntry.active == false and ns.holdWindows == nil and (ns.report["window engine"] or ""):find("^standing aside") ~= nil, ns.report["window engine"])
+check("it never took the bank: no drag strip, not made movable", (bankGrip == nil or bankGrip.shown == false) and BankFrame.movable == nil)
+check("and never took it out of the game's panel stack", BankFrame.attributes == nil or BankFrame.attributes["UIPanelLayout-enabled"] == nil)
 BankFrame:Show()
 RunTimers(0.1)
-check("a bank opened now is not grabbed again", bankEntry.active == false and bankGrip.shown == false)
+check("a bank opened now is not grabbed", bankEntry.active == false and (bankGrip == nil or bankGrip.shown == false)
+  and (BankFrame.attributes == nil or BankFrame.attributes["UIPanelLayout-enabled"] == nil))
 BankFrame:Hide()
 ContainerFrame1:Show()
 RunTimers(0.1)
@@ -2929,6 +3006,14 @@ check("and the item tooltip lines", #GameTooltip.csLines == 0, #GameTooltip.csLi
 check("the saved windows still open", ns.VaultUI.Show("bank") ~= nil and ns.VaultUI.IsShown("bank"))
 ns.VaultUI.Hide("bank")
 ContainerFrame1:Hide()
+-- The old addon answers to /casement and /cst as well, and the game's pick between two handlers
+-- of one command is arbitrary, so this session they are left to it.
+check("the old addon keeps /casement and /cst this session", SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil
+  and SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS2 == "/btabs")
+-- Updated to the data holder later, the Casement folder keeps this switch off, which is then not
+-- the user's doing.
+check("the account remembers the old Casement was switched off by the notice", BankTabsAccountDB.casementStoodDown == true)
+check("and that this character's settings came over", BankTabsAccountDB.importedChars and BankTabsAccountDB.importedChars[VATIK] == true)
 
 fire("PLAYER_LOGIN")
 check("it is not said twice", ChatWith("replace Casement") == 1 and CountCalls("DisableAddOn Casement") == 1)
@@ -2972,6 +3057,7 @@ check("the report says it was already done", (ns.report["old casement"] or ""):f
 check("and Bank Tabs still leaves the windows to the old addon this session", ns.oldCasementRunning == true
   and ns.Windows.Entry(BankFrame) and ns.Windows.Entry(BankFrame).active == false)
 check("its own half is still brought over", ns.vault.chars[CHOHAM_GUID] ~= nil and BankTabsAccountDB.importedCasement == true)
+check("and it remembers the old Casement was switched off by the notice, whoever gave it", BankTabsAccountDB.casementStoodDown == true)
 check("and the import line names Map Tab, since Bank Tabs did not", ChatWith("brought over what Casement saved") == 1 and ChatWith("Map Tab") == 1)
 `},
 { name: 'B3: Map Tab switched it off without the shared flag', code: String.raw`
@@ -2999,7 +3085,8 @@ fire("PLAYER_LOGIN")
 check("the addon API is really missing here", C_AddOns == nil and LoadAddOn == nil and GetAddOnInfo == nil)
 check("Bank Tabs loads and logs in without it", ns.report["windows"] == "ok" and ns.report["options"] == "ok")
 check("it finds no Casement", ns.report["casement addon"] == "not installed", ns.report["casement addon"])
-check("and closes the question", ns.report["casement import"] == "nothing to import: no Casement installed" and BankTabsAccountDB.importedCasement == true)
+check("and records that there was nothing", (ns.report["casement import"] or ""):find("^nothing to import: no Casement installed") ~= nil
+  and BankTabsAccountDB.importedCasement == "none", ns.report["casement import"])
 check("nothing is said", ChatWith("Casement") == 0)
 `, pre: 'NO_ADDON_API=true\n' },
 { name: 'D: already imported', code: String.raw`
@@ -3056,6 +3143,105 @@ check("the report says why", (ns.report["casement import"] or ""):find("^not don
 check("the user is not marked as told", BankTabsAccountDB.casementUnreadableTold == nil)
 check("the run says how it ended", ns.Import.lastRun == "not open", ns.Import.lastRun)
 `},
+{ name: 'E3: the data holder, left switched off by the notice', code: String.raw`
+-- Case B happened on Vatik: Bank Tabs switched the old Casement off, for every character, and
+-- brought the account over from memory. Casement was then updated to the data holder, which kept
+-- that switched off state. Choham logs in for the first time since. The holder being off is the
+-- notice's doing, not the user's, so it is switched back on to read Choham's own settings.
+function UnitGUID() return CHOHAM_GUID end
+function UnitName() return "Choham" end
+ADDONS.Casement = { lod = true, enabled = false, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsAccountDB = { importedCasement = true, casementStoodDown = true, importedChars = { [VATIK] = true }, version = "2.0.0",
+  vault = { chars = {}, guilds = {} } }
+BankTabsDB = nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the holder is switched back on before it is loaded", Called("EnableAddOn Casement")
+  and CallIndex("EnableAddOn Casement") < (CallIndex("LoadAddOn Casement") or 0) and ADDONS.Casement.enabled == true)
+check("and this character's settings come over", ns.db.dragModifier == "shift" and ns.db.positions.bank ~= nil
+  and near(ns.db.positions.bank.x, 420), ns.db.dragModifier)
+check("this character is flagged, here and in the account file", BankTabsDB.importedCasement == true
+  and BankTabsAccountDB.importedChars[CHOHAM_GUID] == true)
+check("the mark is cleared once the holder has been read with the old addon gone", BankTabsAccountDB.casementStoodDown == nil)
+check("the account part is not run twice", ns.vault.chars[VATIK] == nil)
+check("and nothing is said", ChatWith("Casement") == 0, ChatLine("Casement"))
+`},
+{ name: 'E4: the data holder is switched off for this character only', code: String.raw`
+-- Nothing has come over yet. The data holder is on for other characters but off for Vatik. Asked
+-- with no character, the addon API answers for the whole account ("on for some"); asked for Vatik
+-- it says off, so the holder is switched on before it is loaded, rather than the game refusing it.
+ADDONS.Casement = { lod = true, enabled = true, offFor = { Vatik = true }, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the enable state is asked for this character, the addon first", ENABLE_STATE_ASKED and ENABLE_STATE_ASKED[1] == "Casement"
+  and ENABLE_STATE_ASKED[2] == "Vatik", ENABLE_STATE_ASKED and tostring(ENABLE_STATE_ASKED[2]))
+check("so the holder is switched on before it is loaded, and loaded once", Called("EnableAddOn Casement")
+  and CallIndex("EnableAddOn Casement") < (CallIndex("LoadAddOn Casement") or 0) and CountCalls("LoadAddOn Casement") == 1)
+check("and read", ADDONS.Casement.loaded == true and ns.vault.chars[CHOHAM_GUID] ~= nil and BankTabsAccountDB.importedCasement == true)
+check("with no word about the game refusing it", ChatWith("could not open") == 0 and ChatWith("DISABLED") == 0, ChatLine("Casement"))
+`},
+{ name: 'E5: a client with only the older enable state function', code: String.raw`
+-- No GetAddOnEnableState under C_AddOns, only the older global, which takes the character first.
+-- The data holder is off for Vatik only.
+C_AddOns.GetAddOnEnableState = nil
+function GetAddOnEnableState(character, name)
+  ENABLE_STATE_ASKED = { name, character }
+  return EnableState(name, character)
+end
+ADDONS.Casement = { lod = true, enabled = true, offFor = { Vatik = true }, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the older function is asked with the character first", ENABLE_STATE_ASKED and ENABLE_STATE_ASKED[1] == "Casement"
+  and ENABLE_STATE_ASKED[2] == "Vatik", ENABLE_STATE_ASKED and (tostring(ENABLE_STATE_ASKED[1]) .. "/" .. tostring(ENABLE_STATE_ASKED[2])))
+check("so the holder is switched on before it is loaded, and read", Called("EnableAddOn Casement")
+  and CallIndex("EnableAddOn Casement") < (CallIndex("LoadAddOn Casement") or 0) and CountCalls("LoadAddOn Casement") == 1
+  and BankTabsAccountDB.importedCasement == true)
+`},
+{ name: 'E6: the game refuses the data holder as switched off', code: String.raw`
+-- A client with no way to ask the enable state. The data holder is off for Vatik only, which only
+-- LoadAddOn's refusal shows. Nothing has come over yet, so it is switched on and loaded again.
+C_AddOns.GetAddOnEnableState = nil
+ADDONS.Casement = { lod = true, enabled = true, offFor = { Vatik = true }, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the first load is refused, the holder switched on, and the second load works", CountCalls("LoadAddOn Casement") == 2
+  and (CallIndex("EnableAddOn Casement") or 0) > CallIndex("LoadAddOn Casement") and ADDONS.Casement.loaded == true)
+check("so everything comes over", ns.vault.chars[CHOHAM_GUID] ~= nil and BankTabsAccountDB.importedCasement == true
+  and BankTabsDB.importedCasement == true)
+check("and the user hears nothing about a refusal", ChatWith("could not open") == 0 and ChatWith("DISABLED") == 0, ChatLine("Casement"))
+`},
+{ name: 'E7: the same refusal once the account has come over', code: String.raw`
+-- As E6, but the account came over at an earlier login and nothing says the old Casement was
+-- switched off by the notice: the holder is off for Choham by the user's choice. It is left off,
+-- without a word, as in E2.
+function UnitGUID() return CHOHAM_GUID end
+function UnitName() return "Choham" end
+C_AddOns.GetAddOnEnableState = nil
+ADDONS.Casement = { lod = true, enabled = true, offFor = { Choham = true }, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsAccountDB = { importedCasement = true, version = "2.0.0", vault = { chars = {}, guilds = {} } }
+BankTabsDB = nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the refusal leaves the holder off", CountCalls("LoadAddOn Casement") == 1 and not Called("EnableAddOn Casement")
+  and ADDONS.Casement.offFor.Choham == true)
+check("without a word", ChatWith("Casement") == 0 and BankTabsAccountDB.casementUnreadableTold == nil, ChatLine("Casement"))
+check("the report says why", (ns.report["casement import"] or ""):find("^not done: the data holder is switched off for this character") ~= nil,
+  ns.report["casement import"])
+check("the character's question is left open", BankTabsDB.importedCasement == nil)
+`},
 { name: 'F: the old Casement is installed but switched off', code: String.raw`
 -- The old addon itself (not the data holder) is there but switched off. Its files could only be
 -- opened by running its code, so Bank Tabs asks the user rather than loading it, and tries again
@@ -3101,6 +3287,27 @@ check("the report gives the reason every time", (ns.report["casement import"] or
   ns.report["casement import"])
 check("the old code is not running, so Bank Tabs has the windows", ns.oldCasementRunning == nil and ns.Windows.Entry(BankFrame) ~= nil
   and ns.Windows.Entry(BankFrame).active == true)
+`},
+{ name: 'F3: the old Casement is switched on but did not load', code: String.raw`
+-- The old addon itself is switched on, but the game did not load it (out of date, say). It is not
+-- switched off, so the user is not asked to switch it on: they hear that it did not load, and why.
+ADDONS.Casement = { lod = false, enabled = true, loaded = false, refuse = "INTERFACE_VERSION", title = "Casement" }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+check("switched on, it may run, so the window engine waits for login", ns.holdWindows == true)
+fire("PLAYER_LOGIN")
+check("the report says it is on but did not load, and why",
+  ns.report["casement import"] == "not done: the old Casement is switched on but did not load (INTERFACE_VERSION)", ns.report["casement import"])
+check("the user hears the same, once", ChatWith("the old Casement is switched on but did not load (INTERFACE_VERSION)") == 1, ChatLine("Casement"))
+check("and is not asked to switch it on", ChatWith("Switch it on") == 0 and ChatWith("is switched off") == 0, ChatLine("Casement"))
+check("its code is never loaded or switched on or off", not Called("LoadAddOn Casement") and not Called("EnableAddOn Casement")
+  and not Called("DisableAddOn Casement"))
+check("nothing is flagged, so the next login tries again", BankTabsAccountDB.importedCasement == nil and BankTabsDB.importedCasement == nil)
+check("it did not run, so Bank Tabs takes the windows at login", ns.oldCasementRunning == nil and ns.holdWindows == nil
+  and ns.Windows.Entry(BankFrame) ~= nil and ns.Windows.Entry(BankFrame).active == true and ns.report["window engine"] == nil,
+  ns.report["window engine"])
+check("and the old commands", SLASH_BANKTABS3 == "/casement" and SLASH_BANKTABS4 == "/cst")
 `},
 { name: 'G: settings already chosen in Bank Tabs are kept', code: String.raw`
 -- An earlier login could not import (the data holder would not load), and the user has changed a
@@ -3153,6 +3360,61 @@ fire("PLAYER_LOGIN")
 check("the next login tries again", CountCalls("LoadAddOn Casement") == 2, CountCalls("LoadAddOn Casement"))
 check("without saying it a second time", ChatWith("could not open what Casement saved") == 1, ChatWith("could not open what Casement saved"))
 check("while the report still says why", (ns.report["casement import"] or ""):find("INTERFACE_VERSION", 1, true) ~= nil, ns.report["casement import"])
+`},
+{ name: 'J: Casement turns up after a clean install', code: String.raw`
+-- Bank Tabs was installed without the Casement folder (a hand install that left it out, or a
+-- package or update that did not bring the data holder). The first logins find nothing. The data
+-- holder turns up before a later login: everything is brought over then, and nothing the user
+-- chose in Bank Tabs meanwhile is overwritten.
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the first login finds nothing and says nothing", ns.Import.lastRun == "nothing" and ChatWith("Casement") == 0)
+check("it records there was nothing, not that the import is done", BankTabsAccountDB.importedCasement == "none"
+  and BankTabsDB.importedCasement == "none")
+fire("PLAYER_LOGIN")
+check("a login with still no Casement stays quiet", ns.Import.lastRun == "nothing" and ChatWith("Casement") == 0 and #LOADED_BY_US == 0)
+-- Meanwhile the user picks a drag key in Bank Tabs. The next session reads this character's table
+-- back from its file, so nothing in it counts as fresh.
+ns.db.dragModifier = "ctrl"
+ns.dbFresh = false
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+fire("PLAYER_LOGIN")
+check("the data holder that turned up is loaded", Called("LoadAddOn Casement") and ADDONS.Casement.loaded == true)
+check("every character's saved bank and the guild bank come over", ns.vault.chars[VATIK] ~= nil and ns.vault.chars[CHOHAM_GUID] ~= nil
+  and ns.vault.guilds["Night Owls - Voidpact"] ~= nil)
+check("the drag key chosen in Bank Tabs meanwhile is kept", ns.db.dragModifier == "ctrl", ns.db.dragModifier)
+check("a setting still at its default takes this character's Casement one", ns.db.minimap.angle == 33 and ns.db.positions.bank ~= nil)
+check("the one chat line is said now", ChatWith("brought over what Casement saved") == 1, ChatLine("Casement"))
+check("and the question is closed for good", BankTabsAccountDB.importedCasement == true and BankTabsDB.importedCasement == true
+  and ns.Import.lastRun == "imported", ns.Import.lastRun)
+`},
+{ name: 'K: a blank character table after the import', code: String.raw`
+-- Vatik's settings came over at an earlier login, and Vatik has changed its drag key in Bank Tabs
+-- since. This login the client hands back a blank character table (see LoadDB), so the account
+-- copy is adopted without the character's flag. The account file's own mark says the import was
+-- done for Vatik, so Casement's old settings are not put back over the newer ones.
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsAccountDB = { importedCasement = true, importedChars = { [VATIK] = true }, version = "2.0.0",
+  profile = { enabled = true, dragModifier = "ctrl", showGrips = false, importedCasement = true,
+    windows = { combined = true, bags = true, reagent = true, bank = true, guildbank = true },
+    minimap = { shown = true, angle = 205 } },
+  vault = { chars = {}, guilds = {} } }
+BankTabsDB = nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+check("the blank table adopts the account copy, without the flag", ns.report["db addon loaded"] == "adopted the account copy"
+  and ns.dbFresh == true and BankTabsDB.importedCasement == nil, ns.report["db addon loaded"])
+fire("PLAYER_LOGIN")
+check("the import is not run again", not Called("LoadAddOn Casement") and ns.Import.lastRun == "done before", ns.Import.lastRun)
+check("so the drag key chosen in Bank Tabs is kept", ns.db.dragModifier == "ctrl" and ns.db.minimap.angle == 205
+  and next(ns.db.positions) == nil, ns.db.dragModifier)
+check("the character's flag is put back from the account file", BankTabsDB.importedCasement == true)
+check("and the report says so", (ns.report["casement import"] or ""):find("flag put back", 1, true) ~= nil, ns.report["casement import"])
+check("nothing is said", ChatWith("Casement") == 0, ChatLine("Casement"))
 `},
 ];
 

@@ -810,6 +810,16 @@ end)
 local function Init()
 	LoadDB("addon loaded")
 
+	-- An old, whole Casement that may still run loads after this addon (the game goes in name
+	-- order) and moves these same windows. Until PLAYER_LOGIN shows whether it did, the window
+	-- engine takes nothing over: once it has taken a window (the bank out of the game's panel
+	-- stack, say), letting go again cannot put back what the old addon would have left there.
+	-- Nothing is on screen before login, so a clean install loses nothing by the wait either.
+	if ns.Import and ns.Import.OldAddonMayRun then
+		local ok, may = pcall(ns.Import.OldAddonMayRun)
+		ns.holdWindows = (ok and may) or nil
+	end
+
 	if ns.Windows and ns.Windows.Init then
 		local ok, err = pcall(ns.Windows.Init)
 		report["windows"] = ok and "ok" or ("failed: " .. tostring(err))
@@ -858,6 +868,15 @@ frame:SetScript("OnEvent", function(self, event, ...)
 			local ok, err = pcall(ns.Import.Run)
 			if not ok then report["casement import"] = "failed: " .. tostring(err) end
 		end
+		-- Whether the old Casement is running is known now (ns.oldCasementRunning), so the window
+		-- engine can go ahead or stand aside.
+		ns.holdWindows = nil
+		-- /casement and /cst, kept unadvertised for anyone with them in a macro from before 2.0.0,
+		-- are only taken while the old Casement is not running: it answers to the same two, and
+		-- the game's pick between two handlers of one command is arbitrary. The chat box reads
+		-- these names when a command is typed, so setting them now is in time.
+		SLASH_BANKTABS3 = (not ns.oldCasementRunning) and "/casement" or nil
+		SLASH_BANKTABS4 = (not ns.oldCasementRunning) and "/cst" or nil
 		ns.Refresh()
 		if ns.Windows and ns.Windows.Sweep then pcall(ns.Windows.Sweep, "login") end
 		if ns.SyncOptions then pcall(ns.SyncOptions) end
@@ -903,11 +922,9 @@ local function PrintHelp()
 	DEFAULT_CHAT_FRAME:AddMessage("   |cffffff00/btabs|r is the short form. Options also live in Esc > Options > AddOns > Bank Tabs.")
 end
 
--- /casement and /cst are kept, unadvertised, for anyone with them in a macro from before 2.0.0.
+-- /casement and /cst are added at PLAYER_LOGIN, once it is known the old Casement is not running.
 SLASH_BANKTABS1 = "/banktabs"
 SLASH_BANKTABS2 = "/btabs"
-SLASH_BANKTABS3 = "/casement"
-SLASH_BANKTABS4 = "/cst"
 SlashCmdList["BANKTABS"] = function(msg)
 	msg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
 	local cmd, rest = msg:match("^(%S*)%s*(.-)$")
