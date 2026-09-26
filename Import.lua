@@ -24,6 +24,8 @@
 --    button, the item tooltip lines and the /casement and /cst commands to the old addon
 --    (ns.oldCasementRunning), since two of each on the same windows fight. The window engine
 --    does not take a window before PLAYER_LOGIN while an old Casement that may run is installed.
+--    What the user changes in the old addon that session (a bag or the bank moved, a switch
+--    flipped) is read again from its live table at logout (Import.Follow).
 --  * When Casement's files cannot be read yet, the user is told why once per account; the debug
 --    report says it at every login, and every login tries again.
 
@@ -232,6 +234,92 @@ local function Plural(n, one, many)
 end
 
 -- ------------------------------------------------------------------
+-- Following the old Casement for the rest of the session it runs
+-- ------------------------------------------------------------------
+
+-- This addon's half of the settings as they stand right after this character's import.
+local function Snapshot(db)
+	local defaults = ns.defaults
+	local snap = { top = {}, windows = {}, groups = {}, positions = {} }
+	for _, key in ipairs(SCALARS) do snap.top[key] = db[key] end
+	for _, key in ipairs(WINDOW_KEYS) do snap.windows[key] = db.windows[key] end
+	for _, group in ipairs(GROUPS) do
+		snap.groups[group] = {}
+		if type(db[group]) == "table" and type(defaults[group]) == "table" then
+			for key in pairs(defaults[group]) do snap.groups[group][key] = db[group][key] end
+		end
+	end
+	for key, pos in pairs(db.positions) do
+		if type(pos) == "table" then snap.positions[key] = { x = pos.x, y = pos.y } end
+	end
+	return snap
+end
+
+-- One plain value, followed from the old Casement: only while Bank Tabs still holds what it had
+-- right after the import, since anything changed in Bank Tabs since is the newer choice.
+local function Follow(dst, defaults, key, value, was)
+	if value == nil or type(value) == "table" then return 0 end
+	local default = defaults[key]
+	if default == nil or type(default) ~= type(value) then return 0 end
+	if dst[key] ~= was or dst[key] == value then return 0 end
+	dst[key] = value
+	return 1
+end
+
+local function SamePlace(a, b)
+	if a == nil or b == nil then return a == nil and b == nil end
+	return type(a) == "table" and type(b) == "table" and a.x == b.x and a.y == b.y
+end
+
+-- The session the old Casement is still running, it keeps the bag and bank windows until the next
+-- one (see StandDown), and this character's settings were brought over at login. Whatever the user
+-- did in the old addon since, moving a bag or the bank, flipping a switch, would otherwise be lost
+-- when it is switched off, so at logout (a /reload included) this addon's half is read once more
+-- from Casement's live table. Map Tab does the same for the world map.
+function Import.Follow()
+	local snap = Import.followFrom
+	Import.followFrom = nil
+	local src, db = _G.CasementDB, ns.db
+	if type(snap) ~= "table" or type(src) ~= "table" or type(db) ~= "table" then return 0 end
+	local defaults, n = ns.defaults, 0
+	for key, was in pairs(snap.top) do n = n + Follow(db, defaults, key, src[key], was) end
+	if type(src.windows) == "table" and type(db.windows) == "table" then
+		for key, was in pairs(snap.windows) do n = n + Follow(db.windows, defaults.windows, key, src.windows[key], was) end
+	end
+	for group, values in pairs(snap.groups) do
+		if type(src[group]) == "table" and type(db[group]) == "table" then
+			for key, was in pairs(values) do n = n + Follow(db[group], defaults[group], key, src[group][key], was) end
+		end
+	end
+	if type(db.positions) == "table" then
+		local theirs = type(src.positions) == "table" and src.positions or {}
+		local keys = {}
+		for key in pairs(snap.positions) do keys[key] = true end
+		for key in pairs(theirs) do if type(key) == "string" and not NOT_OURS[key] then keys[key] = true end end
+		for key in pairs(keys) do
+			local was, pos = snap.positions[key], theirs[key]
+			-- Only where Bank Tabs still has the place that came over at login: a reset there since
+			-- is the newer choice.
+			if SamePlace(db.positions[key], was) then
+				if type(pos) == "table" and type(pos.x) == "number" and type(pos.y) == "number" then
+					if not SamePlace(pos, was) then
+						db.positions[key] = { x = pos.x, y = pos.y }
+						n = n + 1
+					end
+				elseif pos == nil and was ~= nil then
+					-- Put back where the game had it in the old addon: forgotten here too.
+					db.positions[key] = nil
+					n = n + 1
+				end
+			end
+		end
+	end
+	report["casement import"] = tostring(report["casement import"]) .. "; at logout, "
+		.. Plural(n, "later change", "later changes") .. " followed from the old Casement"
+	return n
+end
+
+-- ------------------------------------------------------------------
 -- Opening the old files and standing the old addon down
 -- ------------------------------------------------------------------
 
@@ -409,6 +497,9 @@ local function RunOnce()
 			withPositions, fresh = false, false
 		end
 		settings = ImportCharacter(source, db, fresh, withPositions)
+		-- The old Casement running this session keeps the windows until the next one, so what the
+		-- user changes in it meanwhile comes over again at logout (see Import.Follow).
+		if withPositions and ns.oldCasementRunning then Import.followFrom = Snapshot(db) end
 		db.importedCasement = true
 		account.importedChars = type(account.importedChars) == "table" and account.importedChars or {}
 		account.importedChars[who] = true

@@ -11,11 +11,11 @@ node tests/banktabstest.js [addon dir] [--bare] [--verbose] [--noenum]
 
 Run it from the repo root; the addon dir defaults to the folder above `tests`.
 
-- no flags: 797 checks against the normal client
-- `--bare`: 789; every UI template and atlas is missing, so every fallback path runs. As on the
+- no flags: 813 checks against the normal client
+- `--bare`: 805; every UI template and atlas is missing, so every fallback path runs. As on the
   client, `SetAtlas` raises nothing for a missing atlas, so only a real check of the atlas table
   lets a fallback step in.
-- `--noenum`: 793; no `Enum.BagIndex`, so the bank scan falls back to the classic container ids
+- `--noenum`: 809; no `Enum.BagIndex`, so the bank scan falls back to the classic container ids
 - `--verbose`: prints everything the addon puts in the chat frame
 
 The result line adds up three parts, printed just above it:
@@ -32,12 +32,13 @@ The result line adds up three parts, printed just above it:
   options, the slash commands and the saved variables. It also checks that the world map is never
   touched (Map Tab owns it) and that every global the addon makes is named for it. The stub's
   Escape walks `UISpecialFrames` with `pairs` and hides every shown window, as the game does.
-- **import**: the Casement import, twenty four cases, each in a fresh Lua state so each is a real
+- **import**: the Casement import, twenty six cases, each in a fresh Lua state so each is a real
   first login: the data holder present, another character later (with its own Casement settings,
   and one Casement never saw, whose Bank Tabs choices must stay), the old Casement still running
   (the window engine waiting for login and then leaving the windows and `/casement` to it for the
-  session; Map Tab installed or not; Map Tab having spoken first, with or without the shared flag),
-  no addon API at all, already imported, the data holder switched off (before the saved banks
+  session, what the user changes in it that session coming over at logout but not on a character
+  already brought over; Map Tab installed or not; Map Tab having spoken first, with or without
+  the shared flag), no addon API at all, already imported, the data holder switched off (before the saved banks
   came over, after, and by the notice rather than the user), switched off for this character only
   (asked by character on either form of the enable state, or shown only by the game refusing to
   load it), the old addon switched off (told once per account, however many logins or characters)

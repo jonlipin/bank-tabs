@@ -3075,6 +3075,66 @@ check("Bank Tabs stays quiet", ChatWith("replace Casement") == 0)
 check("and switches nothing", not Called("DisableAddOn Casement") and not Called("EnableAddOn Casement"))
 check("but still brings its half over", ns.vault.chars[VATIK] ~= nil and BankTabsDB.importedCasement == true)
 `},
+{ name: 'B5: what the user changes in the running old Casement comes over at logout', code: String.raw`
+-- As B. For the rest of the session the old addon keeps the windows, so the user moves the bank and
+-- a bag in it, puts the combined bag back where the game had it, flips switches there, and changes
+-- one setting in Bank Tabs. At logout (or a /reload) the old addon's later changes come over, but
+-- never over what was changed in Bank Tabs meanwhile, and never the world map's.
+ADDONS.Casement = { lod = false, enabled = true, loaded = true, title = "Casement" }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+CasementAccountDB = OldCasementAccount()
+CasementDB = OldCasementChar()
+CreateFrame("Frame", "CasementFrame", UIParent)
+fire("PLAYER_LOGIN")
+check("the bank's place came over at login, with the old addon running", ns.oldCasementRunning == true and ns.db.positions.bank
+  and ns.db.positions.bank.x == 420 and ns.db.positions.combined ~= nil and ns.Import.followFrom ~= nil)
+CasementDB.positions.bank = { x = 1000, y = 480 }
+CasementDB.positions.bag1 = { x = 700, y = 200 }
+CasementDB.positions.combined = nil
+CasementDB.positions.worldmap = { x = 5, y = 5 }
+CasementDB.minimap.shown = true
+CasementDB.dragModifier = "ctrl"
+CasementDB.windows.reagent = true
+CasementDB.tooltips.modifier = "alt"
+ns.db.tooltips.modifier = "ctrl"
+fire("PLAYER_LOGOUT")
+check("at logout, where the bank was moved to in the old Casement comes over", ns.db.positions.bank and ns.db.positions.bank.x == 1000
+  and ns.db.positions.bank.y == 480)
+check("and a bag placed there for the first time", ns.db.positions.bag1 and ns.db.positions.bag1.x == 700)
+check("a window put back where the game had it there is forgotten here too", ns.db.positions.combined == nil)
+check("the world map's place is still Map Tab's", ns.db.positions.worldmap == nil)
+check("switches flipped there, and its drag key, come over", ns.db.minimap.shown == true and ns.db.windows.reagent == true and ns.db.dragModifier == "ctrl")
+check("but not over a setting changed in Bank Tabs since login", ns.db.tooltips.modifier == "ctrl", ns.db.tooltips.modifier)
+check("a setting nobody changed stays as it came over", ns.db.showGrips == true and ns.db.tooltips.guild == false and ns.db.positions.bag0.x == 500)
+check("the account copy written at logout has the followed values", BankTabsAccountDB.profile.positions.bank.x == 1000 and BankTabsAccountDB.profile.minimap.shown == true)
+check("the report says what was followed", (ns.report["casement import"] or ""):find("; at logout, 6 later changes followed from the old Casement", 1, true) ~= nil,
+  ns.report["casement import"])
+check("Casement's own tables are still only read", CasementDB.positions.bank.x == 1000 and CasementDB.tooltips.modifier == "alt")
+check("nothing is said at logout", ChatWith("later change") == 0)
+CasementDB.positions.bank = { x = 1, y = 1 }
+fire("PLAYER_LOGOUT")
+check("a second logout in the session follows nothing more", ns.db.positions.bank.x == 1000 and ns.Import.followFrom == nil)
+`},
+{ name: 'B6: the old Casement runs again on a character already brought over', code: String.raw`
+-- The user switched the old Casement back on for a character whose settings came over at an
+-- earlier login. Nothing is imported this session, so nothing is followed at logout either.
+ADDONS.Casement = { lod = false, enabled = true, loaded = true, title = "Casement" }
+BankTabsAccountDB = { importedCasement = true, vault = { chars = {}, guilds = {} } }
+BankTabsDB = { importedCasement = true, positions = { bank = { x = 111, y = 222 } } }
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+CasementAccountDB = OldCasementAccount()
+CasementDB = OldCasementChar()
+CreateFrame("Frame", "CasementFrame", UIParent)
+fire("PLAYER_LOGIN")
+check("it still stands aside for the session", ns.oldCasementRunning == true and ns.Import.followFrom == nil)
+CasementDB.positions.bank = { x = 1000, y = 480 }
+fire("PLAYER_LOGOUT")
+check("already brought over, the old Casement's later bank place is not followed", ns.db.positions.bank.x == 111, ns.db.positions.bank.x)
+check("and the report says nothing about following", (ns.report["casement import"] or ""):find("at logout", 1, true) == nil, ns.report["casement import"])
+`},
 { name: 'C: no addon API at all', code: String.raw`
 -- A client without C_AddOns or the older globals: there is no way to ask about Casement, so the
 -- import is a clean install's, and nothing errors.

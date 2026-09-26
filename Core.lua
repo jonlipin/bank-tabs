@@ -883,6 +883,11 @@ frame:SetScript("OnEvent", function(self, event, ...)
 
 	elseif event == "PLAYER_LOGOUT" then
 		if ns.Vault and ns.Vault.OnEvent then pcall(ns.Vault.OnEvent, event) end
+		-- What the user changed in an old Casement that ran this session (see Import.Follow).
+		if ns.Import and ns.Import.followFrom then
+			local ok, err = pcall(ns.Import.Follow)
+			if not ok then report["casement import"] = "failed at logout: " .. tostring(err) end
+		end
 		MirrorToAccount()
 		return
 	end

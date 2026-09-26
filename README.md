@@ -100,7 +100,9 @@ Casement's saved files where Bank Tabs and Map Tab can read them.
 - If the old Casement is still running next to Bank Tabs, it is switched off from your next login
   and chat says so once. Until then it keeps the bag and bank windows, the backpack buttons, the
   minimap button, the tooltip lines and the `/casement` command, so the two do not fight over
-  them; after a `/reload` Bank Tabs takes over.
+  them; after a `/reload` Bank Tabs takes over. Whatever you change in the old Casement until then
+  (a bag or the bank moved, a switch flipped) comes over when you log out or reload, unless you
+  changed the same setting in Bank Tabs meanwhile.
 - If Casement's files cannot be read yet (the old Casement switched off, say), chat says why once
   and Bank Tabs tries again at each login. With no Casement folder at all nothing is said, and
   each login looks again in case one turns up later.

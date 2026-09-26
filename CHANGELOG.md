@@ -37,8 +37,10 @@ does no harm. `/banktabs debug` reports what was found and what came over.
 rather than over it), Bank Tabs still brings everything over, switches the old Casement off from
 your next login, and says so once in chat. Until then the old Casement keeps the bag and bank
 windows, the backpack buttons, the minimap button, the tooltip lines and the `/casement` command,
-so the two do not fight over them; after a /reload Bank Tabs takes over. Map Tab does the same,
-and only one of the two speaks.
+so the two do not fight over them; after a /reload Bank Tabs takes over. Whatever you change in
+the old Casement until then (a bag or the bank moved, a switch flipped) comes over when you log out
+or reload, unless you changed the same setting in Bank Tabs meanwhile. Map Tab does the same, and
+only one of the two speaks.
 
 **New names.** The commands are `/banktabs` and the short `/btabs`; `/casement` and `/cst` still
 work for old macros once the old Casement is gone. The options are under Esc > Options > AddOns >
