@@ -1,4 +1,4 @@
--- Casement
+-- Bank Tabs
 -- VaultUI: your bank and your bags, drawn the way the game draws them, from wherever you are.
 --
 -- These are replicas rather than lists. The bank has the same portrait-and-title frame as the
@@ -912,12 +912,12 @@ end
 
 local function BuildSearchBox(parent)
 	local box
-	local ok, made = pcall(CreateFrame, "EditBox", "CasementVaultSearch", parent, "SearchBoxTemplate")
+	local ok, made = pcall(CreateFrame, "EditBox", "BankTabsVaultSearch", parent, "SearchBoxTemplate")
 	if ok and made then
 		box = made
 	else
-		local fallbackOK, fallback = pcall(CreateFrame, "EditBox", "CasementVaultSearch", parent, "InputBoxTemplate")
-		box = (fallbackOK and fallback) or CreateFrame("EditBox", "CasementVaultSearch", parent)
+		local fallbackOK, fallback = pcall(CreateFrame, "EditBox", "BankTabsVaultSearch", parent, "InputBoxTemplate")
+		box = (fallbackOK and fallback) or CreateFrame("EditBox", "BankTabsVaultSearch", parent)
 		box:SetAutoFocus(false)
 		box:SetFontObject("ChatFontNormal")
 		if not fallbackOK then
@@ -939,7 +939,7 @@ end
 
 local function Build()
 	if window then return end
-	window = ns.CreatePortraitPanel("CasementVault", "vault")
+	window = ns.CreatePortraitPanel("BankTabsVault", "vault")
 	window:SetSize(380, 420)
 	window:SetPoint("CENTER")
 	window:SetFrameStrata("HIGH")
@@ -1009,7 +1009,7 @@ local function Build()
 	noteText:Hide()
 
 	window:SetScript("OnShow", function() VaultUI.Refresh() end)
-	tinsert(UISpecialFrames, "CasementVault")
+	tinsert(UISpecialFrames, "BankTabsVault")
 	report["vault window"] = "ok, replica"
 end
 

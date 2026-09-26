@@ -1,18 +1,27 @@
-// Offline harness for Casement: stubs the WoW API in fengari and walks the main paths.
+// Offline harness for Bank Tabs: stubs the WoW API in fengari and walks the main paths.
 //
-//   node casementtest.js [addon dir] [--bare] [--verbose] [--noenum]
+//   node tests/banktabstest.js [addon dir] [--bare] [--verbose] [--noenum]
 //
 //   --bare    every UI template is missing, the way an unexpected client build would look
 //   --noenum  no Enum.BagIndex, so the bank container list has to fall back to fixed ids
 //
-// The stub carries a small layout engine (points, anchors, scales) because almost everything this
-// addon does is geometry: clamping a window to the screen, keeping a corner still while the map
-// is scaled, and putting a window back after the game has re-anchored it.
+// The stub carries a small layout engine (points, anchors, scales) because much of what this addon
+// does is geometry: clamping a window to the screen, putting a window back after the game has
+// re-anchored it, and laying the saved bank out slot for slot where the real one has its slots.
+//
+// Three parts, each counted into the one result line:
+//   * the main suite, one addon load on a clean install (no Casement anywhere);
+//   * the Casement import, one fresh Lua state per case (the data holder present, the old addon
+//     still running, nothing present, already imported, and the ways those can go wrong);
+//   * the package files: the TOC, the data holder's TOC, .pkgmeta and the docs.
 const fs = require('fs');
+const path = require('path');
 const { lua, lauxlib, lualib, to_luastring } = require('fengari');
-const DIR = (process.argv.slice(2).find(a => !a.startsWith('--')) || 'C:/Users/jonli/casement/');
-const L = lauxlib.luaL_newstate(); lualib.luaL_openlibs(L);
-const files = ['Core.lua', 'Windows.lua', 'Map.lua', 'Data/MapOverlays.lua', 'Reveal.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Tooltips.lua', 'Options.lua'];
+
+let DIR = process.argv.slice(2).find(a => !a.startsWith('--')) || path.resolve(__dirname, '..');
+DIR = DIR.replace(/\\/g, '/');
+if (!DIR.endsWith('/')) DIR += '/';
+const files = ['Core.lua', 'Import.lua', 'Windows.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Tooltips.lua', 'Options.lua'];
 
 const stub = String.raw`
 local VERBS = { "Set", "Get", "Is", "Create", "Register", "Enable", "Clear", "Hook", "Start", "Stop", "Has", "Num", "Add", "Unregister", "Disable", "Raise", "Lower", "Lock", "Unlock", "Show", "Hide", "Insert", "Toggle" }
@@ -70,7 +79,7 @@ local function obj(kind, template, name)
     name = name, points = {}, level = 1, id = 0, mouse = false, enabled = true, kids = {} }
   return setmetatable(o, { __index = function(t, k)
     -- Real child lists matter here: the addon walks a window's children to find the clear parts of
-    -- its title bar and to work out what it has to sit above.
+    -- its title bar, to work out what it has to sit above, and to measure the bank's slots.
     if k == "GetChildren" then return function(s) return unpack(s.kids or {}) end end
     if k == "GetNumChildren" then return function(s) return #(s.kids or {}) end end
     if k == "Show" then return function(s) local was = s.shown s.shown = true if not was and s.scripts.OnShow then s.scripts.OnShow(s) end end end
@@ -285,9 +294,62 @@ function GetFileIDFromPath(p) return 12345 end
 function ChatEdit_InsertLink(link) INSERTED = link end
 ITEM_QUALITY_COLORS = { [1] = { r = 1, g = 1, b = 1 }, [2] = { r = 0.1, g = 1, b = 0.1 }, [3] = { r = 0.3, g = 0.4, b = 1 } }
 
-UIPanelWindows = { BankFrame = { area = "left" }, GuildBankFrame = { area = "left" } }
+UIPanelWindows = { BankFrame = { area = "left" }, GuildBankFrame = { area = "left" }, WorldMapFrame = { area = "full" } }
 function ShowUIPanel(f) if f then f:Show() end end
 function HideUIPanel(f) if f then f:Hide() end end
+
+-- Secret values: a widget takes them, arithmetic on them is an error, exactly like the client.
+SECRETS = setmetatable({}, { __mode = "k" })
+function issecretvalue(v) return SECRETS[v] == true end
+function MakeSecret() local t = {} SECRETS[t] = true return t end
+
+-- ------------------------------------------------------------------
+-- The addon list
+-- ------------------------------------------------------------------
+
+-- Only what a test puts in ADDONS exists. Every call is written down, in order, so a test can say
+-- what was loaded, switched on or switched off, and in what order.
+ADDONS = ADDONS or {}
+ADDON_CALLS = {}
+LOADED_BY_US = {}
+local function addonCall(fn, name) ADDON_CALLS[#ADDON_CALLS + 1] = fn .. " " .. tostring(name) end
+C_AddOns = {
+  DoesAddOnExist = function(name) addonCall("DoesAddOnExist", name) return ADDONS[name] ~= nil end,
+  GetAddOnInfo = function(name)
+    addonCall("GetAddOnInfo", name)
+    local a = ADDONS[name]
+    if not a then return name, nil, nil, false, "MISSING" end
+    local reason = (not a.enabled) and "DISABLED" or nil
+    return name, a.title or name, a.notes, (a.enabled and not a.refuse) and true or false, reason or a.refuse
+  end,
+  IsAddOnLoaded = function(name) addonCall("IsAddOnLoaded", name) local a = ADDONS[name] return (a and a.loaded) or false, (a and a.loaded) or false end,
+  IsAddOnLoadOnDemand = function(name) addonCall("IsAddOnLoadOnDemand", name) local a = ADDONS[name] return (a and a.lod) or false end,
+  -- The modern argument order: the addon, then the character.
+  GetAddOnEnableState = function(name, character)
+    addonCall("GetAddOnEnableState", name)
+    local a = ADDONS[name]
+    if not a then return 0 end
+    return a.enabled and 2 or 0
+  end,
+  EnableAddOn = function(name) addonCall("EnableAddOn", name) if ADDONS[name] then ADDONS[name].enabled = true end end,
+  DisableAddOn = function(name) addonCall("DisableAddOn", name) if ADDONS[name] then ADDONS[name].enabled = false end end,
+  SaveAddOns = function() addonCall("SaveAddOns", nil) end,
+  LoadAddOn = function(name)
+    addonCall("LoadAddOn", name)
+    LOADED_BY_US[#LOADED_BY_US + 1] = name
+    local a = ADDONS[name]
+    if not a then return false, "MISSING" end
+    if not a.enabled then return false, "DISABLED" end
+    if a.refuse then return false, a.refuse end
+    if a.loaded then return true end
+    a.loaded = true
+    -- The game reads an addon's saved variables in before telling anyone it has loaded.
+    for key, value in pairs(a.saved or {}) do _G[key] = value end
+    if ON_ADDON_LOADED then ON_ADDON_LOADED(name) end
+    return true
+  end,
+}
+if NO_ADDON_API then C_AddOns = nil end
 
 -- ------------------------------------------------------------------
 -- Bags, bank and guild bank
@@ -421,63 +483,6 @@ function GetCurrentGuildBankTab() return CURRENT_TAB end
 function SetCurrentGuildBankTab(tab) CURRENT_TAB = tab end
 function GetGuildBankMoney() return 9876543 end
 
--- ------------------------------------------------------------------
--- The game's own windows
--- ------------------------------------------------------------------
-
-WorldMapFrame = CreateFrame("Frame", "WorldMapFrame", UIParent)
-WorldMapFrame:SetSize(700, 500)
-WorldMapFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -100)
-WorldMapFrame.ScrollContainer = CreateFrame("Frame", nil, WorldMapFrame)
--- The canvas the map art is drawn on, at the art's native size, and the map ids around it.
-WorldMapFrame.ScrollContainer.Child = CreateFrame("Frame", nil, WorldMapFrame.ScrollContainer)
-WorldMapFrame.ScrollContainer.Child:SetSize(1002, 668)
-WorldMapFrame.ScrollContainer.Child:SetPoint("TOPLEFT", WorldMapFrame.ScrollContainer, "TOPLEFT", 0, 0)
-SHOWN_MAP = 1440
-rawset(WorldMapFrame, "GetMapID", function() return SHOWN_MAP end)
-CURSOR_NORM = { 0.123, 0.456 }
-rawset(WorldMapFrame.ScrollContainer, "GetNormalizedCursorPosition", function()
-  if not CURSOR_NORM then return nil end
-  return CURSOR_NORM[1], CURSOR_NORM[2]
-end)
-
--- Secret values: a widget takes them, arithmetic on them is an error, exactly like the client.
-SECRETS = setmetatable({}, { __mode = "k" })
-function issecretvalue(v) return SECRETS[v] == true end
-function MakeSecret() local t = {} SECRETS[t] = true return t end
-
-PLAYER_MAP = 1440
-PLAYER_POS = { 0.452, 0.678 }
-MAP_NAMES = { [1440] = "The Barrens", [1414] = "Kalimdor" }
-MAP_ART = { [1440] = 5, [1414] = 12 }
-C_Map = {
-  GetBestMapForUnit = function() return PLAYER_MAP end,
-  GetPlayerMapPosition = function(mapID, unit)
-    if not PLAYER_POS then return nil end
-    return { x = PLAYER_POS[1], y = PLAYER_POS[2], GetXY = function(self) return self.x, self.y end }
-  end,
-  GetMapArtID = function(mapID) return MAP_ART[mapID] end,
-  GetMapInfo = function(mapID) if MAP_NAMES[mapID] then return { name = MAP_NAMES[mapID], mapID = mapID } end return nil end,
-}
-
--- What the game hands over for explored areas, in the shape the real API uses.
-EXPLORED = {
-  [1440] = {
-    { textureWidth = 300, textureHeight = 200, offsetX = 100, offsetY = 50, fileDataIDs = { 111, 112 } },
-  },
-}
-C_MapExplorationInfo = {
-  GetExploredMapTextures = function(mapID) return EXPLORED[mapID] end,
-}
-
--- The chat line: either open (text goes in at the cursor) or shut (a fresh line is opened).
-CHAT_EDIT = obj("EditBox")
-CHAT_EDIT:Hide()
-rawset(CHAT_EDIT, "Insert", function(self, text) self.inserted = (self.inserted or "") .. text end)
-function ChatEdit_GetActiveWindow() return CHAT_EDIT end
-OPENED_CHAT = nil
-function ChatFrame_OpenChat(text) OPENED_CHAT = text end
-
 -- Tooltips: the modern pipeline hands item tooltips to registered post calls; the lines added
 -- are recorded so they can be read back.
 TOOLTIP_CALLBACKS = {}
@@ -504,61 +509,29 @@ RAID_CLASS_COLORS = { WARLOCK = { r = 0.53, g = 0.53, b = 0.93 }, WARRIOR = { r 
 LIVE_COUNTS = {}
 C_Item = C_Item or {}
 C_Item.GetItemCount = function(id, includeBank) return LIVE_COUNTS[id] or 0 end
+
+-- ------------------------------------------------------------------
+-- The game's own windows
+-- ------------------------------------------------------------------
+
+-- The world map is Map Tab's. It is here so the suite can show Bank Tabs never touches it.
+WorldMapFrame = CreateFrame("Frame", "WorldMapFrame", UIParent)
+WorldMapFrame:SetSize(700, 500)
+WorldMapFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -100)
 WorldMapFrame:Hide()
 
--- The map's own top bar: a nav bar on the left and buttons on the right, both taking the mouse.
--- Anything the addon lays across the top bar has to leave these alone.
-MAP_NAV = CreateFrame("Frame", "CasementTestMapNav", WorldMapFrame)
-MAP_NAV:SetSize(220, 24)
-MAP_NAV:SetPoint("TOPLEFT", WorldMapFrame, "TOPLEFT", 8, -2)
-MAP_NAV:EnableMouse(true)
-MAP_NAV:SetFrameLevel(4)
-
-MAP_CLOSE = CreateFrame("Button", "CasementTestMapClose", WorldMapFrame)
-MAP_CLOSE:SetSize(30, 26)
-MAP_CLOSE:SetPoint("TOPRIGHT", WorldMapFrame, "TOPRIGHT", -4, -2)
-MAP_CLOSE:EnableMouse(true)
-MAP_CLOSE:SetFrameLevel(4)
-
--- The quest panel. This is the frame that broke the first version: it covers the right hand side
--- of the map, takes the mouse, and sits well above the map's own frame level, so a grip only a few
--- levels up from the map was visible but never received a click.
-QuestMapFrame = CreateFrame("Frame", "QuestMapFrame", WorldMapFrame)
-QuestMapFrame:SetSize(330, 500)
-QuestMapFrame:SetPoint("TOPRIGHT", WorldMapFrame, "TOPRIGHT", 0, 0)
-QuestMapFrame:EnableMouse(true)
-QuestMapFrame:SetFrameLevel(20)
-QUEST_SCROLL = CreateFrame("ScrollFrame", nil, QuestMapFrame)
-QUEST_SCROLL:SetSize(330, 470)
-QUEST_SCROLL:SetPoint("TOPLEFT", QuestMapFrame, "TOPLEFT", 0, 0)
-QUEST_SCROLL:EnableMouse(true)
-QUEST_SCROLL:SetFrameLevel(24)
-QuestMapFrame:Hide()
-
--- The game's panel positioning: it re-anchors a panel window to its own spot, and it runs AFTER
--- the window has changed size. That ordering is what made a placed map show a frame at the game's
--- spot when the quest log toggled: the size change was caught, the re-anchor that followed was not.
+-- The game's panel positioning: it re-anchors a panel window to its own spot, and it can run
+-- AFTER the window has changed size. A placed window has to be put back in the same frame.
 PANEL_POSITIONINGS = 0
 function UpdateUIPanelPositions(frame)
   PANEL_POSITIONINGS = PANEL_POSITIONINGS + 1
   if frame == WorldMapFrame then
     WorldMapFrame:ClearAllPoints()
     WorldMapFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 20, -100)
+  elseif frame == BankFrame then
+    BankFrame:ClearAllPoints()
+    BankFrame:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 40, -120)
   end
-end
-
--- Opening and closing the quest panel widens and narrows the map, exactly as the real one does,
--- then the game positions the panel again.
-function OpenQuestPanel(open)
-  if open then
-    WorldMapFrame:SetSize(1030, 500)
-    QuestMapFrame:Show()
-  else
-    WorldMapFrame:SetSize(700, 500)
-    QuestMapFrame:Hide()
-  end
-  if WorldMapFrame.scripts.OnSizeChanged then WorldMapFrame.scripts.OnSizeChanged(WorldMapFrame) end
-  UpdateUIPanelPositions(WorldMapFrame)
 end
 
 Minimap = CreateFrame("Frame", "Minimap", UIParent)
@@ -682,26 +655,112 @@ Settings = {
 if NO_SETTINGS then Settings = nil end
 `;
 
-const driver = String.raw`
-local ns = {}
-for _, file in ipairs(FILES) do
-  local chunk, err = load(SOURCES[file], "@" .. file)
-  if not chunk then error("SYNTAX " .. tostring(err)) end
-  chunk("Casement", ns)
+// Loaded into every Lua state after the stub: the counters, the loader and what the Casement
+// import cases share.
+const common = String.raw`
+PASS, FAIL = 0, 0
+function check(label, cond, extra)
+  if cond then PASS = PASS + 1 else FAIL = FAIL + 1 print("FAIL: " .. (SCENARIO and (SCENARIO .. ": ") or "") .. label .. (extra and ("  [" .. tostring(extra) .. "]") or "")) end
 end
-NS = ns
-
-local PASS, FAIL = 0, 0
-local function check(label, cond, extra)
-  if cond then PASS = PASS + 1 else FAIL = FAIL + 1 print("FAIL: " .. label .. (extra and ("  [" .. tostring(extra) .. "]") or "")) end
-end
-local function near(a, b, slack)
+function near(a, b, slack)
   if type(a) ~= "number" or type(b) ~= "number" then return false end
   return math.abs(a - b) <= (slack or 0.5)
 end
 
-local ev = CasementFrame
-local function fire(...) ev.scripts.OnEvent(ev, ...) end
+function LoadBankTabs()
+  local ns = {}
+  for _, file in ipairs(FILES) do
+    local chunk, err = load(SOURCES[file], "@" .. file)
+    if not chunk then error("SYNTAX " .. tostring(err)) end
+    chunk("BankTabs", ns)
+  end
+  NS = ns
+  return ns
+end
+
+function fire(...) BankTabsFrame.scripts.OnEvent(BankTabsFrame, ...) end
+-- An addon loaded on demand is announced to every addon, Bank Tabs included.
+ON_ADDON_LOADED = function(name) if BankTabsFrame then fire("ADDON_LOADED", name) end end
+
+function ChatWith(text)
+  local n = 0
+  for _, line in ipairs(CHAT) do if line:find(text, 1, true) then n = n + 1 end end
+  return n
+end
+function ChatLine(text)
+  for _, line in ipairs(CHAT) do if line:find(text, 1, true) then return line end end
+  return nil
+end
+function CountCalls(what)
+  local n = 0
+  for _, c in ipairs(ADDON_CALLS) do if c == what then n = n + 1 end end
+  return n
+end
+function Called(what) return CountCalls(what) > 0 end
+function CallIndex(what)
+  for i, c in ipairs(ADDON_CALLS) do if c == what then return i end end
+  return nil
+end
+
+VATIK = "Player-70-0A1B2C3D"
+CHOHAM_GUID = "Player-70-0E0F1011"
+
+-- What Casement 1.2.3 left in its account file: this character, another one, one saved by 1.0.x
+-- in the old shape, a guild bank and the measured bank layout, plus the map settings in the
+-- account copy and the reveal's harvest, which are Map Tab's and must stay where they are.
+function OldCasementAccount()
+  return {
+    version = "1.2.3",
+    profile = {
+      enabled = true, dragModifier = "ctrl", showGrips = false,
+      windows = { worldmap = true, combined = true, bags = true, reagent = true, bank = true, guildbank = true },
+      minimap = { shown = true, angle = 120 },
+      map = { scale = 1.4, coords = true, reveal = true },
+      vault = { autoBank = true, autoGuild = true, bagButtons = true, showAccountGold = true, moneyTooltip = true },
+      tooltips = { enabled = true, guild = true, total = true, modifier = "alt" },
+      positions = { worldmap = { x = 10, y = 20 } },
+    },
+    overlays = { [5] = { ["300:200:100:50"] = "111, 112" } },
+    vault = {
+      chars = {
+        [VATIK] = { class = "WARLOCK", level = 60, name = "Vatik", realm = "Voidpact", guid = VATIK,
+          bank = { time = 1000, reason = "bank closed", money = 50, items = 1, slots = 48, free = 47,
+            containers = { { id = 6, label = "Bank tab 1", slots = 48, items = { { slot = 3, id = 2589, name = "Linen Cloth", count = 7, icon = 1 } } } } },
+          bags = { time = 1000, reason = "logout", money = 50, items = 0, slots = 16, free = 16,
+            containers = { { id = 0, label = "Backpack", slots = 16, items = {} } } } },
+        [CHOHAM_GUID] = { class = "WARRIOR", level = 42, name = "Choham", realm = "Voidpact", guid = CHOHAM_GUID,
+          bank = { time = 900, reason = "bank closed", money = 5500, items = 1, slots = 48, free = 47,
+            containers = { { id = 6, label = "Bank tab 1", slots = 48, items = { { slot = 1, id = 2770, name = "Copper Ore", count = 20, icon = 2 } } } } } },
+        ["Oldtoon - Voidpact"] = { time = 800, reason = "bank closed", money = 100, items = 1, slots = 48, free = 47, class = "MAGE", level = 30,
+          containers = { { id = 6, label = "Bank tab 1", slots = 48, items = { { slot = 6, id = 2589, name = "Linen Cloth", count = 1, icon = 3 } } } } },
+      },
+      guilds = { ["Night Owls - Voidpact"] = { time = 1000, money = 100, tabs = { [1] = { name = "Vault 1", items = {
+        { slot = 3, id = 2589, name = "Linen Cloth", count = 40, icon = 4 } } } } } },
+      bankLayout = { cell = 37, pitchX = 50, pitchY = 47, originX = 48, originY = 63, cols = 8, width = 400, height = 500, slots = 48 },
+    },
+  }
+end
+
+-- What Casement 1.2.3 left in this character's file, the map's half included.
+function OldCasementChar()
+  return {
+    enabled = true, dragModifier = "shift", showGrips = true,
+    windows = { worldmap = false, combined = true, bags = true, reagent = false, bank = true, guildbank = false },
+    minimap = { shown = false, angle = 33 },
+    map = { scale = 1.7, step = 25, reveal = true, revealTint = "sepia" },
+    vault = { autoBank = true, autoGuild = false, bagButtons = false, showAccountGold = false, moneyTooltip = true },
+    tooltips = { enabled = true, guild = false, total = true, modifier = "shift" },
+    positions = { worldmap = { x = 300, y = 200 }, bag0 = { x = 500, y = 300 }, bank = { x = 420, y = 260 }, combined = { x = 900, y = 100 } },
+  }
+end
+`;
+
+const driver = String.raw`
+-- The globals that exist before Bank Tabs loads, so the suite can say what it added.
+local GLOBALS_BEFORE = {}
+for k in pairs(_G) do GLOBALS_BEFORE[k] = true end
+
+local ns = LoadBankTabs()
 
 -- Drags a window the way a player would: the game moves the frame, then the drag stop script runs.
 local function DragTo(frame, region, x, y)
@@ -711,13 +770,20 @@ local function DragTo(frame, region, x, y)
   region.scripts.OnDragStop(region)
 end
 
+local function Overlaps(a, b)
+  local al, ab, aw = ns.Windows.Measure(a)
+  local bl, bb, bw = ns.Windows.Measure(b)
+  if not al or not bl then return false end
+  return al < bl + bw and bl < al + aw
+end
+
 -- ------------------------------------------------------------------
 -- 1. Load
 -- ------------------------------------------------------------------
-CasementDB = {}
--- The account file already holds a character saved by 1.0.x, in the old shape where the bank
--- record sat directly under the character's name. It has to come through the upgrade intact.
-CasementAccountDB = { vault = { chars = {
+BankTabsDB = {}
+-- The account file already holds a character saved by Casement 1.0.x, in the old shape where the
+-- bank record sat directly under the character's name. It has to come through the upgrade intact.
+BankTabsAccountDB = { vault = { chars = {
   ["Oldtoon - Voidpact"] = { time = time() - 86400 * 3, reason = "bank closed", money = 100, items = 1, slots = 48, free = 47,
     class = "MAGE", level = 30,
     containers = { { id = 6, label = "Bank tab 1", slots = 48, items = {
@@ -728,494 +794,195 @@ CasementAccountDB = { vault = { chars = {
     bank = { time = time() - 40000, reason = "bank closed", money = 5, items = 0, slots = 48, free = 48,
       containers = { { id = 6, label = "Bank tab 1", slots = 48, items = {} } } } },
 } } }
-fire("ADDON_LOADED", "Casement")
+fire("ADDON_LOADED", "BankTabs")
 
 check("db built", type(ns.db) == "table" and ns.db.windows ~= nil)
-check("defaults filled in", ns.db.map.step == 10 and ns.db.dragModifier == "alt")
+check("defaults filled in", ns.db.dragModifier == "alt" and ns.db.showGrips == false and ns.db.tooltips.modifier == "none")
 check("vault tables built", type(ns.vault) == "table" and type(ns.vault.chars) == "table" and type(ns.vault.guilds) == "table")
-check("the vault is the account file's own table", ns.vault == CasementAccountDB.vault)
+check("the vault is the account file's own table", ns.vault == BankTabsAccountDB.vault)
 check("the old setting that kept other characters is gone", ns.db.vault.keepOtherCharacters == nil)
-check("the new defaults are in", ns.db.minimap.shown == true and ns.db.minimap.angle == 205 and ns.db.map.topBarDrag == true
-  and ns.db.map.cornerHandle == false and ns.db.vault.bagButtons == true)
+check("the new defaults are in", ns.db.minimap.shown == true and ns.db.minimap.angle == 205 and ns.db.vault.bagButtons == true)
 -- Two at load: the 1.0.x record and the name keyed copy of this character, which the first
 -- snapshot folds in.
 check("the report counts the saved characters", ns.report["vault holds"] == "2 characters, 0 guild banks", ns.report["vault holds"])
 check("the bank bag slots API was found", ns.report["bank bag slots api"] == "BankButtonIDToInvSlotID", ns.report["bank bag slots api"])
 check("windows module ok", ns.report["windows"] == "ok", ns.report["windows"])
-check("map module ok", ns.report["world map"] == "ok", ns.report["world map"])
 check("vault module ok", ns.report["vault"] == "ok", ns.report["vault"])
 check("options module ok", ns.report["options"] == "ok", ns.report["options"])
 check("options category registered", ns.report["options category"] == "ok (canvas page)", ns.report["options category"])
 check("category handed to the addon list", CATEGORIES[1] and CATEGORIES[1].registered == true)
-for _, key in ipairs({ "windows", "map", "vault", "about" }) do
+for _, key in ipairs({ "windows", "vault", "about" }) do
   check("page " .. key .. " built", ns.report["page " .. key] == "ok", ns.report["page " .. key])
 end
 check("every event registered", ns.report["events"]:find("^%d+/%d+ registered$") ~= nil, ns.report["events"])
 check("bag anchor hook taken", ns.report["bag anchor hook"] == "ok", ns.report["bag anchor hook"])
 check("windows were found", (ns.report["windows found"] or ""):find("^%d+"), ns.report["windows found"])
-check("no Blizzard addon was loaded by us", C_AddOns == nil or LOADED_BY_US == nil)
 
--- ------------------------------------------------------------------
--- 2. Moving the world map
--- ------------------------------------------------------------------
-WorldMapFrame:Show()
-RunTimers(1)
-
-local map = WorldMapFrame
-check("map is movable", map.movable == true)
-check("map is clamped to the screen", map.clamped == true)
-
--- The corner handle still exists, but it only shows itself when the top bar has no room.
-local grip
-for _, f in ipairs(FRAMES) do
-  if f.parent == map and f.dragButtons and f.w == 22 and f.h == 22 then grip = f end
-end
-check("map has a corner handle built", grip ~= nil)
-check("the handle stays out of the way while the top bar works", grip and grip.shown == false)
-
--- The draggable stretches of the top bar.
-local function TopStrips()
-  local out = {}
-  for _, f in ipairs(FRAMES) do
-    if f.parent == map and f.dragButtons and f.shown and f ~= grip and f.h ~= 22 then out[#out + 1] = f end
-  end
-  return out
-end
-local strips = TopStrips()
-check("the top bar has a draggable stretch", #strips > 0, #strips)
-check("the report says how many", (ns.report["map top bar"] or ""):find("stretches"), ns.report["map top bar"])
-
--- Nothing the addon laid on the top bar may cover one of the game's own controls.
-local function Overlaps(a, b)
-  local al, ab, aw = ns.Windows.Measure(a)
-  local bl, bb, bw = ns.Windows.Measure(b)
-  if not al or not bl then return false end
-  return al < bl + bw and bl < al + aw
-end
-local covered = false
-for _, strip in ipairs(strips) do
-  if Overlaps(strip, MAP_NAV) or Overlaps(strip, MAP_CLOSE) then covered = true end
-end
-check("the top bar strips leave the game's own buttons clear", covered == false)
-
-local strip1 = strips[1]
-DragTo(map, strip1, 300, 200)
-check("map position saved", ns.db.positions["worldmap"] ~= nil)
-check("saved x is right", near(ns.db.positions["worldmap"].x, 300), ns.db.positions["worldmap"].x)
-check("map actually sits there", near(map:GetLeft(), 300), map:GetLeft())
-
--- Off the left edge
-DragTo(map, strip1, -400, 200)
-check("dragged off the left edge is pulled back", near(ns.db.positions["worldmap"].x, 0), ns.db.positions["worldmap"].x)
--- Off the right edge
-DragTo(map, strip1, 5000, 200)
-check("dragged off the right edge is pulled back", near(ns.db.positions["worldmap"].x, SCREEN_W - 700), ns.db.positions["worldmap"].x)
--- Off the bottom
-DragTo(map, strip1, 300, -900)
-check("dragged below the screen is pulled back", near(ns.db.positions["worldmap"].y, 0), ns.db.positions["worldmap"].y)
--- Off the top
-DragTo(map, strip1, 300, 4000)
-check("dragged above the screen is pulled back", near(ns.db.positions["worldmap"].y, SCREEN_H - 500), ns.db.positions["worldmap"].y)
-DragTo(map, strip1, 300, 200)
-
--- The game hides and shows the map again: our position has to win.
-map:Hide()
-map:ClearAllPoints()
-map:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 0)
-map:Show()
-RunTimers(1)
-check("position survives the game re-placing the map", near(map:GetLeft(), 300), map:GetLeft())
-
--- ------------------------------------------------------------------
--- 3. Scaling the map
--- ------------------------------------------------------------------
-ns.Map.SetScale(1.3)
-check("scale applied to the frame", near(map:GetScale(), 1.3, 0.001), map:GetScale())
-check("scale remembered", near(ns.db.map.scale, 1.3, 0.001))
--- GetLeft is in the frame own units, so a scaled frame is measured through the addon helper.
-local ml = ns.Windows.Measure(map)
-check("map stays put after scaling", near(ml, 300, 1), ml)
-
-ns.Map.SetScale(9)
-check("scale is capped at the maximum", near(ns.db.map.scale, 2.0, 0.001), ns.db.map.scale)
-ns.Map.SetScale(0.05)
-check("scale is capped at the minimum", near(ns.db.map.scale, 0.5, 0.001), ns.db.map.scale)
-
--- Snapping: from an odd number the buttons land on round tens.
-ns.Map.SetScale(0.97)
-ns.Map.Step(1)
-check("plus snaps up to the next ten percent", near(ns.db.map.scale, 1.0, 0.001), ns.db.map.scale)
-ns.Map.Step(1)
-check("plus again is one whole step", near(ns.db.map.scale, 1.1, 0.001), ns.db.map.scale)
-ns.Map.Step(-1)
-check("minus comes back", near(ns.db.map.scale, 1.0, 0.001), ns.db.map.scale)
-ns.Map.SetScale(1.03)
-ns.Map.Step(-1)
-check("minus snaps down to the previous ten percent", near(ns.db.map.scale, 1.0, 0.001), ns.db.map.scale)
-ns.Map.SetScale(0.5)
-ns.Map.Step(-1)
-check("minus cannot go under the minimum", near(ns.db.map.scale, 0.5, 0.001), ns.db.map.scale)
-ns.Map.SetScale(2.0)
-ns.Map.Step(1)
-check("plus cannot go over the maximum", near(ns.db.map.scale, 2.0, 0.001), ns.db.map.scale)
-
-ns.db.map.step = 25
-ns.Map.SetScale(1.0)
-ns.Map.Step(1)
-check("a different step is obeyed", near(ns.db.map.scale, 1.25, 0.001), ns.db.map.scale)
-ns.db.map.step = 10
-ns.Map.ResetSize()
-check("reset goes back to 100 percent", near(ns.db.map.scale, 1.0, 0.001))
-
--- The tab under the map holds everything the addon adds, and stays the same size on screen
--- whatever the map is scaled to.
-local tab = CasementMapTab
-check("the map tab was built", tab ~= nil)
-check("the tab wears the game's panel art", (ns.report["map tab panel"] or "") ~= "", ns.report["map tab panel"])
-check("the tab hangs off the map itself", tab and tab.parent == map)
-check("the resize grip lives in the tab, not on the map", CasementMapGrip and CasementMapGrip.parent == tab)
-ns.Map.SetScale(2.0)
-check("the tab counters the map scale", near(tab:GetScale(), 0.5, 0.001), tab:GetScale())
-ns.Map.SetScale(1.0)
-
--- ------------------------------------------------------------------
--- 4. Resizing by the corner
--- ------------------------------------------------------------------
-ns.Windows.Place(map, 300, 200)
-local mapGrip = CasementMapGrip
-local before = ns.db.map.scale
-MOUSE_DOWN = true
--- The grip starts 700 across and 500 down from the top left corner of the map.
-CURSOR = { 1000, 700 }
-mapGrip.scripts.OnMouseDown(mapGrip)
-CURSOR = { 1150, 600 }
-mapGrip.scripts.OnUpdate(mapGrip)
-check("dragging the corner out makes the map bigger", ns.db.map.scale > before, ns.db.map.scale)
-local ml2, mb2, mw2, mh2 = ns.Windows.Measure(map)
-local topAfter = mb2 + mh2
-check("the opposite corner stayed still", near(topAfter, 700, 2), topAfter)
-CURSOR = { 950, 780 }
-mapGrip.scripts.OnUpdate(mapGrip)
-check("dragging the corner in makes it smaller", ns.db.map.scale < 1.2, ns.db.map.scale)
-SHIFT = true
-CURSOR = { 1120, 630 }
-mapGrip.scripts.OnUpdate(mapGrip)
-local pct = ns.db.map.scale * 100
-check("holding shift snaps the drag to ten percent", near(pct % 10, 0, 0.01) or near(pct % 10, 10, 0.01), pct)
-SHIFT = false
-mapGrip.scripts.OnMouseUp(mapGrip)
-check("the resize loop stops when the mouse is let go", mapGrip.scripts.OnUpdate == nil)
-check("the position is saved once the drag is over", ns.db.positions["worldmap"] ~= nil)
-
--- The grip slides away from under the cursor as the map grows, so a mouse up on the grip itself
--- may never arrive. The loop watches the button instead.
-CURSOR = { 1000, 700 }
-MOUSE_DOWN = true
-mapGrip.scripts.OnMouseDown(mapGrip)
-CURSOR = { 1100, 640 }
-mapGrip.scripts.OnUpdate(mapGrip)
-check("the resize is running", mapGrip.scripts.OnUpdate ~= nil)
-MOUSE_DOWN = false
-mapGrip.scripts.OnUpdate(mapGrip)
-check("letting go anywhere on screen ends the resize", mapGrip.scripts.OnUpdate == nil)
-ns.Map.SetScale(1.0)
-
--- ------------------------------------------------------------------
--- 4b. The quest panel, which is what broke the first version
--- ------------------------------------------------------------------
-OpenQuestPanel(true)
-RunTimers(1)
-check("the quest panel is above the map's own level", QUEST_SCROLL.level > map.level)
-check("the tab climbs above the quest panel", tab.level > QUEST_SCROLL.level, tab.level .. " vs " .. QUEST_SCROLL.level)
-check("the report names the layer it reached", (ns.report["map tab layer"] or ""):find("%d"), ns.report["map tab layer"])
-
-local wideStrips = TopStrips()
-check("the top bar still has somewhere to grab with the panel open", #wideStrips > 0, #wideStrips)
-local clash = false
-for _, s in ipairs(wideStrips) do
-  if Overlaps(s, MAP_NAV) or Overlaps(s, MAP_CLOSE) or Overlaps(s, QuestMapFrame) then clash = true end
-end
-check("and it still avoids the panel and the buttons", clash == false)
-
--- Resizing has to work with the panel open, which is the bug that was reported.
-local pressesBefore = ns.Map.gripPresses
-local scaleBefore = ns.db.map.scale
-local ql, qb, qw, qh = ns.Windows.Measure(map)
-CURSOR = { ql + qw, qb }
-MOUSE_DOWN = true
-mapGrip.scripts.OnMouseDown(mapGrip)
-check("the grip in the tab took the click with the panel open", ns.Map.gripPresses == pressesBefore + 1)
-CURSOR = { ql + qw + 120, qb - 80 }
-mapGrip.scripts.OnUpdate(mapGrip)
-check("and the map resized", ns.db.map.scale > scaleBefore, ns.db.map.scale)
-MOUSE_DOWN = false
-mapGrip.scripts.OnUpdate(mapGrip)
-ns.Map.SetScale(1.0)
-
-OpenQuestPanel(false)
-RunTimers(1)
-check("closing the panel leaves the top bar working", #TopStrips() > 0)
-local bar = tab
-
-do -- scope: 4b2. A placed map through the quest log toggling
--- The game re-anchors the map AFTER changing its width when the quest log toggles. A placed map
--- must be back in place the instant that finishes, with no frame drawn at the game's spot.
-check("the game's panel positioning was hooked", (ns.report["panel position hook"] or ""):find("UpdateUIPanelPositions") ~= nil, ns.report["panel position hook"])
-DragTo(map, strip1, 420, 260)
-local savedX = ns.db.positions["worldmap"].x
-check("the map was placed", near(savedX, 420), savedX)
-local before = PANEL_POSITIONINGS
-OpenQuestPanel(true)
-check("the game positioned the panel", PANEL_POSITIONINGS == before + 1)
-check("the map holds its place the instant the quest log opens", near(ns.Windows.Measure(map), savedX, 1), ns.Windows.Measure(map))
-RunTimers(1)
-check("and a moment later", near(ns.Windows.Measure(map), savedX, 1), ns.Windows.Measure(map))
-OpenQuestPanel(false)
-check("the map holds its place the instant the quest log closes", near(ns.Windows.Measure(map), savedX, 1), ns.Windows.Measure(map))
-RunTimers(1)
-check("and stays there", near(ns.Windows.Measure(map), savedX, 1), ns.Windows.Measure(map))
-
--- A map the user has never touched is still left entirely to the game.
-ns.db.positions["worldmap"] = nil
-OpenQuestPanel(true)
-OpenQuestPanel(false)
-RunTimers(1)
-check("an unplaced map is left where the game puts it", near(ns.Windows.Measure(map), 20, 1), ns.Windows.Measure(map))
-DragTo(map, strip1, 420, 260)
-
--- A window the user is holding is never snapped back by the game's positioning.
-strip1.scripts.OnDragStart(strip1)
-map:ClearAllPoints()
-map:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 600, 300)
-UpdateUIPanelPositions(map)
-check("the game's positioning is ignored while the map is being dragged", near(ns.Windows.Measure(map), 20, 1), ns.Windows.Measure(map))
-strip1.scripts.OnDragStop(strip1)
-DragTo(map, strip1, 420, 260)
+do -- scope: 1b. This is Bank Tabs, and only its half of Casement
+check("the version is 2.0.0", ns.version == "2.0.0", ns.version)
+check("the saved variables are Bank Tabs' own", ns.db == BankTabsDB and ns.vault == BankTabsAccountDB.vault
+  and CasementDB == nil and CasementAccountDB == nil)
+check("the event frame is Bank Tabs' own", BankTabsFrame ~= nil and CasementFrame == nil)
+check("the options category is called Bank Tabs", CATEGORIES[1] and CATEGORIES[1].name == "Bank Tabs", CATEGORIES[1] and CATEGORIES[1].name)
+check("there is no world map module", ns.Map == nil and ns.Reveal == nil and ns.report["world map"] == nil and ns.report["reveal"] == nil)
+check("and no world map options page", ns.report["page map"] == nil)
+check("the map's settings are not in the defaults", ns.db.map == nil and ns.db.windows.worldmap == nil and ns.defaults.map == nil)
+local groups = {}
+for _, group in ipairs(ns.Windows.GROUPS) do groups[#groups + 1] = group.key end
+check("the window switches are the bag, bank and guild bank ones", table.concat(groups, ",") == "combined,bags,reagent,bank,guildbank", table.concat(groups, ","))
+check("the map exploration event is not registered", ns.report["events"] == "17/17 registered", ns.report["events"])
 end -- scope
 
-do -- scope: 4c. The hover tint
+-- ------------------------------------------------------------------
+-- 2. The bank window: dragging it and keeping it on screen
+-- ------------------------------------------------------------------
+local bank = BankFrame
+BankFrame:Show()
+RunTimers(1)
+check("the bank is movable", bank.movable == true)
+check("the bank is clamped to the screen", bank.clamped == true)
+check("the bank is taken out of the game's panel stack", bank.attributes and bank.attributes["UIPanelLayout-enabled"] == false)
+check("and the report says so", ns.report["panel layout BankFrame"] == "taken out of the game's panel stack", ns.report["panel layout BankFrame"])
+
+local bankGrip
+for _, f in ipairs(FRAMES) do
+  if f.parent == bank and f.dragButtons and f.h == 26 then bankGrip = f end
+end
+check("the bank got a drag strip along its top", bankGrip ~= nil)
+check("the strip sits above everything in the window", bankGrip and bankGrip.level > BANK_SLOT_BUTTONS[1].level)
+
+DragTo(bank, bankGrip, 300, 200)
+check("bank position saved", ns.db.positions["bank"] ~= nil)
+check("saved x is right", near(ns.db.positions["bank"].x, 300), ns.db.positions["bank"].x)
+check("the bank actually sits there", near(bank:GetLeft(), 300), bank:GetLeft())
+
+-- Off the left edge
+DragTo(bank, bankGrip, -400, 200)
+check("dragged off the left edge is pulled back", near(ns.db.positions["bank"].x, 0), ns.db.positions["bank"].x)
+-- Off the right edge
+DragTo(bank, bankGrip, 5000, 200)
+check("dragged off the right edge is pulled back", near(ns.db.positions["bank"].x, SCREEN_W - 400), ns.db.positions["bank"].x)
+-- Off the bottom
+DragTo(bank, bankGrip, 300, -900)
+check("dragged below the screen is pulled back", near(ns.db.positions["bank"].y, 0), ns.db.positions["bank"].y)
+-- Off the top
+DragTo(bank, bankGrip, 300, 4000)
+check("dragged above the screen is pulled back", near(ns.db.positions["bank"].y, SCREEN_H - 500), ns.db.positions["bank"].y)
+DragTo(bank, bankGrip, 300, 200)
+
+-- The game hides and shows the bank again: our position has to win.
+bank:Hide()
+bank:ClearAllPoints()
+bank:SetPoint("TOPLEFT", UIParent, "TOPLEFT", 0, 0)
+bank:Show()
+RunTimers(1)
+check("position survives the game re-placing the bank", near(bank:GetLeft(), 300), bank:GetLeft())
+
+do -- scope: 2b. The game's panel positioning
+-- The game re-anchors a panel window when it positions its panels, which can come after a size
+-- change. A placed bank must be back in place the instant that finishes, with no frame drawn at
+-- the game's spot.
+check("the game's panel positioning was hooked", (ns.report["panel position hook"] or ""):find("UpdateUIPanelPositions") ~= nil, ns.report["panel position hook"])
+DragTo(bank, bankGrip, 420, 260)
+local savedX = ns.db.positions["bank"].x
+check("the bank was placed", near(savedX, 420), savedX)
+local before = PANEL_POSITIONINGS
+UpdateUIPanelPositions(bank)
+check("the game positioned the panel", PANEL_POSITIONINGS == before + 1)
+check("the bank holds its place the instant the game positions it", near(ns.Windows.Measure(bank), savedX, 1), ns.Windows.Measure(bank))
+RunTimers(1)
+check("and a moment later", near(ns.Windows.Measure(bank), savedX, 1), ns.Windows.Measure(bank))
+-- A size change, then the positioning, the order the game uses.
+bank:SetSize(430, 500)
+bank.scripts.OnSizeChanged(bank)
+UpdateUIPanelPositions(bank)
+check("a size change followed by the game's positioning leaves it in place", near(ns.Windows.Measure(bank), savedX, 1), ns.Windows.Measure(bank))
+bank:SetSize(400, 500)
+bank.scripts.OnSizeChanged(bank)
+ShowUIPanel(bank)
+check("showing it through the panel system leaves it in place too", near(ns.Windows.Measure(bank), savedX, 1), ns.Windows.Measure(bank))
+
+-- A bank the user has never touched is still left entirely to the game.
+ns.db.positions["bank"] = nil
+UpdateUIPanelPositions(bank)
+RunTimers(1)
+check("an unplaced bank is left where the game puts it", near(ns.Windows.Measure(bank), 40, 1), ns.Windows.Measure(bank))
+DragTo(bank, bankGrip, 420, 260)
+
+-- A window the user is holding is never snapped back by the game's positioning.
+bankGrip.scripts.OnDragStart(bankGrip)
+bank:ClearAllPoints()
+bank:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 600, 300)
+UpdateUIPanelPositions(bank)
+check("the game's positioning is ignored while the bank is being dragged", near(ns.Windows.Measure(bank), 40, 1), ns.Windows.Measure(bank))
+bankGrip.scripts.OnDragStop(bankGrip)
+DragTo(bank, bankGrip, 420, 260)
+end -- scope
+
+do -- scope: 2c. The world map is left alone
+-- Map Tab moves the world map and hooks the same panel positioning. Bank Tabs must never manage
+-- the map, and nothing it does when it puts its own windows back may move the map.
+local map = WorldMapFrame
+map:Show()
+RunTimers(1)
+check("the world map is not one of Bank Tabs' windows", ns.Windows.Entry(map) == nil)
+check("it was not made movable or clamped", map.movable == nil and map.clamped == nil)
+local ours = 0
+for _, f in ipairs(FRAMES) do if f.parent == map then ours = ours + 1 end end
+check("nothing was laid on it", ours == 0, ours)
+check("it is still in the game's panel stack", map.attributes == nil or map.attributes["UIPanelLayout-enabled"] == nil)
+-- Map Tab puts the map somewhere; every way Bank Tabs puts its own windows back leaves it there.
+map:ClearAllPoints()
+map:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", 700, 300)
+ns.Windows.ReapplyAll()
+UpdateContainerFrameAnchors()
+ShowUIPanel(bank)
+fire("UI_SCALE_CHANGED")
+fire("BAG_OPEN", 1)
+RunTimers(1)
+check("Bank Tabs putting its windows back never moves the map", near(map:GetLeft(), 700) and near(map:GetBottom(), 300), map:GetLeft())
+UpdateUIPanelPositions(map)
+RunTimers(1)
+check("the game's positioning of the map is left to the game and Map Tab", near(map:GetLeft(), 20), map:GetLeft())
+check("and no position is saved for it", ns.db.positions["worldmap"] == nil)
+map:Hide()
+end -- scope
+
+do -- scope: 2d. The hover tint
 -- The hover tint on a drag strip answers to the "show me where the drag strips are" switch, which
 -- is off by default: a header must not light up under a passing mouse.
 ns.db.showGrips = false
 ns.Refresh()
 local hintTex
 for _, t in ipairs(TEXTURES) do
-  if t.parent == strip1 and t.color and t.color[1] == 0.35 and t.color[4] == 0.20 then hintTex = t end
+  if t.parent == bankGrip and t.color and t.color[1] == 0.35 and t.color[4] == 0.22 then hintTex = t end
 end
 check("a drag strip carries a hover tint", hintTex ~= nil)
-strip1.scripts.OnEnter(strip1)
+bankGrip.scripts.OnEnter(bankGrip)
 check("but hovering the header does not light it up by default", hintTex and hintTex.shown == false)
-strip1.scripts.OnLeave(strip1)
+bankGrip.scripts.OnLeave(bankGrip)
 ns.db.showGrips = true
 ns.Refresh()
-strip1.scripts.OnEnter(strip1)
+bankGrip.scripts.OnEnter(bankGrip)
 check("it lights up once the drag areas are switched on", hintTex and hintTex.shown == true)
-strip1.scripts.OnLeave(strip1)
+bankGrip.scripts.OnLeave(bankGrip)
 ns.db.showGrips = false
 ns.Refresh()
-end -- scope
-
-do -- scope: 4d. Coordinates in the tab
--- ------------------------------------------------------------------
--- 4d. Coordinates in the tab, and the copy button
--- ------------------------------------------------------------------
-map:Show()
-RunTimers(1)
-local coordsPart = CasementMapCoords
-local copyBtn = CasementMapCopy
-check("the tab carries a coordinates part", coordsPart ~= nil and coordsPart.parent == tab)
-check("and a copy button", copyBtn ~= nil and copyBtn.parent == tab)
-check("coordinates are on by default and shown", ns.db.map.coords == true and coordsPart.shown == true)
-check("the coordinates sit at the left end of the tab", coordsPart.points[1] and coordsPart.points[1][4] == 10, coordsPart.points[1] and coordsPart.points[1][4])
-local minusBtn
-for _, f in ipairs(FRAMES) do if f.parent == tab and f.text == "-" then minusBtn = f end end
-check("the sizing controls sit to the right of them", minusBtn and minusBtn.points[1][4] > coordsPart.points[1][4] + coordsPart.w)
-local wideTab = tab.w
-ns.db.map.coords = false
-ns.Refresh()
-check("switching the coordinates off hides them", coordsPart.shown == false and copyBtn.shown == false)
-check("and the tab shrinks back from the left", tab.w < wideTab, tab.w .. " vs " .. wideTab)
-local minusX = minusBtn.points[1][4]
-ns.db.map.coords = true
-ns.Refresh()
-check("switching them on grows the tab leftwards, the sizing end staying put", tab.w > minusX and minusBtn.points[1][4] > minusX)
-
--- The readout.
-local function LineStarting(prefix)
-  for _, fs in ipairs(FONTSTRINGS) do
-    if fs.parent == coordsPart and type(fs.text) == "string" and fs.text:sub(1, #prefix) == prefix then return fs end
-  end
-  return nil
-end
-coordsPart.scripts.OnUpdate(coordsPart, 1)
-check("your position is printed as hundredths", LineStarting("You") and LineStarting("You").text == "You  45.2, 67.8", LineStarting("You") and LineStarting("You").text)
-check("the cursor position too", LineStarting("Cursor") and LineStarting("Cursor").text == "Cursor  12.3, 45.6", LineStarting("Cursor") and LineStarting("Cursor").text)
-CURSOR_NORM = nil
-coordsPart.scripts.OnUpdate(coordsPart, 1)
-check("a cursor off the map shows dashes", LineStarting("Cursor").text == "Cursor  --")
-CURSOR_NORM = { 0.123, 0.456 }
-ns.db.map.coordsCursor = false
-ns.Refresh()
-coordsPart.scripts.OnUpdate(coordsPart, 1)
-check("the cursor line can be switched off on its own", LineStarting("Cursor").shown == false)
-ns.db.map.coordsCursor = true
-ns.Refresh()
-
--- A position this client keeps secret is shown as unknown, never compared.
-local realPos = PLAYER_POS
-PLAYER_POS = { MakeSecret(), MakeSecret() }
-local okSecret = pcall(coordsPart.scripts.OnUpdate, coordsPart, 1)
-check("a secret position does not error", okSecret)
-check("and is shown as unknown", LineStarting("You").text == "You  --", LineStarting("You").text)
-PLAYER_POS = realPos
-coordsPart.scripts.OnUpdate(coordsPart, 1)
-
--- The copy button.
-check("the copy text names the zone first", ns.Map.PlayerCoordText() == "The Barrens 45.2, 67.8", ns.Map.PlayerCoordText())
-CHAT_EDIT:Hide()
-OPENED_CHAT = nil
-copyBtn.scripts.OnClick(copyBtn, "LeftButton")
-check("with no chat line open, the click opens one with the position in it", OPENED_CHAT == "The Barrens 45.2, 67.8", OPENED_CHAT)
-CHAT_EDIT:Show()
-CHAT_EDIT.inserted = nil
-copyBtn.scripts.OnClick(copyBtn, "LeftButton")
-check("with a chat line open, the click puts the position into it", CHAT_EDIT.inserted == "The Barrens 45.2, 67.8", CHAT_EDIT.inserted)
-CHAT_EDIT:Hide()
-copyBtn.scripts.OnClick(copyBtn, "RightButton")
-check("right-click opens the copy box", CasementCopyBox ~= nil and CasementCopyBox.shown == true)
-check("with the position in it", CasementCopyBox and CasementCopyBox.edit.text == "The Barrens 45.2, 67.8")
-CasementCopyBox:Hide()
-PLAYER_POS = nil
-copyBtn.scripts.OnClick(copyBtn, "LeftButton")
-check("with no position to give, the click says so instead", CHAT[#CHAT]:find("not available") ~= nil, CHAT[#CHAT])
-PLAYER_POS = realPos
-SlashCmdList["CASEMENT"]("coords")
-check("/casement coords opens the copy box", CasementCopyBox.shown == true)
-CasementCopyBox:Hide()
-
--- ------------------------------------------------------------------
--- 4e. Drawing the unexplored map
--- ------------------------------------------------------------------
-local canvasChild = WorldMapFrame.ScrollContainer.Child
-local function RevealTiles()
-  local out = {}
-  for _, t in ipairs(TEXTURES) do
-    if t.parent == canvasChild and t.shown and t.texture then out[#out + 1] = t end
-  end
-  return out
-end
-
-check("the reveal found the exploration API", ns.report["map reveal api"] == "GetExploredMapTextures found", ns.report["map reveal api"])
-check("the reveal is off by default", ns.db.map.reveal == false)
-
--- The shipped table, straight from the client's WorldMapOverlay and WorldMapOverlayTile tables.
-local shippedMaps = 0
-for _ in pairs(ns.Reveal.DATA) do shippedMaps = shippedMaps + 1 end
-check("the shipped overlay table is present", shippedMaps >= 60, shippedMaps)
-check("the report counts it", (ns.report["map reveal data"] or ""):find("^" .. shippedMaps .. " maps shipped") ~= nil, ns.report["map reveal data"])
--- Overlay 84 in the tables: map art 1244, 160 by 210 at 382,281, one tile, file 272826.
-check("a known overlay is in it with its tile", ns.Reveal.DATA[1244] and ns.Reveal.DATA[1244]["160:210:382:281"] == "272826", ns.Reveal.DATA[1244] and ns.Reveal.DATA[1244]["160:210:382:281"])
--- Overlay 85: 315 wide, so two tiles across, in row-major order.
-check("a two tile overlay lists its tiles left to right", ns.Reveal.DATA[1244] and ns.Reveal.DATA[1244]["315:256:101:247"] == "272806, 272812", ns.Reveal.DATA[1244] and ns.Reveal.DATA[1244]["315:256:101:247"])
--- Every entry in the table has exactly the tiles its size calls for.
-local badShape = 0
-for _, overlays in pairs(ns.Reveal.DATA) do
-  for key, ids in pairs(overlays) do
-    local w, h = key:match("^(%d+):(%d+):")
-    local want = math.ceil(tonumber(w) / 256) * math.ceil(tonumber(h) / 256)
-    local got = 0
-    for _ in tostring(ids):gmatch("%d+") do got = got + 1 end
-    if got ~= want then badShape = badShape + 1 end
-  end
-end
-check("every shipped overlay has exactly the tiles its size needs", badShape == 0, badShape)
-ns.Reveal.Refresh(true)
-check("off, it draws nothing", #RevealTiles() == 0, #RevealTiles())
-
--- Shipped data for The Barrens' art: the explored overlay the game already draws, one it does
--- not, and one that spans two tiles.
-ns.Reveal.DATA[5] = {
-  ["300:200:100:50"] = "111, 112",
-  ["120:80:600:300"] = "201",
-  ["500:200:0:400"] = "301, 302",
-}
-ns.db.map.reveal = true
-ns.db.map.revealTint = "blue"
-ns.Refresh()
-local tiles = RevealTiles()
-check("on, it draws the overlays the game is not drawing", #tiles == 3, #tiles)
-local function TileAt(x, y)
-  for _, t in ipairs(tiles) do
-    if t.points[1] and t.points[1][4] == x and t.points[1][5] == y then return t end
-  end
-  return nil
-end
-check("the explored overlay is left to the game", TileAt(100, -50) == nil)
-local small = TileAt(600, -300)
-check("a small overlay is one tile at its offset", small ~= nil and small.texture == 201)
-check("sized to the overlay, not to the tile", small and small.w == 120 and small.h == 80)
-check("showing only the used part of its file", small and small.texCoord and near(small.texCoord[2], 120 / 128, 0.001) and near(small.texCoord[4], 80 / 128, 0.001))
-local first, second = TileAt(0, -400), TileAt(256, -400)
-check("a wide overlay is cut into 256 pixel tiles", first ~= nil and second ~= nil)
-check("the first tile is a full 256 wide", first and first.w == 256 and first.texture == 301)
-check("the last tile is the remainder", second and second.w == 244 and second.h == 200 and second.texture == 302)
-check("the last tile shows 244 of a 256 file", second and second.texCoord and near(second.texCoord[2], 244 / 256, 0.001))
-check("the drawn in areas are tinted", small and small.vertex and near(small.vertex[1], 0.62, 0.001) and near(small.vertex[3], 1.0, 0.001))
-check("the tiles sit under the game's own overlays", small and small.sub == -1)
-check("the report says what was drawn", (ns.report["map reveal"] or ""):find("2 drawn") ~= nil, ns.report["map reveal"])
-
-ns.db.map.revealTint = "none"
-ns.Refresh()
-small = TileAt(600, -300)
-check("no tint leaves the art as it is", small and (small.vertex == nil or (near(small.vertex[1], 1, 0.001) and near(small.vertex[2], 1, 0.001))))
-
--- The harvest: what the game handed over is remembered account wide.
-check("the explored overlay was harvested", CasementAccountDB.overlays and CasementAccountDB.overlays[5] and CasementAccountDB.overlays[5]["300:200:100:50"] == "111, 112")
-
--- Exploring an area takes it out of our drawing on the next update.
-EXPLORED[1440][#EXPLORED[1440] + 1] = { textureWidth = 120, textureHeight = 80, offsetX = 600, offsetY = 300, fileDataIDs = { 201 } }
-fire("MAP_EXPLORATION_UPDATED")
-tiles = RevealTiles()
-check("an area explored since is handed back to the game", TileAt(600, -300) == nil and #tiles == 2, #tiles)
-
--- An overlay only the harvest knows about (say, from another character) is drawn too.
-CasementAccountDB.overlays[5]["64:64:900:600"] = "401"
-ns.Reveal.Refresh(true)
-tiles = RevealTiles()
-check("harvested overlays are drawn like shipped ones", TileAt(900, -600) ~= nil and TileAt(900, -600).texture == 401)
-
-check("the report describes the shown map", ns.Reveal.Describe():find("The Barrens") ~= nil, ns.Reveal.Describe())
-local dumped = ns.Reveal.Dump()
-check("the dump opens the copy box with the harvest as Lua", dumped == 1 and CasementCopyBox.shown == true and CasementCopyBox.edit.text:find('%[5%] = {') ~= nil)
-check("with every harvested overlay in it", CasementCopyBox.edit.text:find('%["64:64:900:600"%] = "401"') ~= nil)
-CasementCopyBox:Hide()
-SlashCmdList["CASEMENT"]("mapdata")
-check("/casement mapdata prints the report", CHAT[#CHAT]:find("The Barrens") ~= nil, CHAT[#CHAT])
-
--- Switching the world map feature off takes the reveal with it.
-ns.db.windows.worldmap = false
-ns.Refresh()
-check("switching the map feature off clears the reveal", #RevealTiles() == 0)
-ns.db.windows.worldmap = true
-ns.db.map.reveal = false
-ns.Reveal.DATA[5] = nil
-ns.Refresh()
-
 end -- scope
 
 -- ------------------------------------------------------------------
 -- 5. Switching a window off
 -- ------------------------------------------------------------------
-local originalLeft = 20
-ns.db.windows.worldmap = false
+ns.db.windows.bank = false
 ns.Refresh()
-check("the handle goes away", grip.shown == false)
-check("the map goes back where the game had it", near(map:GetLeft(), originalLeft), map:GetLeft())
-check("the scale bar is hidden too", bar.shown == false)
-check("the map is back to its normal size", near(map:GetScale(), 1, 0.001))
-ns.db.windows.worldmap = true
+check("the strip goes away", bankGrip.shown == false)
+check("the bank goes back where the game had it", near(bank:GetLeft(), 40), bank:GetLeft())
+check("and back into the game's panel stack", bank.attributes["UIPanelLayout-enabled"] == true)
+ns.db.windows.bank = true
 ns.Refresh()
-check("switching it back on restores the saved position", near(map:GetLeft(), 420, 1), map:GetLeft())
+check("switching it back on restores the saved position", near(bank:GetLeft(), 420, 1), bank:GetLeft())
+check("and takes it out of the panel stack again", bank.attributes["UIPanelLayout-enabled"] == false)
+BankFrame:Hide()
 
 -- ------------------------------------------------------------------
 -- 6. Bag windows
@@ -1255,7 +1022,6 @@ check("opening a moved bag puts it straight where the user left it", near(backpa
 ContainerFrame7:SetID(6)
 ContainerFrame6:SetID(5)
 local function OptionOf(frame)
-  for _, entry in ipairs({ frame }) do end
   return ns.Windows.OptionKey({ frame = frame, dynamic = true })
 end
 check("bag 0 belongs to the individual bags switch", OptionOf(ContainerFrame1) == "bags")
@@ -1278,14 +1044,23 @@ ns.db.windows.bags = true
 ns.Refresh()
 check("switching them back on restores the position", near(backpack:GetLeft(), 500), backpack:GetLeft())
 
+do -- scope: 6b. Wiring another region to drag a managed window
+local handle = CreateFrame("Frame", nil, backpack)
+check("any region can be wired to drag a managed window", ns.Windows.WireRegion(handle, backpack) == true and handle.dragButtons ~= nil)
+check("but not one this addon does not manage", ns.Windows.WireRegion(CreateFrame("Frame", nil, UIParent), WorldMapFrame) == false)
+DragTo(backpack, handle, 520, 310)
+check("and dragging it moves and saves the window", near(ns.db.positions["bag0"].x, 520), ns.db.positions["bag0"].x)
+DragTo(backpack, handle, 500, 300)
+end -- scope
+
 -- ------------------------------------------------------------------
 -- 7. The drag anywhere modifier
 -- ------------------------------------------------------------------
 local overlay
 for _, f in ipairs(FRAMES) do
-  if f.parent == map and f.allPoints == map and f.dragButtons then overlay = f end
+  if f.parent == backpack and f.allPoints == backpack and f.dragButtons then overlay = f end
 end
-check("the map has a whole window drag overlay", overlay ~= nil)
+check("the backpack has a whole window drag overlay", overlay ~= nil)
 check("the overlay is out of the way to begin with", overlay.shown == false)
 ALT = true
 fire("MODIFIER_STATE_CHANGED", "LALT", 1)
@@ -1307,26 +1082,27 @@ fire("MODIFIER_STATE_CHANGED", "LSHIFT", 0)
 ns.db.dragModifier = "alt"
 
 -- A window that is not on screen never gets an overlay to click on.
-map:Hide()
+backpack:Hide()
 ALT = true
 fire("MODIFIER_STATE_CHANGED", "LALT", 1)
 check("a hidden window gets no overlay", overlay.shown == false)
 ALT = false
 fire("MODIFIER_STATE_CHANGED", "LALT", 0)
-map:Show()
+backpack:Show()
 RunTimers(0.1)
 
 -- ------------------------------------------------------------------
 -- 8. Screen size changes
 -- ------------------------------------------------------------------
-ns.Windows.Place(map, 1200, 500)
+DragTo(backpack, bagGrip, 1500, 600)
 SCREEN_W, SCREEN_H = 1024, 768
 UIParent.w, UIParent.h = SCREEN_W, SCREEN_H
 fire("DISPLAY_SIZE_CHANGED")
-check("a smaller screen pulls the map back on to it", map:GetLeft() + 700 <= SCREEN_W + 0.5, map:GetLeft())
+check("a smaller screen pulls the bag back on to it", backpack:GetLeft() + 340 <= SCREEN_W + 0.5 and backpack:GetBottom() + 400 <= SCREEN_H + 0.5, backpack:GetLeft())
 SCREEN_W, SCREEN_H = 1920, 1080
 UIParent.w, UIParent.h = SCREEN_W, SCREEN_H
 fire("UI_SCALE_CHANGED")
+DragTo(backpack, bagGrip, 500, 300)
 
 -- ------------------------------------------------------------------
 -- 9. The bank snapshot
@@ -1459,6 +1235,19 @@ check("a change with the bank shut is ignored", ns.vault.chars[me].bank.reason =
 -- ------------------------------------------------------------------
 fire("PLAYER_LOGIN")
 check("the bags are read a moment after login, not on the spot", ns.vault.chars[me].bags == nil)
+
+do -- scope: 9a. The Casement import on a clean install
+-- No Casement anywhere: nothing is loaded, switched off or said, and the question is closed so
+-- the next login does not ask again.
+check("a clean install finds no Casement", ns.report["casement addon"] == "not installed", ns.report["casement addon"])
+check("and closes the question", ns.report["casement import"] == "nothing to import: no Casement installed", ns.report["casement import"])
+check("the account and the character are flagged", BankTabsAccountDB.importedCasement == true and BankTabsDB.importedCasement == true)
+check("nothing was loaded", #LOADED_BY_US == 0 and not Called("LoadAddOn Casement"))
+check("nothing was switched on or off", not Called("DisableAddOn Casement") and not Called("EnableAddOn Casement"))
+check("and nothing was said about Casement", ChatWith("Casement") == 0, ChatLine("Casement"))
+check("the run says how it ended", ns.Import.lastRun == "nothing", ns.Import.lastRun)
+end -- scope
+
 RunTimers(4)
 local bags = ns.vault.chars[me].bags
 check("a bags snapshot was taken after login", bags ~= nil and bags.reason == "login", bags and bags.reason)
@@ -1500,10 +1289,10 @@ fire("PLAYER_LOGOUT")
 check("logging out reads the bags at once", ns.vault.chars[me].bags.items == 6, ns.vault.chars[me].bags.items)
 check("without waiting on a timer", #TIMERS == timersBefore, #TIMERS - timersBefore)
 check("and says so", ns.vault.chars[me].bags.reason == "logout")
-check("the account copy was written at logout", CasementAccountDB.profile ~= nil)
+check("the account copy was written at logout", BankTabsAccountDB.profile ~= nil)
 
 -- ------------------------------------------------------------------
--- 9c. Records saved by 1.0.x are lifted into the new shape
+-- 9c. Records saved by Casement 1.0.x are lifted into the new shape
 -- ------------------------------------------------------------------
 local old = ns.vault.chars["Oldtoon - Voidpact"]
 check("an old style record was lifted into .bank at load", old ~= nil and type(old.bank) == "table" and type(old.bank.containers) == "table")
@@ -1584,7 +1373,6 @@ end
 -- classic bank grid a record without a measurement falls back to.
 local function GridXY(col, row) return 20 + col * 42, -(62 + row * 42) end
 local function BankXY(col, row) return 48 + col * 50, -(63 + row * 47) end
-local function ClassicXY(col, row) return 48 + col * 49, -(63 + row * 47) end
 local function CellAt(list, x, y)
   for _, c in ipairs(list) do
     local p = c.points[1]
@@ -1656,14 +1444,14 @@ check("only characters with bags saved are listed for bags", #ns.Vault.Character
 check("with no kind every character is listed", #ns.Vault.Characters() == 3, #ns.Vault.Characters())
 
 ns.VaultUI.Show("bank")
-vault = CasementVault
+vault = BankTabsVault
 check("the vault window opened", vault ~= nil and vault.shown == true)
 check("it wears a portrait window", (ns.report["vault panel"] or "") ~= "", ns.report["vault panel"])
 check("the report calls it a replica", ns.report["vault window"] == "ok, replica", ns.report["vault window"])
 check("the window is titled like the bank", vault.csTitle and vault.csTitle.text == "Bank", vault.csTitle and vault.csTitle.text)
 check("it opened in bank mode", ns.VaultUI.Mode() == "bank", ns.VaultUI.Mode())
 check("looking at this character", ns.VaultUI.Selected() == me, ns.VaultUI.Selected())
-check("it closes on escape", UISpecialFrames[#UISpecialFrames] == "CasementVault")
+check("it closes on escape", UISpecialFrames[#UISpecialFrames] == "BankTabsVault")
 
 -- Without Enum the classic ids give three main containers, so the real tab has to be picked from
 -- the side column first. With Enum there is one main tab and no column.
@@ -1787,8 +1575,8 @@ else
 end
 
 -- Searching dims what does not match, exactly as the real bank does, rather than hiding it.
-CasementVaultSearch:SetText("wool")
-CasementVaultSearch.scripts.OnTextChanged(CasementVaultSearch)
+BankTabsVaultSearch:SetText("wool")
+BankTabsVaultSearch.scripts.OnTextChanged(BankTabsVaultSearch)
 grid = Cells(37)
 check("searching keeps every cell on screen", #grid == 48, #grid)
 local wool = CellWith(grid, 2592)
@@ -1798,15 +1586,15 @@ check("a non-match is dimmed to a quarter, not hidden", linen and linen.shown an
 local dimCount = 0
 for _, c in ipairs(grid) do if c.csItem and c:GetAlpha() == 0.25 then dimCount = dimCount + 1 end end
 check("every other item is dimmed", dimCount == 3, dimCount)
-CasementVaultSearch:SetText("WOOL")
-CasementVaultSearch.scripts.OnTextChanged(CasementVaultSearch)
+BankTabsVaultSearch:SetText("WOOL")
+BankTabsVaultSearch.scripts.OnTextChanged(BankTabsVaultSearch)
 check("the search ignores case", CellWith(Cells(37), 2592):GetAlpha() == 1 and CellWith(Cells(37), 2589):GetAlpha() == 0.25)
-CasementVaultSearch:SetText("")
-CasementVaultSearch.scripts.OnTextChanged(CasementVaultSearch)
+BankTabsVaultSearch:SetText("")
+BankTabsVaultSearch.scripts.OnTextChanged(BankTabsVaultSearch)
 local bright = true
 for _, c in ipairs(Cells(37)) do if c:GetAlpha() ~= 1 then bright = false end end
 check("clearing the search brightens everything", bright)
-CasementVaultSearch.scripts.OnEscapePressed(CasementVaultSearch)
+BankTabsVaultSearch.scripts.OnEscapePressed(BankTabsVaultSearch)
 
 -- Shift-clicking an item drops its link into chat.
 INSERTED = nil
@@ -2002,11 +1790,12 @@ check("and comes back when restored", #CharTabs() == 3)
 -- ------------------------------------------------------------------
 -- 11f. The minimap button
 -- ------------------------------------------------------------------
-local mm = CasementMinimapButton
+local mm = BankTabsMinimapButton
 check("the minimap button was built", mm ~= nil)
 check("it sits on the minimap", mm and mm.parent == Minimap)
 check("it is shown by default", mm and mm.shown == true)
 check("it found an icon", (ns.report["minimap icon"] or ""):find("Interface"), ns.report["minimap icon"])
+check("the icon is a bag, not the map", (ns.report["minimap icon"] or ""):find("Bag") ~= nil and (ns.report["minimap icon"] or ""):find("Map") == nil, ns.report["minimap icon"])
 
 -- Dragging it round the rim. The angle must stay in degrees: running math.deg over the game's own
 -- atan2, which already answers in degrees, multiplies it by about fifty seven.
@@ -2019,13 +1808,20 @@ CURSOR = { mx - 200, my }
 mm.scripts.OnUpdate(mm)
 check("dragging left puts it on the left of the rim", near(ns.db.minimap.angle, 180, 1), ns.db.minimap.angle)
 mm.scripts.OnDragStop(mm)
-check("the angle is saved", near(CasementAccountDB.profile.minimap.angle, 180, 1))
+check("the angle is saved", near(BankTabsAccountDB.profile.minimap.angle, 180, 1))
 
-CasementVault:Hide()
+BankTabsVault:Hide()
+mm.scripts.OnClick(mm, "LeftButton")
+check("left-click opens the saved bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bank", ns.VaultUI.Mode())
+mm.scripts.OnClick(mm, "LeftButton")
+check("and closes it again", BankTabsVault.shown == false)
 mm.scripts.OnClick(mm, "RightButton")
-check("right-click opens the saved banks", CasementVault.shown == true)
-mm.scripts.OnClick(mm, "RightButton")
-check("and closes them again", CasementVault.shown == false)
+local optionsPage = CATEGORIES[1] and CATEGORIES[1].frame
+check("right-click opens the options", (optionsPage and optionsPage.shown == true) or (BankTabsWindow and BankTabsWindow.shown == true))
+check("and not the saved bank", BankTabsVault.shown == false)
+if optionsPage then optionsPage:Hide() end
+SettingsPanel:Hide()
+if BankTabsWindow then BankTabsWindow:Hide() end
 
 SHIFT = true
 local wasEnabled = ns.db.enabled
@@ -2034,6 +1830,16 @@ check("shift and left-click locks everything", ns.db.enabled ~= wasEnabled)
 mm.scripts.OnClick(mm, "LeftButton")
 SHIFT = false
 check("and unlocks it again", ns.db.enabled == wasEnabled)
+check("without opening the saved bank", BankTabsVault.shown == false)
+
+GameTooltip:SetOwner(nil)
+check("the minimap tooltip runs", pcall(mm.scripts.OnEnter, mm))
+local saysLeft, saysRight = false, false
+for _, l in ipairs(GameTooltip.csLines) do
+  if l[1] == "Left-click: the saved bank" then saysLeft = true end
+  if l[1] == "Right-click: the options" then saysRight = true end
+end
+check("and says what each click does", saysLeft and saysRight)
 
 ns.db.minimap.shown = false
 ns.Refresh()
@@ -2044,7 +1850,7 @@ ns.Refresh()
 -- ------------------------------------------------------------------
 -- 11d. The three icons in the backpack's header
 -- ------------------------------------------------------------------
-CasementVault:Hide()
+BankTabsVault:Hide()
 backpack:Hide()
 backpack:Show()
 RunTimers(0.1)
@@ -2110,14 +1916,14 @@ check("the icon tooltips run", pcall(bankIcon.scripts.OnEnter, bankIcon) and pca
   and pcall(guildIcon.scripts.OnEnter, guildIcon))
 guildIcon.scripts.OnLeave(guildIcon)
 
-CasementVault:Hide()
+BankTabsVault:Hide()
 bankIcon.scripts.OnClick(bankIcon)
-check("clicking the bank icon opens the vault at the bank", CasementVault.shown == true and ns.VaultUI.Mode() == "bank", ns.VaultUI.Mode())
+check("clicking the bank icon opens the vault at the bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bank", ns.VaultUI.Mode())
 bagsIcon.scripts.OnClick(bagsIcon)
-check("the bags icon switches it to the bags", CasementVault.shown == true and ns.VaultUI.Mode() == "bags", ns.VaultUI.Mode())
+check("the bags icon switches it to the bags", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bags", ns.VaultUI.Mode())
 guildIcon.scripts.OnClick(guildIcon)
-check("the guild icon switches it to the guild bank", CasementVault.shown == true and ns.VaultUI.Mode() == "guild", ns.VaultUI.Mode())
-CasementVault:Hide()
+check("the guild icon switches it to the guild bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "guild", ns.VaultUI.Mode())
+BankTabsVault:Hide()
 
 ns.db.vault.bagButtons = false
 ns.Refresh()
@@ -2136,76 +1942,6 @@ ContainerFrame2:Show()
 RunTimers(0.1)
 check("an ordinary bag does not", HolderOn(ContainerFrame2) == nil)
 ContainerFrame2:Hide()
-
--- ------------------------------------------------------------------
--- 11e. The map tab's parts: the grip's art, the reset icon, double-click
--- ------------------------------------------------------------------
-local mapTab = CasementMapTab
-check("the resize grip is a button", mapGrip.kind == "Button")
-check("it wears the chat frame's size grabber", (mapGrip.normalArt or ""):find("SizeGrabber") ~= nil, mapGrip.normalArt)
-check("the report names that art", ns.report["map grip art"] == "chat frame grabber", ns.report["map grip art"])
-check("the reset button wears an icon, even on a bare client", (ns.report["map reset icon"] or ""):find("Interface") ~= nil,
-  ns.report["map reset icon"])
-local resetButton = mapTab.parts and mapTab.parts.reset
-check("the reset button is part of the tab", resetButton ~= nil and resetButton.parent == mapTab)
-local resetIcon
-for _, t in ipairs(TEXTURES) do if t.parent == resetButton and t.layer == "ARTWORK" then resetIcon = t end end
-check("its icon is the map scroll", resetIcon and (resetIcon.texture or ""):find("INV_Misc_Map") ~= nil and resetIcon.shown,
-  resetIcon and resetIcon.texture)
-check("the icon is trimmed of its border", resetIcon and resetIcon.texCoord and resetIcon.texCoord[1] == 0.07)
-ns.Map.SetScale(1.5)
-resetButton.scripts.OnClick(resetButton)
-check("clicking reset puts the map back to 100 percent", near(ns.db.map.scale, 1.0, 0.001), ns.db.map.scale)
-ns.Map.SetScale(1.5)
-mapGrip.scripts.OnDoubleClick(mapGrip)
-check("double-clicking the grip does the same", near(ns.db.map.scale, 1.0, 0.001), ns.db.map.scale)
-check("and leaves no resize running", mapGrip.scripts.OnUpdate == nil)
-check("the reset button's tooltip runs", pcall(resetButton.scripts.OnEnter, resetButton) and pcall(mapGrip.scripts.OnEnter, mapGrip))
-
--- The parts sit left to right in the order they are listed, and the tab is as wide as they need.
-local order = { "minus", "label", "plus", "reset", "divider", "grip" }
-local lastX, ordered, allShown = -1, true, true
-for _, key in ipairs(order) do
-  local part = mapTab.parts[key]
-  local p = part and part.points[1]
-  if not (part and part.shown and p and p[2] == mapTab and p[4] > lastX) then ordered = false end
-  if part and not part.shown then allShown = false end
-  if p then lastX = p[4] end
-end
-check("the tab's parts sit left to right in their listed order", ordered and allShown)
-check("the tab is wide enough for all of them", mapTab.w >= lastX + 18)
-ns.db.map.scaleButtons = false
-ns.Refresh()
-check("with the buttons off only the grip is left", mapTab.parts.minus.shown == false and mapTab.parts.grip.shown == true
-  and mapTab.parts.divider.shown == false)
--- The coordinates block, when shown, still sits to the left of it.
-local leftBlock = mapTab.parts.coords.shown and (mapTab.parts.coords.w + 4 + mapTab.parts.copy.w + 4 + mapTab.parts.divider2.w + 6) or 0
-check("and the grip slides to the left", mapTab.parts.grip.points[1][4] == 10 + leftBlock, mapTab.parts.grip.points[1][4] .. " vs " .. (10 + leftBlock))
-ns.db.map.scaleButtons = true
-ns.Refresh()
-check("switching the buttons back on brings them back", mapTab.parts.minus.shown == true and mapTab.parts.divider.shown == true)
-
--- ------------------------------------------------------------------
--- 11g. The corner handle comes back when the top bar has no room
--- ------------------------------------------------------------------
-local hog = CreateFrame("Frame", nil, map)
-hog:SetSize(700, 26)
-hog:SetPoint("TOPLEFT", map, "TOPLEFT", 0, 0)
-hog:EnableMouse(true)
-hog:SetFrameLevel(6)
-ns.Map.Apply()
-check("a full top bar leaves no draggable stretches", ns.Map.stripCount == 0, ns.Map.stripCount)
-check("so the corner handle shows itself instead", grip.shown == true)
-hog:Hide()
-ns.Map.Apply()
-check("and goes away again once there is room", grip.shown == false)
-check("the top bar is back", ns.Map.stripCount > 0)
-
-ns.db.map.cornerHandle = true
-ns.Refresh()
-check("the handle can also be asked for outright", grip.shown == true)
-ns.db.map.cornerHandle = false
-ns.Refresh()
 
 do -- scope: 11f. Item tooltips
 -- ------------------------------------------------------------------
@@ -2308,14 +2044,14 @@ local expectedTotal = 0
 for _, row in ipairs(goldRows) do expectedTotal = expectedTotal + row.money end
 check("the total is the sum", goldTotal == expectedTotal and goldTotal >= 1234567 + 5500, goldTotal)
 
-SlashCmdList["CASEMENT"]("gold")
+SlashCmdList["BANKTABS"]("gold")
 local sawChoham, sawTotal = false, false
 for i = #CHAT - 6, #CHAT do
   local line = CHAT[i] or ""
   if line:find("Choham") then sawChoham = true end
   if line:find("Total") then sawTotal = true end
 end
-check("/casement gold lists each character and the total", sawChoham and sawTotal)
+check("/banktabs gold lists each character and the total", sawChoham and sawTotal)
 
 ns.VaultUI.Show("bank")
 check("the saved bank shows the account gold in its corner", TextOn(vault, "Account ", true) ~= nil)
@@ -2337,7 +2073,7 @@ local ctabsGold = CharTabs()
 GameTooltip:SetOwner(nil)
 ctabsGold[2].scripts.OnEnter(ctabsGold[2])
 check("a character tab tooltip carries that character's gold", LineFor(GameTooltip.csLines, "Gold") ~= nil)
-CasementVault:Hide()
+BankTabsVault:Hide()
 
 -- ------------------------------------------------------------------
 -- 11h. Hovering the money on the game's own windows
@@ -2369,82 +2105,101 @@ check("the saved bank's money carries the same tooltip", moneyHit ~= nil)
 GameTooltip:SetOwner(nil)
 moneyHit.scripts.OnEnter(moneyHit)
 check("and it lists the account", LineFor(GameTooltip.csLines, "Total") ~= nil)
-CasementVault:Hide()
+BankTabsVault:Hide()
 
 -- ------------------------------------------------------------------
 -- 11i. The drag anywhere overlay stays unseen unless asked for
 -- ------------------------------------------------------------------
-map:Show()
+backpack:Show()
 RunTimers(0.1)
-local mapOverlay
+local bagOverlay
 for _, f in ipairs(FRAMES) do
-  if f.parent == map and f.allPoints == map and f.dragButtons and f.tint then mapOverlay = f end
+  if f.parent == backpack and f.allPoints == backpack and f.dragButtons and f.tint then bagOverlay = f end
 end
-check("the map's overlay carries a tint", mapOverlay ~= nil)
+check("the backpack's overlay carries a tint", bagOverlay ~= nil)
 ns.db.showGrips = false
 ALT = true
 fire("MODIFIER_STATE_CHANGED", "LALT", 1)
-check("holding alt brings the overlay up", mapOverlay.shown == true)
-check("but paints nothing by default", mapOverlay.tint.alpha == 0, mapOverlay.tint.alpha)
+check("holding alt brings the overlay up", bagOverlay.shown == true)
+check("but paints nothing by default", bagOverlay.tint.alpha == 0, bagOverlay.tint.alpha)
 ns.db.showGrips = true
 fire("MODIFIER_STATE_CHANGED", "LALT", 1)
-check("with the drag areas switched on the tint shows", mapOverlay.tint.alpha == 1)
+check("with the drag areas switched on the tint shows", bagOverlay.tint.alpha == 1)
 ns.db.showGrips = false
 ALT = false
 fire("MODIFIER_STATE_CHANGED", "LALT", 0)
-check("letting go puts it away", mapOverlay.shown == false)
+check("letting go puts it away", bagOverlay.shown == false)
 
 end -- scope
 
 -- ------------------------------------------------------------------
 -- 12. Slash commands
 -- ------------------------------------------------------------------
-local slash = SlashCmdList["CASEMENT"]
+local slash = SlashCmdList["BANKTABS"]
 check("slash command registered", type(slash) == "function")
-slash("scale 140")
-check("/casement scale sets the size", near(ns.db.map.scale, 1.4, 0.001), ns.db.map.scale)
-slash("scale 1.6")
-check("/casement scale also takes a fraction", near(ns.db.map.scale, 1.6, 0.001), ns.db.map.scale)
-slash("scale 500")
-check("/casement scale is capped", near(ns.db.map.scale, 2.0, 0.001), ns.db.map.scale)
-ns.Map.ResetSize()
 slash("lock")
 local anyOn = false
 for _, on in pairs(ns.db.windows) do if on then anyOn = true end end
-check("/casement lock turns every window off", anyOn == false)
+check("/banktabs lock turns every window off", anyOn == false)
 slash("unlock")
 local allOn = true
 for _, on in pairs(ns.db.windows) do if not on then allOn = false end end
-check("/casement unlock turns them all back on", allOn == true)
+check("/banktabs unlock turns them all back on", allOn == true)
 slash("reset")
-check("/casement reset forgets every position", next(ns.db.positions) == nil)
+check("/banktabs reset forgets every position", next(ns.db.positions) == nil)
 slash("snapshot")
-check("/casement snapshot saves the bags, which are always to hand", CHAT[#CHAT]:find("items in your bags") ~= nil, CHAT[#CHAT])
+check("/banktabs snapshot saves the bags, which are always to hand", CHAT[#CHAT]:find("items in your bags") ~= nil, CHAT[#CHAT])
 check("and says how many", CHAT[#CHAT]:find("saved 6 items") ~= nil, CHAT[#CHAT])
 slash("debug")
 slash("grips")
-check("/casement grips toggles the outlines", ns.db.showGrips == true)
+check("/banktabs grips toggles the outlines", ns.db.showGrips == true)
 slash("grips")
 slash("vault")
 slash("")
 slash("nonsense")
 check("nothing above threw", true)
 
+do -- scope: 12b. The names people type
+check("/banktabs and /btabs are the commands", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS2 == "/btabs")
+check("/casement and /cst still work for old macros", SLASH_BANKTABS3 == "/casement" and SLASH_BANKTABS4 == "/cst")
+check("under Bank Tabs' own key, never Casement's or Map Tab's", SlashCmdList["CASEMENT"] == nil and SlashCmdList["MAPTAB"] == nil)
+local helpStart = #CHAT
+slash("help")
+local mentionsOld, mentionsShort = false, false
+for i = helpStart + 1, #CHAT do
+  if CHAT[i]:find("/casement", 1, true) or CHAT[i]:find("/cst", 1, true) then mentionsOld = true end
+  if CHAT[i]:find("/btabs", 1, true) then mentionsShort = true end
+end
+check("the help names the short form", mentionsShort)
+check("and keeps the old names quiet", mentionsOld == false)
+BankTabsVault:Hide()
+slash("bank")
+check("/banktabs bank opens the saved bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bank")
+slash("bags")
+check("/banktabs bags switches it to the bags", BankTabsVault.shown == true and ns.VaultUI.Mode() == "bags")
+slash("guild")
+check("/banktabs guild switches it to the guild bank", BankTabsVault.shown == true and ns.VaultUI.Mode() == "guild")
+slash("guild")
+check("and the same command again closes it", BankTabsVault.shown == false)
+slash("scale 140")
+check("the old map commands say where the map went", CHAT[#CHAT]:find("Map Tab") ~= nil, CHAT[#CHAT])
+check("and change nothing here", ns.db.map == nil)
+slash("minimap off")
+check("/banktabs minimap off hides the button", ns.db.minimap.shown == false and BankTabsMinimapButton.shown == false)
+slash("minimap")
+check("and /banktabs minimap brings it back", ns.db.minimap.shown == true and BankTabsMinimapButton.shown == true)
+end -- scope
+
 -- ------------------------------------------------------------------
 -- 13. Options widgets
 -- ------------------------------------------------------------------
 ns.SyncOptions()
-local checks, buttons = 0, 0
-for _, f in ipairs(FRAMES) do
-  if f.kind == "CheckButton" then checks = checks + 1 end
-  if f.kind == "Button" then buttons = buttons + 1 end
-end
 -- The vault's character tabs are CheckButtons too, and every item cell is a Button, so only the
 -- widgets on the option pages are counted here.
 local optionChecks, optionButtons = 0, 0
 for _, f in ipairs(FRAMES) do
-  if f.parent ~= CasementVault and (not f.parent or f.parent.parent ~= CasementVault) then
-    if f.kind == "CheckButton" and (f.name or ""):find("^CasementCheck") then optionChecks = optionChecks + 1 end
+  if f.parent ~= BankTabsVault and (not f.parent or f.parent.parent ~= BankTabsVault) then
+    if f.kind == "CheckButton" and (f.name or ""):find("^BankTabsCheck") then optionChecks = optionChecks + 1 end
     if f.kind == "Button" and f.text ~= nil then optionButtons = optionButtons + 1 end
   end
 end
@@ -2467,11 +2222,11 @@ local master
 for _, f in ipairs(FRAMES) do
   if f.kind == "CheckButton" and not master then
     for _, fs in ipairs(FONTSTRINGS) do
-      if fs.parent == f and fs.text == "Casement is on" then master = f end
+      if fs.parent == f and fs.text == "Bank Tabs is on" then master = f end
     end
   end
 end
-check("the master switch is the one labelled so", master ~= nil and master.parent ~= CasementVault)
+check("the master switch is the one labelled so", master ~= nil and master.parent ~= BankTabsVault)
 master:SetChecked(false)
 master.scripts.OnClick(master)
 check("the master switch writes through", ns.db.enabled == false)
@@ -2479,25 +2234,44 @@ master:SetChecked(true)
 master.scripts.OnClick(master)
 check("and back on", ns.db.enabled == true)
 
+do -- scope: 13b. No map controls on the options
+local mapWords = 0
+for _, fs in ipairs(FONTSTRINGS) do
+  local text = type(fs.text) == "string" and fs.text or ""
+  if text == "Drag the map by its top bar" or text == "Map size" or text == "Coordinates in the tab"
+    or text:find("parts of the map you have not explored", 1, true) then mapWords = mapWords + 1 end
+end
+check("none of the world map's switches are on the pages", mapWords == 0, mapWords)
+local windowSwitches = 0
+for _, group in ipairs(ns.Windows.GROUPS) do
+  for _, fs in ipairs(FONTSTRINGS) do if fs.text == group.label then windowSwitches = windowSwitches + 1 end end
+end
+check("each bag, bank and guild bank window has its switch", windowSwitches == 5, windowSwitches)
+end -- scope
+
 -- ------------------------------------------------------------------
 -- 14. Saved variables
 -- ------------------------------------------------------------------
-ns.db.map.scale = 1.2
+ns.db.dragModifier = "ctrl"
 ns.MirrorToAccount()
-check("settings are mirrored account wide", CasementAccountDB.profile.map.scale == 1.2)
-check("the vault is stored account wide", CasementAccountDB.vault.chars[me] ~= nil)
+check("settings are mirrored account wide", BankTabsAccountDB.profile.dragModifier == "ctrl")
+check("the vault is stored account wide", BankTabsAccountDB.vault.chars[me] ~= nil)
 
-local savedVault = CasementAccountDB.vault
-CasementDB = {}
+local savedVault = BankTabsAccountDB.vault
+BankTabsDB = {}
 fire("PLAYER_LOGIN")
-check("a blank character table adopts the account copy", near(ns.db.map.scale, 1.2, 0.001), ns.db.map.scale)
+check("a blank character table adopts the account copy", ns.db.dragModifier == "ctrl", ns.db.dragModifier)
 check("and the report says so", ns.report["db player login"] == "adopted the account copy", ns.report["db player login"])
 check("positions are not inherited from another character", next(ns.db.positions) == nil)
 check("the vault survived", ns.vault.chars[me] ~= nil)
+-- The account copy carries this character's import flag, but a character adopting it has not
+-- had its own Casement settings looked at, so it must ask again.
+check("the adopted copy does not carry the import flag", ns.Import.lastRun == "nothing" and BankTabsDB.importedCasement == true, ns.Import.lastRun)
 
 ns.ResetToDefaults()
 check("a reset keeps the saved banks", ns.vault.chars[me] ~= nil)
-check("a reset puts the settings back", near(ns.db.map.scale, 1.0, 0.001))
+check("a reset puts the settings back", ns.db.dragModifier == "alt")
+check("a reset keeps the Casement import done", ns.db.importedCasement == true)
 
 -- ------------------------------------------------------------------
 -- 15. Nothing broke along the way
@@ -2511,24 +2285,431 @@ check("nothing in the report failed", #failures == 0, failures[1])
 local chatErrors = 0
 for _, line in ipairs(CHAT) do if line:find("failed") then chatErrors = chatErrors + 1 end end
 check("no failures printed to chat", chatErrors == 0, chatErrors)
+local blizzard = 0
+for _, name in ipairs(LOADED_BY_US) do if tostring(name):find("^Blizzard_") then blizzard = blizzard + 1 end end
+check("no Blizzard addon was loaded by us", blizzard == 0, blizzard)
 
-print(("RESULT pass=%d fail=%d"):format(PASS, FAIL))
+do -- scope: 15b. Every global Bank Tabs made carries its name
+-- Bank Tabs and Map Tab can be installed together, so nothing Bank Tabs puts in the global space
+-- may be named for Casement or Map Tab, or for nothing at all.
+local HARNESS = { GuildBankFrame = true, INSERTED = true, MOVING = true, NS = true }
+local stray = {}
+for k in pairs(_G) do
+  if not GLOBALS_BEFORE[k] and not HARNESS[k] and type(k) == "string"
+    and not k:find("^BankTabs") and not k:find("^SLASH_BANKTABS%d+$") then stray[#stray + 1] = k end
+end
+table.sort(stray)
+check("every global Bank Tabs made is named for it", #stray == 0, table.concat(stray, ", "))
+local named = 0
+for _, key in ipairs({ "BankTabsFrame", "BankTabsOptions", "BankTabsWindow", "BankTabsMinimapButton", "BankTabsVault", "BankTabsVaultSearch" }) do
+  if _G[key] ~= nil then named = named + 1 end
+end
+check("its frames are the BankTabs ones", named == 6, named)
+end -- scope
+
+MAIN_DONE = true
 `;
 
-function run(code, name) {
+// The Casement import. Each case is a fresh Lua state: the addon loads from nothing with the
+// saved variables and the addon list the case sets up, the way a real login would.
+const scenarios = [
+{ name: 'A: the data holder is present', code: String.raw`
+-- Casement was updated through the CurseForge app: its folder now holds only the data holder, a
+-- load on demand TOC that declares Casement's saved variables. Bank Tabs is new on this account.
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+check("nothing is read before every addon has loaded", CasementAccountDB == nil and not Called("LoadAddOn Casement"))
+fire("PLAYER_LOGIN")
+check("the data holder was loaded on demand", Called("LoadAddOn Casement") and ADDONS.Casement.loaded == true)
+check("the report names what Casement is", ns.report["casement addon"] == "the data holder, switched on", ns.report["casement addon"])
+local vatik = ns.vault.chars[VATIK]
+check("this character's saved bank came over", vatik and vatik.bank and vatik.bank.containers[1].items[1].id == 2589)
+check("and its bags", vatik and vatik.bags and vatik.bags.containers[1].label == "Backpack")
+check("and the other character's", ns.vault.chars[CHOHAM_GUID] and ns.vault.chars[CHOHAM_GUID].bank.money == 5500)
+check("the 1.0.x shaped record came over and is lifted on first look", ns.Vault.CharRecord("Oldtoon - Voidpact") ~= nil
+  and ns.Vault.CharRecord("Oldtoon - Voidpact").bank ~= nil)
+check("the guild bank came over", ns.vault.guilds["Night Owls - Voidpact"] ~= nil and ns.vault.guilds["Night Owls - Voidpact"].tabs[1].items[1].count == 40)
+check("so did the measured bank layout", ns.vault.bankLayout and ns.vault.bankLayout.pitchX == 50)
+check("the copies are Bank Tabs' own tables, not Casement's", ns.vault.chars[CHOHAM_GUID] ~= CasementAccountDB.vault.chars[CHOHAM_GUID]
+  and ns.vault ~= CasementAccountDB.vault)
+check("the report's count of saved characters includes them", ns.report["vault holds"] == "3 characters, 1 guild banks", ns.report["vault holds"])
+check("the reveal's harvest stays behind for Map Tab", BankTabsAccountDB.overlays == nil and ns.vault.overlays == nil)
+check("this character's window switches came over", ns.db.windows.reagent == false and ns.db.windows.guildbank == false
+  and ns.db.windows.combined == true and ns.db.windows.bags == true)
+check("and the drag key, the outlines and the minimap button", ns.db.dragModifier == "shift" and ns.db.showGrips == true
+  and ns.db.minimap.shown == false and ns.db.minimap.angle == 33)
+check("and the snapshot and tooltip switches", ns.db.vault.autoGuild == false and ns.db.vault.bagButtons == false
+  and ns.db.vault.showAccountGold == false and ns.db.tooltips.guild == false and ns.db.tooltips.modifier == "shift")
+check("the bag and bank window positions came over", ns.db.positions.bag0 and near(ns.db.positions.bag0.x, 500)
+  and near(ns.db.positions.bank.x, 420) and near(ns.db.positions.combined.x, 900))
+check("the world map's place, size and switch stay behind for Map Tab", ns.db.positions.worldmap == nil and ns.db.map == nil
+  and ns.db.windows.worldmap == nil)
+check("one chat line says so", ChatWith("brought over what Casement saved") == 1, ChatLine("Casement"))
+local line = ChatLine("brought over what Casement saved") or ""
+check("it counts what came over", line:find("3 characters' saved banks and bags", 1, true) and line:find("1 guild bank", 1, true)
+  and line:find("your window settings", 1, true), line)
+check("and names Map Tab as the new home of the world map tab", ChatWith("Map Tab") == 1 and line:find("Map Tab", 1, true))
+check("the report records it", (ns.report["casement import"] or ""):find("^loaded on demand: 3 characters, 1 guild bank, %d+ settings$") ~= nil,
+  ns.report["casement import"])
+check("the account and this character are flagged", BankTabsAccountDB.importedCasement == true and BankTabsDB.importedCasement == true)
+check("the data holder is left switched on", not Called("DisableAddOn Casement") and ADDONS.Casement.enabled == true)
+check("nobody is told Casement is still running", ChatWith("replace Casement") == 0)
+check("the run says how it ended", ns.Import.lastRun == "imported", ns.Import.lastRun)
+
+-- What came over is used this session.
+ContainerFrame1:Show()
+RunTimers(0.1)
+check("the imported bag position is used straight away", near(ContainerFrame1:GetLeft(), 500), ContainerFrame1:GetLeft())
+local outlines
+for _, f in ipairs(FRAMES) do
+  if f.kind == "CheckButton" then
+    for _, fs in ipairs(FONTSTRINGS) do if fs.parent == f and fs.text == "Show me where the drag strips are" then outlines = f end end
+  end
+end
+check("the options show the imported settings", outlines and outlines.checked == true)
+
+-- The same session logs in again (a /reload): nothing is done twice.
+local chatBefore = #CHAT
+CasementAccountDB.vault.chars[CHOHAM_GUID].bank.money = 1
+check("a second login finishes at once", ns.Import.Run() == "done before")
+fire("PLAYER_LOGIN")
+check("and says nothing", #CHAT == chatBefore, #CHAT - chatBefore)
+check("the data holder is not loaded twice", CountCalls("LoadAddOn Casement") == 1, CountCalls("LoadAddOn Casement"))
+check("what was brought over is not replaced", ns.vault.chars[CHOHAM_GUID].bank.money == 5500)
+check("no timer raised an error", #TIMER_ERRORS == 0, TIMER_ERRORS[1])
+`},
+{ name: 'A2: another character logs in later', code: String.raw`
+-- The account was imported on Vatik. Choham logs in for the first time since: Bank Tabs has never
+-- run on this character, so its table starts empty and adopts the account copy, and the data
+-- holder is loaded once more for Choham's own Casement settings.
+function UnitGUID() return CHOHAM_GUID end
+function UnitName() return "Choham" end
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsAccountDB = { importedCasement = true, version = "2.0.0",
+  profile = { enabled = true, dragModifier = "ctrl", showGrips = false, importedCasement = true,
+    windows = { combined = true, bags = true, reagent = true, bank = true, guildbank = true },
+    minimap = { shown = true, angle = 205 }, positions = { bag0 = { x = 1, y = 1 } } },
+  vault = { chars = { [CHOHAM_GUID] = { class = "WARRIOR", level = 43, name = "Choham", realm = "Voidpact",
+    bank = { time = 5000, money = 7777, items = 0, slots = 48, free = 48, containers = { { id = 6, label = "Bank tab 1", slots = 48, items = {} } } } } },
+    guilds = {} } }
+BankTabsDB = nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+check("the new character adopts the account copy", ns.report["db addon loaded"] == "adopted the account copy", ns.report["db addon loaded"])
+check("without the other character's positions or import flag", next(BankTabsDB.positions) == nil and BankTabsDB.importedCasement == nil)
+fire("PLAYER_LOGIN")
+check("the data holder is loaded for this character's settings", Called("LoadAddOn Casement"))
+check("this character's Casement settings win over the adopted copy", ns.db.dragModifier == "shift" and ns.db.minimap.angle == 33
+  and ns.db.windows.guildbank == false, ns.db.dragModifier)
+check("and its window positions come over", ns.db.positions.bank and near(ns.db.positions.bank.x, 420))
+check("the account part is not run twice", ns.vault.chars["Oldtoon - Voidpact"] == nil and ns.vault.chars[VATIK] == nil)
+check("a snapshot Bank Tabs already holds is kept", ns.vault.chars[CHOHAM_GUID].bank.money == 7777)
+check("this character is flagged", BankTabsDB.importedCasement == true)
+check("nothing is said: the account's line was the first time", ChatWith("Casement") == 0, ChatLine("Casement"))
+check("the report says it was this character only", (ns.report["casement import"] or ""):find("this character only", 1, true) ~= nil,
+  ns.report["casement import"])
+`},
+{ name: 'B: the old Casement is still running', code: String.raw`
+-- Bank Tabs was installed by hand next to Casement 1.2.3, which still loads. The game loads addons
+-- in name order, so Casement's saved variables and event frame arrive after Bank Tabs has loaded.
+ADDONS.Casement = { lod = false, enabled = true, loaded = true, title = "Casement" }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+CasementAccountDB = OldCasementAccount()
+CasementDB = OldCasementChar()
+CreateFrame("Frame", "CasementFrame", UIParent)
+fire("ADDON_LOADED", "Casement")
+fire("PLAYER_LOGIN")
+check("what the running Casement holds is read straight from memory", not Called("LoadAddOn Casement")
+  and (ns.report["casement import"] or ""):find("^read from memory") ~= nil, ns.report["casement import"])
+check("every character's saved bank came over", ns.vault.chars[VATIK] ~= nil and ns.vault.chars[CHOHAM_GUID] ~= nil)
+check("and this character's settings", ns.db.dragModifier == "shift" and ns.db.positions.bag0 ~= nil)
+check("the report names what Casement is", ns.report["casement addon"] == "the old addon, running", ns.report["casement addon"])
+check("the old Casement is switched off for the next session", Called("DisableAddOn Casement") and ADDONS.Casement.enabled == false)
+check("and the addon list is saved", Called("SaveAddOns nil") and CallIndex("SaveAddOns nil") > CallIndex("DisableAddOn Casement"))
+check("the user is told once", ChatWith("the two addons that replace Casement") == 1)
+local line = ChatLine("replace Casement") or ""
+check("naming both new addons and what each does", line:find("Bank Tabs", 1, true) and line:find("Map Tab", 1, true)
+  and line:find("world map", 1, true), line)
+check("and that it is off from the next login", line:find("switched off from your next login", 1, true), line)
+check("the import line leaves Map Tab to that notice", ChatWith("brought over what Casement saved") == 1 and ChatWith("Map Tab") == 1)
+check("Map Tab can see it has been said", CASEMENT_REPLACED_NOTICE == "BankTabs")
+check("the report records it", ns.report["old casement"] == "was running, switched off from the next session", ns.report["old casement"])
+fire("PLAYER_LOGIN")
+check("it is not said twice", ChatWith("replace Casement") == 1 and CountCalls("DisableAddOn Casement") == 1)
+check("Casement's own tables are left as they were", CasementAccountDB.vault.chars[VATIK] ~= nil and CasementDB.dragModifier == "shift")
+`},
+{ name: 'B2: Map Tab told the user first', code: String.raw`
+-- Both new addons are installed next to the old Casement. Map Tab reached PLAYER_LOGIN first: it
+-- set the shared flag, switched Casement off and told the user.
+ADDONS.Casement = { lod = false, enabled = true, loaded = true, title = "Casement" }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+CasementAccountDB = OldCasementAccount()
+CasementDB = OldCasementChar()
+CreateFrame("Frame", "CasementFrame", UIParent)
+CASEMENT_REPLACED_NOTICE = "MapTab"
+ADDONS.Casement.enabled = false
+fire("PLAYER_LOGIN")
+check("Bank Tabs does not say it again", ChatWith("replace Casement") == 0)
+check("or switch it off a second time", not Called("DisableAddOn Casement"))
+check("the report says it was already done", ns.report["old casement"] == "running this session, already switched off for the next", ns.report["old casement"])
+check("its own half is still brought over", ns.vault.chars[CHOHAM_GUID] ~= nil and BankTabsAccountDB.importedCasement == true)
+check("and the import line names Map Tab, since Bank Tabs did not", ChatWith("brought over what Casement saved") == 1 and ChatWith("Map Tab") == 1)
+`},
+{ name: 'B3: Map Tab switched it off without the shared flag', code: String.raw`
+-- Map Tab got there first but the flag it set is not one Bank Tabs knows. The old addon being
+-- switched off already, while its code still runs, is enough to know the user has been told.
+ADDONS.Casement = { lod = false, enabled = false, loaded = true, title = "Casement" }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+CasementAccountDB = OldCasementAccount()
+CasementDB = OldCasementChar()
+CreateFrame("Frame", "CasementFrame", UIParent)
+fire("PLAYER_LOGIN")
+check("Bank Tabs stays quiet", ChatWith("replace Casement") == 0)
+check("and switches nothing", not Called("DisableAddOn Casement") and not Called("EnableAddOn Casement"))
+check("but still brings its half over", ns.vault.chars[VATIK] ~= nil and BankTabsDB.importedCasement == true)
+`},
+{ name: 'C: no addon API at all', code: String.raw`
+-- A client without C_AddOns or the older globals: there is no way to ask about Casement, so the
+-- import is a clean install's, and nothing errors.
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the addon API is really missing here", C_AddOns == nil and LoadAddOn == nil and GetAddOnInfo == nil)
+check("Bank Tabs loads and logs in without it", ns.report["windows"] == "ok" and ns.report["options"] == "ok")
+check("it finds no Casement", ns.report["casement addon"] == "not installed", ns.report["casement addon"])
+check("and closes the question", ns.report["casement import"] == "nothing to import: no Casement installed" and BankTabsAccountDB.importedCasement == true)
+check("nothing is said", ChatWith("Casement") == 0)
+`, pre: 'NO_ADDON_API=true\n' },
+{ name: 'D: already imported', code: String.raw`
+-- Both flags are set from an earlier login. The data holder is still there, but it is never
+-- loaded again and nothing in it is read.
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsAccountDB = { importedCasement = true, vault = { chars = {}, guilds = {} } }
+BankTabsDB = { importedCasement = true, dragModifier = "alt" }
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the data holder is not loaded", not Called("LoadAddOn Casement") and ADDONS.Casement.loaded == false)
+check("nothing is brought over", next(ns.vault.chars) == nil and ns.db.dragModifier == "alt")
+check("nothing is said", ChatWith("Casement") == 0)
+check("the report says it was done before", ns.report["casement import"] == "already done" and ns.Import.lastRun == "done before", ns.report["casement import"])
+`},
+{ name: 'E: the data holder was switched off', code: String.raw`
+-- The old Casement was switched off by Map Tab's notice in an earlier session, then updated to the
+-- data holder, which kept that switched off state. It runs no code, so Bank Tabs switches it on
+-- to read it rather than lose every saved bank.
+ADDONS.Casement = { lod = true, enabled = false, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the data holder is switched on before it is loaded", Called("EnableAddOn Casement")
+  and CallIndex("EnableAddOn Casement") < (CallIndex("LoadAddOn Casement") or 0))
+check("and then read", ADDONS.Casement.loaded == true and ns.vault.chars[CHOHAM_GUID] ~= nil)
+check("the report says why it was switched on", ns.report["casement data holder"] == "switched back on to be read", ns.report["casement data holder"])
+check("everything is flagged", BankTabsAccountDB.importedCasement == true and BankTabsDB.importedCasement == true)
+`},
+{ name: 'F: the old Casement is installed but switched off', code: String.raw`
+-- The old addon itself (not the data holder) is there but switched off. Its files could only be
+-- opened by running its code, so Bank Tabs asks the user rather than loading it, and tries again
+-- at the next login.
+ADDONS.Casement = { lod = false, enabled = false, loaded = false, title = "Casement" }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the old code is never loaded or switched on", not Called("LoadAddOn Casement") and not Called("EnableAddOn Casement"))
+check("the user is asked to switch it on for one login", ChatWith("switched off") == 1 and ChatWith("for one login") == 1, ChatLine("Casement"))
+check("nothing is flagged, so the next login tries again", BankTabsAccountDB.importedCasement == nil and BankTabsDB.importedCasement == nil)
+check("the report says why", ns.report["casement import"] == "not done: the old Casement is switched off", ns.report["casement import"])
+check("the run says how it ended", ns.Import.lastRun == "not open", ns.Import.lastRun)
+`},
+{ name: 'G: settings already chosen in Bank Tabs are kept', code: String.raw`
+-- An earlier login could not import (the data holder would not load), and the user has changed a
+-- few things in Bank Tabs since. Now the import runs: nothing they chose may be overwritten.
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsAccountDB = { vault = { chars = { [VATIK] = { class = "WARLOCK", level = 60, name = "Vatik", realm = "Voidpact",
+  bank = { time = 5000, money = 60, items = 1, slots = 48, free = 47,
+    containers = { { id = 6, label = "Bank tab 1", slots = 48, items = { { slot = 1, id = 999, name = "Newer", count = 1 } } } } } } },
+  guilds = {} } }
+BankTabsDB = { dragModifier = "ctrl", positions = { bag0 = { x = 10, y = 10 } } }
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("a setting changed in Bank Tabs is kept", ns.db.dragModifier == "ctrl", ns.db.dragModifier)
+check("a setting still at its default takes Casement's", ns.db.minimap.angle == 33 and ns.db.showGrips == true)
+check("a position already set in Bank Tabs is kept", near(ns.db.positions.bag0.x, 10), ns.db.positions.bag0.x)
+check("a position Bank Tabs lacks is filled in", ns.db.positions.bank and near(ns.db.positions.bank.x, 420))
+check("a newer snapshot is not replaced by Casement's older one", ns.vault.chars[VATIK].bank.containers[1].items[1].id == 999)
+check("a record Bank Tabs lacks is filled in", ns.vault.chars[VATIK].bags ~= nil)
+check("a character Bank Tabs lacks is added", ns.vault.chars[CHOHAM_GUID] ~= nil)
+`},
+{ name: 'H: the data holder has nothing saved', code: String.raw`
+-- The data holder is there but Casement never wrote a file (or the files were deleted): it loads,
+-- nothing arrives, and there is nothing to say.
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, title = "Casement (old data)", saved = {} }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("it is loaded", Called("LoadAddOn Casement"))
+check("the report says there was nothing", (ns.report["casement import"] or ""):find("had nothing saved", 1, true) ~= nil, ns.report["casement import"])
+check("the question is closed", BankTabsAccountDB.importedCasement == true and BankTabsDB.importedCasement == true)
+check("and nothing is said", ChatWith("Casement") == 0)
+`},
+{ name: 'I: the data holder will not load', code: String.raw`
+-- The game refuses to load the data holder (out of date, say). Nothing is flagged, the user hears
+-- once why, and the next login tries again.
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, refuse = "INTERFACE_VERSION", title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("it was tried", Called("LoadAddOn Casement"))
+check("nothing is flagged", BankTabsAccountDB.importedCasement == nil and BankTabsDB.importedCasement == nil)
+check("the user hears why", ChatWith("could not open what Casement saved") == 1 and ChatWith("INTERFACE_VERSION") == 1, ChatLine("Casement"))
+check("the report records the game's reason", (ns.report["casement import"] or ""):find("INTERFACE_VERSION", 1, true) ~= nil, ns.report["casement import"])
+`},
+];
+
+// ------------------------------------------------------------------
+// Running it
+// ------------------------------------------------------------------
+
+const sources = {};
+for (const f of files) sources[f] = fs.readFileSync(DIR + f, 'utf8');
+
+function run(L, code, name) {
   if (lauxlib.luaL_loadbuffer(L, to_luastring(code), null, to_luastring(name)) !== 0 || lua.lua_pcall(L, 0, 0, 0) !== 0) {
     console.log('LUA ERROR in ' + name + ': ' + lua.lua_tojsstring(L, -1)); process.exit(1);
   }
 }
-lua.lua_newtable(L);
-for (const f of files) { lua.lua_pushstring(L, to_luastring(fs.readFileSync(DIR + f, 'utf8'))); lua.lua_setfield(L, -2, to_luastring(f)); }
-lua.lua_setglobal(L, to_luastring('SOURCES'));
-lua.lua_newtable(L); files.forEach((f, i) => { lua.lua_pushstring(L, to_luastring(f)); lua.lua_rawseti(L, -2, i + 1); });
-lua.lua_setglobal(L, to_luastring('FILES'));
+function number(L, name) {
+  lua.lua_getglobal(L, to_luastring(name));
+  const n = lua.lua_tonumber(L, -1);
+  lua.lua_pop(L, 1);
+  return n || 0;
+}
 
 const pre = (process.argv.includes('--bare')
   ? 'BARE=true\nBAD_ATLAS=true\nBAD_TEMPLATES={TooltipBackdropTemplate=true,UICheckButtonTemplate=true,ChatConfigCheckButtonTemplate=true,MinimalSliderTemplate=true,UISliderTemplate=true,OptionsSliderTemplate=true,UIPanelButtonTemplate=true,UIPanelCloseButton=true,DefaultPanelFlatTemplate=true,DefaultPanelTemplate=true,ButtonFrameTemplate=true,BasicFrameTemplate=true,BackdropTemplate=true,SearchBoxTemplate=true,InputBoxTemplate=true}\n'
   : '') + (process.argv.includes('--verbose') ? 'VERBOSE=true\n' : '')
   + (process.argv.includes('--noenum') ? 'NO_ENUM=true\n' : '');
-run(pre + stub, 'stub');
-run(driver, 'driver');
+
+function newState(extra, label) {
+  const L = lauxlib.luaL_newstate(); lualib.luaL_openlibs(L);
+  lua.lua_newtable(L);
+  for (const f of files) { lua.lua_pushstring(L, to_luastring(sources[f])); lua.lua_setfield(L, -2, to_luastring(f)); }
+  lua.lua_setglobal(L, to_luastring('SOURCES'));
+  lua.lua_newtable(L); files.forEach((f, i) => { lua.lua_pushstring(L, to_luastring(f)); lua.lua_rawseti(L, -2, i + 1); });
+  lua.lua_setglobal(L, to_luastring('FILES'));
+  if (label) { lua.lua_pushstring(L, to_luastring(label)); lua.lua_setglobal(L, to_luastring('SCENARIO')); }
+  run(L, pre + (extra || '') + stub, 'stub');
+  run(L, common, 'common');
+  return L;
+}
+
+let pass = 0, fail = 0;
+const parts = [];
+
+// The main suite.
+{
+  const L = newState('', null);
+  run(L, driver, 'driver');
+  const p = number(L, 'PASS'), f = number(L, 'FAIL');
+  pass += p; fail += f; parts.push('main ' + p);
+}
+
+// The Casement import cases.
+{
+  let p = 0, f = 0;
+  for (const s of scenarios) {
+    const L = newState(s.pre || '', s.name);
+    run(L, s.code, s.name);
+    p += number(L, 'PASS'); f += number(L, 'FAIL');
+  }
+  pass += p; fail += f; parts.push('import ' + p + ' in ' + scenarios.length + ' cases');
+}
+
+// The package files. Only where the repo is (an installed copy has no .pkgmeta or docs).
+{
+  let p = 0, f = 0;
+  const check = (label, cond, extra) => {
+    if (cond) p++; else { f++; console.log('FAIL: files: ' + label + (extra !== undefined ? '  [' + extra + ']' : '')); }
+  };
+  const read = (rel) => { try { return fs.readFileSync(DIR + rel, 'utf8'); } catch (e) { return null; } };
+  const lines = (text) => (text || '').split(/\r?\n/);
+  const field = (text, key) => { const m = (text || '').match(new RegExp('^## ' + key + ': *(.*?)\\s*$', 'm')); return m ? m[1] : null; };
+  const codeLines = (text) => lines(text).map(l => l.trim()).filter(l => l !== '' && !l.startsWith('#'));
+
+  const toc = read('BankTabs.toc');
+  check('the TOC is BankTabs.toc', toc !== null);
+  check('titled Bank Tabs', field(toc, 'Title') === 'Bank Tabs', field(toc, 'Title'));
+  const version = (sources['Core.lua'].match(/ns\.version = "([^"]+)"/) || [])[1];
+  check('its version is the addon\'s own, 2.0.0', field(toc, 'Version') === '2.0.0' && version === '2.0.0', field(toc, 'Version') + ' / ' + version);
+  check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
+    && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
+  check('its icon is a bag from the game\'s icons, the path intact', /^Interface\\Icons\\INV_Misc_Bag_\d+$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
+  check('the interface number is this client\'s', field(toc, 'Interface') === '16001');
+  check('it lists exactly the files this harness loads, in order', codeLines(toc).join(',') === files.join(','), codeLines(toc).join(','));
+  check('none of the map half ships', ['Map.lua', 'Reveal.lua', 'Data/MapOverlays.lua', 'tools/overlays-from-csv.js'].every(rel => read(rel) === null));
+
+  if (read('.pkgmeta') !== null) {
+    const holder = read('Legacy/Casement/Casement.toc');
+    check('the data holder is in the repo', holder !== null);
+    check('it is the Casement folder\'s TOC for this client', field(holder, 'Interface') === '16001' && field(holder, 'Title') === 'Casement (old data)', field(holder, 'Title'));
+    check('it loads only on demand', field(holder, 'LoadOnDemand') === '1');
+    check('it declares Casement\'s saved variables', field(holder, 'SavedVariables') === 'CasementAccountDB'
+      && field(holder, 'SavedVariablesPerCharacter') === 'CasementDB');
+    check('it runs no code', codeLines(holder).length === 0, codeLines(holder).join(','));
+    check('its notes say what it is and that it can go', /old/i.test(field(holder, 'Notes') || '') && /delete/i.test(field(holder, 'Notes') || ''), field(holder, 'Notes'));
+
+    const pkg = read('.pkgmeta');
+    check('the package is BankTabs', /^package-as: BankTabs\s*$/m.test(pkg));
+    check('the data holder is moved to a top level Casement folder', /^move-folders:\s*\r?\n\s+BankTabs\/Legacy\/Casement: Casement\s*$/m.test(pkg));
+    check('the tests stay out of the package', /^ignore:\s*\r?\n(\s+- .*\r?\n)*\s+- tests\s*$/m.test(pkg));
+    check('the changelog is the release notes, as markdown', /manual-changelog:\s*\r?\n\s+filename: RELEASE-NOTES\.md\s*\r?\n\s+markup-type: markdown/m.test(pkg));
+
+    // Compared with Windows line endings taken out, since a checkout may add them to either file.
+    const changelog = (read('CHANGELOG.md') || '').replace(/\r\n/g, '\n');
+    const notes = (read('RELEASE-NOTES.md') || '').replace(/\r\n/g, '\n');
+    const top = changelog.split(/\r?\n(?=## )/).find(s => s.startsWith('## ')) || '';
+    check('the changelog opens on 2.0.0', /^## 2\.0\.0 - /.test(top), top.slice(0, 30));
+    check('the release notes are that section and nothing else', notes.replace(/\s+$/, '') === top.replace(/\s+$/, ''));
+
+    // Every text file, docs and code: no em or en dashes, as the author asked.
+    const texts = [];
+    const walk = (rel) => {
+      for (const name of fs.readdirSync(DIR + (rel || '.'))) {
+        if (name === '.git' || name === 'node_modules') continue;
+        const sub = rel ? rel + '/' + name : name;
+        if (fs.statSync(DIR + sub).isDirectory()) walk(sub);
+        else if (/\.(lua|md|toc|js|txt)$|^\.pkgmeta$|^\.gitignore$/.test(name)) texts.push(sub);
+      }
+    };
+    walk('');
+    // Figure dash to horizontal bar, built from char codes so this file holds none itself.
+    const dashes = new RegExp('[' + String.fromCharCode(0x2012) + '-' + String.fromCharCode(0x2015) + ']');
+    const dashed = texts.filter(rel => dashes.test(read(rel) || ''));
+    check('no em or en dashes in any file', dashed.length === 0, dashed.join(', '));
+  }
+  pass += p; fail += f; parts.push('files ' + p);
+}
+
+console.log('(' + parts.join(', ') + ')');
+console.log(`RESULT pass=${pass} fail=${fail}`);

@@ -1,6 +1,6 @@
--- Casement
+-- Bank Tabs
 -- Options: one set of controls, shown either in the game's own options list
--- (Esc > Options > AddOns > Casement) or in a standalone window opened with "/casement window".
+-- (Esc > Options > AddOns > Bank Tabs) or in a standalone window opened with "/banktabs window".
 --
 -- The page is registered as a CANVAS category and holds only this addon's own widgets. It
 -- deliberately does not create Settings proxy settings: on this client those taint Blizzard code
@@ -23,7 +23,7 @@ local uniqueID = 0
 
 local function NextName(prefix)
 	uniqueID = uniqueID + 1
-	return "Casement" .. prefix .. uniqueID
+	return "BankTabs" .. prefix .. uniqueID
 end
 
 -- ------------------------------------------------------------------
@@ -115,7 +115,6 @@ local function CheckWithReset(layout, label, tooltip, optionKey)
 
 	local reset = ns.Button(layout.parent, "Reset", 60, 20, function()
 		ns.Windows.ResetGroup(optionKey)
-		if optionKey == "worldmap" and ns.Map.ResetSize then ns.Map.ResetSize() end
 		ns.Print("put " .. label:lower() .. " back where the game had it.")
 		ns.SyncOptions()
 	end)
@@ -130,69 +129,6 @@ local function CheckWithReset(layout, label, tooltip, optionKey)
 		reset:SetEnabled(moved > 0)
 	end }
 	return cb
-end
-
-local SLIDER_TEMPLATES = { "MinimalSliderTemplate", "UISliderTemplate", "OptionsSliderTemplate" }
-
-local function Slider(layout, label, minV, maxV, step, get, set, format, tooltip, indent)
-	local name = NextName("Slider")
-	local holder = CreateFrame("Frame", nil, layout.parent)
-	holder:SetSize(PANE_W - (indent or 0), 40)
-
-	local caption = holder:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
-	caption:SetPoint("TOPLEFT", 0, 0)
-	caption:SetText(label)
-
-	local value = holder:CreateFontString(nil, "ARTWORK", "GameFontNormalSmall")
-	value:SetPoint("TOPRIGHT", 0, -1)
-
-	local slider, used
-	for _, template in ipairs(SLIDER_TEMPLATES) do
-		local ok, made = pcall(CreateFrame, "Slider", name, holder, template)
-		if ok and made then slider, used = made, template break end
-	end
-	if not slider then
-		slider = CreateFrame("Slider", name, holder)
-		slider:SetOrientation("HORIZONTAL")
-		slider:SetThumbTexture("Interface\\Buttons\\WHITE8X8")
-		local thumb = slider:GetThumbTexture()
-		if thumb then thumb:SetSize(10, 18) thumb:SetColorTexture(0.62, 0.62, 0.66, 0.9) end
-		used = "bare"
-	end
-	report["slider template"] = used
-
-	-- OptionsSliderTemplate brings its own captions, we draw our own.
-	for _, suffix in ipairs({ "Low", "High", "Text" }) do
-		local extra = _G[name .. suffix]
-		if extra then extra:SetText("") extra:Hide() end
-	end
-
-	slider:SetPoint("TOPLEFT", 2, -18)
-	slider:SetSize(PANE_W - (indent or 0) - 6, 18)
-	slider:SetMinMaxValues(minV, maxV)
-	if slider.SetValueStep then slider:SetValueStep(step) end
-	if slider.SetObeyStepOnDrag then pcall(slider.SetObeyStepOnDrag, slider, true) end
-
-	local function Label(v) value:SetText(format and format(v) or tostring(v)) end
-
-	slider:SetScript("OnValueChanged", function(self, v)
-		v = math.floor(v / step + 0.5) * step
-		Label(v)
-		if self.csSyncing then return end
-		set(v)
-		ns.Refresh()
-	end)
-	ns.Tooltip(slider, label, tooltip)
-
-	Place(layout, holder, 44, indent)
-	widgets[#widgets + 1] = { refresh = function()
-		local v = get()
-		slider.csSyncing = true
-		slider:SetValue(v)
-		slider.csSyncing = false
-		Label(v)
-	end }
-	return slider
 end
 
 local function Choice(layout, label, options, get, set, tooltip, indent)
@@ -260,11 +196,11 @@ local function BuildWindowsPage(parent)
 	local layout = NewLayout(parent)
 	Header(layout, "Windows you can move")
 
-	Check(layout, "Casement is on", "The master switch. With this off nothing is moved, resized or added to any window.",
+	Check(layout, "Bank Tabs is on", "The master switch. With this off no bag, bank or guild bank window is moved and nothing is added to them.",
 		function() return ns.db.enabled end,
 		function(value) ns.db.enabled = value end)
 
-	Note(layout, "Each window below can be dragged by the strip along its top edge. The world map is dragged by the clear parts of its own top bar, and shows a small gold handle in its top left corner only if that bar has no room. No window can be dragged off screen.", 0, 4)
+	Note(layout, "Each window below can be dragged by the strip along its top edge, the close button left clear. No window can be dragged off screen, and each is remembered for this character. The world map is not moved by Bank Tabs: that is the separate addon Map Tab.", 0, 4)
 
 	for _, group in ipairs(ns.Windows.GROUPS) do
 		CheckWithReset(layout, group.label, nil, group.key)
@@ -284,82 +220,15 @@ local function BuildWindowsPage(parent)
 		function() return ns.db.showGrips end,
 		function(value) ns.db.showGrips = value end)
 
-	Check(layout, "Minimap button", "Left-click for these options, right-click for the saved bank contents, drag it round the rim.",
+	Check(layout, "Minimap button", "Left-click for the saved bank, right-click for these options, drag it round the rim.",
 		function() return ns.db.minimap.shown end,
 		function(value) ns.db.minimap.shown = value end)
 
 	ButtonRow(layout, {
 		{ label = "Reset every window", width = 150, onClick = function()
 			ns.Windows.ResetAll()
-			ns.Map.ResetSize()
-			ns.Print("every window is back where the game had it.")
-		end, tooltip = "Forgets every saved position and the map's size." },
-	})
-end
-
-local function BuildMapPage(parent)
-	local layout = NewLayout(parent)
-	Header(layout, "World map")
-
-	Note(layout, "Everything this addon adds to the map lives in a tab under it, so nothing is laid over the map's own interface. Resizing scales the whole window, so the grip and the percentage buttons are two ways of setting the same number, and the map, its pins and its text stay in proportion.", 0, 5)
-
-	Check(layout, "Drag the map by its top bar", "The clear stretches of the top bar move the map. The game's own buttons up there are measured and left alone.",
-		function() return ns.db.map.topBarDrag end,
-		function(value) ns.db.map.topBarDrag = value end)
-
-	Check(layout, "Percentage buttons in the tab", "Minus, the current percentage, plus, and a button back to 100 percent.",
-		function() return ns.db.map.scaleButtons end,
-		function(value) ns.db.map.scaleButtons = value end)
-
-	Check(layout, "Resize grip in the tab", "Drag it to scale the map. Hold shift while dragging to snap to the step below.",
-		function() return ns.db.map.resizeGrip end,
-		function(value) ns.db.map.resizeGrip = value end)
-
-	Check(layout, "Always show the corner handle", "A small gold handle in the map's top left corner. It appears on its own if the top bar has no room to spare.",
-		function() return ns.db.map.cornerHandle end,
-		function(value) ns.db.map.cornerHandle = value end)
-
-	Check(layout, "Coordinates in the tab", "Your position, at the left end of the tab, with a button that puts it into chat (or right-click for a box to copy it from). The tab grows to the left to make room.",
-		function() return ns.db.map.coords end,
-		function(value) ns.db.map.coords = value end)
-
-	Check(layout, "Cursor coordinates too", "A second line under your position with where the mouse is pointing on the map.",
-		function() return ns.db.map.coordsCursor end,
-		function(value) ns.db.map.coordsCursor = value end, 24)
-
-	Check(layout, "Draw the parts of the map you have not explored", "Paints the unexplored areas in with their real art. The addon can only draw an area it knows the art for: what is shipped with it, plus everything any character on this account has ever had revealed. /casement mapdata says how much of the open map that covers.",
-		function() return ns.db.map.reveal end,
-		function(value) ns.db.map.reveal = value end)
-
-	Choice(layout, "Tint the areas you have not explored", {
-		{ value = "none", label = "No tint" },
-		{ value = "blue", label = "Blue" },
-		{ value = "sepia", label = "Sepia" },
-		{ value = "grey", label = "Grey" },
-	}, function() return ns.db.map.revealTint end,
-		function(value) ns.db.map.revealTint = value end,
-		"So the drawn in areas can still be told from the ones you have actually been to.", 24)
-
-	Slider(layout, "Map size", 50, 200, 5,
-		function() return math.floor((ns.db.map.scale or 1) * 100 + 0.5) end,
-		function(value) ns.Map.SetScale(value / 100, false) end,
-		function(v) return v .. "%" end,
-		"The same number the buttons and the corner grip set.")
-
-	Slider(layout, "The buttons move in steps of", 5, 25, 5,
-		function() return ns.db.map.step or 10 end,
-		function(value) ns.db.map.step = value end,
-		function(v) return v .. "%" end,
-		"How far one click of the plus or minus button moves the size. Clicks always land on a round multiple of this.")
-
-	Note(layout, "The map is only moved and scaled while it is in its windowed shape. A maximized map is left alone.", 0, 2)
-
-	ButtonRow(layout, {
-		{ label = "Back to 100%", width = 110, onClick = function() ns.Map.ResetSize() end },
-		{ label = "Forget its position", width = 140, onClick = function()
-			ns.Windows.ResetGroup("worldmap")
-			ns.Print("the map is back where the game had it.")
-		end },
+			ns.Print("every bag and bank window is back where the game had it.")
+		end, tooltip = "Forgets where every bag, bank and guild bank window was left." },
 	})
 end
 
@@ -367,7 +236,7 @@ local function BuildVaultPage(parent)
 	local layout = NewLayout(parent)
 	Header(layout, "Bank snapshots")
 
-	Note(layout, "What your bank and your guild bank hold is saved every time you open them, and your bags a few seconds after you log in and whenever they settle. Every character on this account is remembered, and the vault window has a tab for each, so any character's bank or bags can be looked at from anywhere.", 0, 4)
+	Note(layout, "What your bank and your guild bank hold is saved every time you open them, and your bags a few seconds after you log in and whenever they settle. Every character on this account is remembered, and the saved bank has a tab for each, so any character's bank or bags can be looked at from anywhere.", 0, 4)
 
 	Check(layout, "Remember the bank when I open it", nil,
 		function() return ns.db.vault.autoBank end,
@@ -381,7 +250,7 @@ local function BuildVaultPage(parent)
 		function() return ns.db.vault.bagButtons end,
 		function(value) ns.db.vault.bagButtons = value end)
 
-	Check(layout, "Account gold in the corner of the saved bank", "A small line in the bottom left of the saved bank and bags with every character's gold added up. /casement gold lists them one by one.",
+	Check(layout, "Account gold in the corner of the saved bank", "A small line in the bottom left of the saved bank and bags with every character's gold added up. /banktabs gold lists them one by one.",
 		function() return ns.db.vault.showAccountGold end,
 		function(value) ns.db.vault.showAccountGold = value end)
 
@@ -421,11 +290,11 @@ local function BuildVaultPage(parent)
 
 	ButtonRow(layout, {
 		{ label = "Saved bank", width = 100, onClick = function() ns.VaultUI.Show("bank") end,
-			tooltip = "Also on /casement vault." },
+			tooltip = "Also on /banktabs bank." },
 		{ label = "Saved bags", width = 100, onClick = function() ns.VaultUI.Show("bags") end,
-			tooltip = "Also on /casement bags." },
+			tooltip = "Also on /banktabs bags." },
 		{ label = "Guild bank", width = 100, onClick = function() ns.VaultUI.Show("guild") end,
-			tooltip = "Also on /casement guild." },
+			tooltip = "Also on /banktabs guild." },
 		{ label = "Snapshot now", width = 130, onClick = function() ns.Print(ns.Vault.SnapshotNow()) end,
 			tooltip = "Saves your bags, and the bank or guild bank if one is open in front of you." },
 	})
@@ -433,28 +302,29 @@ end
 
 local function BuildAboutPage(parent)
 	local layout = NewLayout(parent)
-	Header(layout, "About Casement")
+	Header(layout, "About Bank Tabs")
 
-	Note(layout, "Casement version " .. ns.version .. ".", 0, 1)
+	Note(layout, "Bank Tabs version " .. ns.version .. ". Until 2.0.0 it was called Casement, which also moved the world map; that part is now the separate addon Map Tab.", 0, 2)
 	Note(layout, "Commands:", 0, 1)
 	local lines = {
-		"/casement opens these options",
-		"/casement window opens them in a window of their own",
-		"/casement vault, bags or guild open the saved bank, bags or guild bank",
-		"/casement snapshot saves what is open in front of you",
-		"/casement scale 120 sets the map size",
-		"/casement lock or unlock turns every window switch off or on",
-		"/casement minimap shows or hides the minimap button",
-		"/casement reset puts every window back",
-		"/casement debug prints what resolved on this client",
+		"/banktabs opens these options",
+		"/banktabs window opens them in a window of their own",
+		"/banktabs bank, bags or guild open the saved bank, bags or guild bank",
+		"/banktabs snapshot saves what is open in front of you",
+		"/banktabs gold lists every character's gold",
+		"/banktabs lock or unlock turns every window switch off or on",
+		"/banktabs minimap shows or hides the minimap button",
+		"/banktabs reset puts every bag and bank window back",
+		"/banktabs debug prints what resolved on this client",
 	}
 	for _, line in ipairs(lines) do Note(layout, "|cffffff00" .. line .. "|r", 12, 1) end
+	Note(layout, "/btabs is the short form of all of these.", 0, 1)
 
-	Note(layout, "If a window will not move, or the map controls are missing, run /casement debug and send the output along with the report. Every part of this addon probes the client first and says in there what it found.", 0, 4)
+	Note(layout, "If a window will not move, or a saved bank looks wrong, run /banktabs debug and send the output along with the report. Every part of this addon probes the client first and says in there what it found.", 0, 4)
 
 	ButtonRow(layout, {
 		{ label = "Print the debug report", width = 170, onClick = function()
-			SlashCmdList["CASEMENT"]("debug")
+			SlashCmdList["BANKTABS"]("debug")
 		end },
 		{ label = "Reset all settings", width = 140, onClick = function() ns.ResetToDefaults() end },
 	})
@@ -462,7 +332,6 @@ end
 
 local PAGES = {
 	{ key = "windows", label = "Windows", build = BuildWindowsPage },
-	{ key = "map", label = "World map", build = BuildMapPage },
 	{ key = "vault", label = "Bank snapshots", build = BuildVaultPage },
 	{ key = "about", label = "About", build = BuildAboutPage },
 }
@@ -489,16 +358,16 @@ end
 local function BuildContent()
 	if content then return end
 
-	content = CreateFrame("Frame", "CasementOptions", UIParent)
+	content = CreateFrame("Frame", "BankTabsOptions", UIParent)
 	content:SetSize(CONTENT_W, CONTENT_H)
 
 	local title = content:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
 	title:SetPoint("TOPLEFT", 0, 0)
-	title:SetText("Casement")
+	title:SetText("Bank Tabs")
 
 	local subtitle = content:CreateFontString(nil, "ARTWORK", "GameFontDisableSmall")
 	subtitle:SetPoint("TOPLEFT", title, "BOTTOMLEFT", 0, -2)
-	subtitle:SetText("Move and resize the game's own windows, and remember what your bank holds.")
+	subtitle:SetText("Every character's bank, bags and guild bank from anywhere, and bag and bank windows you can move.")
 
 	local nav = CreateFrame("Frame", nil, content)
 	nav:SetPoint("TOPLEFT", 0, -44)
@@ -551,19 +420,19 @@ end
 
 local function BuildWindow()
 	if window then return end
-	window = ns.CreatePanel("CasementWindow")
+	window = ns.CreatePanel("BankTabsWindow")
 	window:SetSize(CONTENT_W + 32, CONTENT_H + 52)
 	window:SetPoint("CENTER")
 	window:SetFrameStrata("HIGH")
 	window:Hide()
-	window.csTitle:SetText("Casement")
+	window.csTitle:SetText("Bank Tabs")
 
 	window:SetScript("OnShow", function(self)
 		HostContent(self, 18, -36, 1)
 		ns.SyncOptions()
 	end)
 
-	tinsert(UISpecialFrames, "CasementWindow")
+	tinsert(UISpecialFrames, "BankTabsWindow")
 end
 
 -- ------------------------------------------------------------------
@@ -675,13 +544,13 @@ end
 
 local function BuildOptionsCategory()
 	if not (Settings and Settings.RegisterCanvasLayoutCategory and Settings.RegisterAddOnCategory) then
-		report["options category"] = "Settings API missing, use /casement window"
+		report["options category"] = "Settings API missing, use /banktabs window"
 		return
 	end
 
 	page = CreateFrame("Frame")
 	page:Hide()
-	page.name = "Casement"
+	page.name = "Bank Tabs"
 	-- The canvas mixin looks for these; ours have nothing to do because every control writes its
 	-- value straight into the saved variables when it is used.
 	page.OnCommit = function() end
@@ -702,7 +571,7 @@ local function BuildOptionsCategory()
 	end)
 	page:SetScript("OnSizeChanged", function() if page:IsShown() then Fit() end end)
 
-	local category = Settings.RegisterCanvasLayoutCategory(page, "Casement")
+	local category = Settings.RegisterCanvasLayoutCategory(page, "Bank Tabs")
 	Settings.RegisterAddOnCategory(category)
 	ns.optionsCategory = category
 	report["options category"] = "ok (canvas page)"

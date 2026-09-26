@@ -1,4 +1,4 @@
--- Casement
+-- Bank Tabs
 -- Tooltips: a few lines on every item tooltip saying which characters on this account have the
 -- item and where, from the saved bank and bag snapshots, with the guild bank and an account total.
 --

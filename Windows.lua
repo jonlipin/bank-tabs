@@ -1,9 +1,9 @@
--- Casement
--- Windows: the move engine shared by every window this addon manages.
+-- Bank Tabs
+-- Windows: the move engine for the bag, bank and guild bank windows.
 --
 -- How a window is made movable here:
---   * a grip is laid over the strip at the top of the window (or a small handle in one corner),
---     which is the only part that takes the mouse, so nothing the window already has is covered;
+--   * a grip is laid over the strip at the top of the window, which is the only part that takes
+--     the mouse, so nothing the window already has is covered;
 --   * an overlay covering the whole window appears only while the drag modifier is held, so a
 --     window whose title strip is busy can still be grabbed anywhere;
 --   * the window is told to clamp itself to the screen while it is dragged, and the position is
@@ -11,9 +11,12 @@
 --   * positions are stored in UIParent units, which survive a change of UI scale.
 --
 -- The game re-anchors its own windows whenever they are shown (bag windows get re-stacked every
--- time any bag opens, and panel windows are placed by the UIPanel system). Every managed window
--- is therefore re-placed on show, on the next frame after that, and whenever the game re-stacks
--- the bags.
+-- time any bag opens, and the bank is placed by the UIPanel system). Every managed window is
+-- therefore re-placed on show, on the next frame after that, and whenever the game re-stacks the
+-- bags or positions its panels.
+--
+-- Only the windows listed here are ever touched. The world map is Map Tab's: it hooks the same
+-- panel positioning, and each addon puts back only its own windows, so the two never fight.
 
 local ADDON, ns = ...
 
@@ -40,7 +43,6 @@ local function ReagentBagIndex()
 end
 
 Windows.GROUPS = {
-	{ key = "worldmap", label = "World map" },
 	{ key = "combined", label = "Combined bag window" },
 	{ key = "bags", label = "Individual bag windows" },
 	{ key = "reagent", label = "Reagent bag window" },
@@ -50,7 +52,6 @@ Windows.GROUPS = {
 
 -- Windows that always live under the same global name.
 local NAMED = {
-	{ name = "WorldMapFrame", option = "worldmap", posKey = "worldmap", grip = "handle", handleCorner = "TOPLEFT", handleQuery = true },
 	{ name = "BankFrame", option = "bank", posKey = "bank", grip = "strip" },
 	{ name = "GuildBankFrame", option = "guildbank", posKey = "guildbank", grip = "strip" },
 	-- Only whole windows belong in this list. Panels that live inside another window, such as the
@@ -166,7 +167,7 @@ local function Reapply(entry)
 end
 
 -- Every managed window that is on screen, re-placed. Called after the game re-stacks the bags,
--- after a UI scale change and whenever the options change.
+-- after it positions its panels, after a UI scale change and whenever the options change.
 function Windows.ReapplyAll()
 	for _, entry in ipairs(entries) do pcall(Reapply, entry) end
 end
@@ -223,17 +224,11 @@ local function BuildGrip(entry)
 	-- before the grip ever sees it.
 	ns.RaiseOver(grip, frame, 3)
 
-	if def.grip == "handle" then
-		local corner = def.handleCorner or "TOPLEFT"
-		grip:SetSize(22, 22)
-		grip:SetPoint(corner, frame, corner, corner:find("LEFT") and 6 or -6, corner:find("TOP") and -6 or 6)
-	else
-		-- The strip along the top of the window. The right hand end is left alone for the close
-		-- button, and a little is left at the left for a portrait where there is one.
-		grip:SetPoint("TOPLEFT", frame, "TOPLEFT", def.gripLeft or 0, def.gripTop or 0)
-		grip:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(def.gripRight or 34), def.gripTop or 0)
-		grip:SetHeight(def.gripHeight or 26)
-	end
+	-- The strip along the top of the window. The right hand end is left alone for the close
+	-- button, and a little is left at the left for a portrait where there is one.
+	grip:SetPoint("TOPLEFT", frame, "TOPLEFT", def.gripLeft or 0, def.gripTop or 0)
+	grip:SetPoint("TOPRIGHT", frame, "TOPRIGHT", -(def.gripRight or 34), def.gripTop or 0)
+	grip:SetHeight(def.gripHeight or 26)
 
 	local art = grip:CreateTexture(nil, "OVERLAY")
 	art:SetAllPoints()
@@ -285,27 +280,10 @@ function Windows.UpdateOverlays()
 	end
 end
 
--- The world map's corner handle is only wanted when the top bar could not offer anywhere to grab,
--- so that module gets the last word on it.
-local function GripWanted(entry)
-	if not entry.active then return false end
-	local def = entry.def or {}
-	if def.handleQuery and ns.Map and ns.Map.WantsHandle then
-		local ok, wanted = pcall(ns.Map.WantsHandle)
-		if ok then return wanted and true or false end
-	end
-	return true
-end
-
 local function UpdateGripLook(entry)
 	if not entry.grip then return end
-	entry.grip:SetShown(GripWanted(entry))
-	local def = entry.def or {}
-	if def.grip == "handle" then
-		-- A handle is always visible: it is the only thing telling the user where to grab a
-		-- window whose top edge is full of the game's own controls.
-		entry.grip.art:SetColorTexture(0.85, 0.72, 0.35, entry.active and 0.55 or 0)
-	elseif ns.db.showGrips and entry.active then
+	entry.grip:SetShown(entry.active and true or false)
+	if ns.db.showGrips and entry.active then
 		entry.grip.art:SetColorTexture(0.35, 0.72, 1, 0.14)
 	else
 		entry.grip.art:SetColorTexture(0, 0, 0, 0)
@@ -372,8 +350,8 @@ local function Attach(entry)
 		entry.hooked = true
 		frame:HookScript("OnShow", function()
 			if not entry.active then return end
-			-- A window can grow new panels between one showing and the next (the world map's
-			-- quest panel is the obvious one), so the grip climbs back on top each time.
+			-- A window can grow new panels between one showing and the next (the bank's tab
+			-- panels, say), so the grip climbs back on top each time.
 			if entry.grip then ns.RaiseOver(entry.grip, frame, 3) end
 			if entry.overlay then ns.RaiseOver(entry.overlay, frame, 5) end
 			Reapply(entry)
@@ -382,13 +360,11 @@ local function Attach(entry)
 			ns.After(0, function() Reapply(entry) end)
 		end)
 
-		-- A window that changes size is usually a window the game has just re-anchored: the world
-		-- map does exactly this when the quest log is opened or closed, and without this the map
-		-- went back to where the game wanted it. Reapply only does anything when the user has
-		-- actually placed this window, so an untouched one is still left entirely to the game.
+		-- A window that changes size is usually a window the game has just re-anchored. Reapply
+		-- only does anything when the user has actually placed this window, so an untouched one
+		-- is still left entirely to the game.
 		frame:HookScript("OnSizeChanged", function()
 			if not entry.active or entry.moving then return end
-			if ns.Map and ns.Map.IsResizing and ns.Map.IsResizing() then return end
 			Reapply(entry)
 		end)
 	end
@@ -528,8 +504,8 @@ Windows.CONTAINER_NAMES = CONTAINER_NAMES
 Windows.ContainerOption = ContainerOption
 
 -- The clear stretches along the top edge of a window: the parts of the band that none of the
--- window's own mouse-enabled frames are sitting on. This is how a whole title bar can be made
--- draggable without covering the buttons that live in it. Everything is in UIParent units.
+-- window's own mouse-enabled frames are sitting on. This is how the backpack's header finds room
+-- for the icons without covering the buttons that live in it. Everything is in UIParent units.
 function Windows.HeaderGaps(frame, band, minWidth)
 	local left, bottom, width, height = Measure(frame)
 	if not left or width <= 0 then return {} end
@@ -625,11 +601,11 @@ function Windows.Init()
 		end)
 	end
 
-	-- Panel windows (the map, the bank) are positioned by the game's UI panel system, which runs
-	-- AFTER a window changes size: toggling the map's quest log changed the width (caught by the
-	-- size hook), then re-anchored the map, and the map showed a frame at the game's spot before
-	-- the deferred re-place caught up. Hooking the positioning itself runs our re-place in the
-	-- same frame, after every anchor the game sets, so nothing is ever drawn out of place.
+	-- The bank is a panel window, positioned by the game's UI panel system, which can run AFTER
+	-- the window changes size and re-anchor it then. Hooking the positioning itself runs our
+	-- re-place in the same frame, after every anchor the game sets, so nothing is ever drawn out
+	-- of place. Map Tab hooks the same functions for the world map; each of us puts back only its
+	-- own windows.
 	local hooked = {}
 	for _, name in ipairs({ "UpdateUIPanelPositions", "ShowUIPanel", "HideUIPanel" }) do
 		if type(_G[name]) == "function" and hooksecurefunc then

@@ -1,4 +1,4 @@
--- Casement
+-- Bank Tabs
 -- BagHeader: the three icons in the backpack's header that open the saved bank, the saved bags
 -- and the saved guild bank.
 --

@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: Casement (old data)
+## Notes: Only holds the old Casement settings and saved banks until Bank Tabs and Map Tab have copied them over. It runs no code and is safe to delete once both have loaded.
+## Author: jonlipin
+## Version: 2.0.0
+## LoadOnDemand: 1
+## SavedVariables: CasementAccountDB
+## SavedVariablesPerCharacter: CasementDB

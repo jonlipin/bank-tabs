@@ -1,24 +1,28 @@
--- Casement
+-- Bank Tabs
 -- Core: saved variables, defaults, the shared event frame and the slash commands.
 --
+-- Bank Tabs is the bag, bank and guild bank half of what was Casement until 2.0.0. The world map
+-- tab, the coordinates and the fog reveal went to a separate addon, Map Tab. Import.lua carries
+-- Casement's saved data over.
+--
 -- Client notes that shape this file:
---  * The Forever beta client can hand back a nil SavedVariables table on a fresh login even when
---    a valid file is on disk, so every character's settings are mirrored into an account wide
---    copy and adopted late at PLAYER_LOGIN.
+--  * The Forever beta client has been seen to hand back a nil SavedVariables table on a fresh
+--    login even when a valid file is on disk, so every character's settings are mirrored into an
+--    account wide copy and adopted late at PLAYER_LOGIN.
 --  * Anything that might not exist on this client is probed once and recorded in `report`, which
---    "/casement debug" prints. Nothing in this addon should ever hard error.
+--    "/banktabs debug" prints. Nothing in this addon should ever hard error.
 --  * Nothing here registers COMBAT_LOG_EVENT_UNFILTERED, loads a Blizzard_ addon or creates
 --    Settings proxy objects. All three taint this client.
 
 local ADDON, ns = ...
 
-ns.version = "1.2.3"
+ns.version = "2.0.0"
 ns.report = {}
 
 local report = ns.report
 
 local function Print(msg)
-	DEFAULT_CHAT_FRAME:AddMessage("|cff8fd3ffCasement|r " .. tostring(msg))
+	DEFAULT_CHAT_FRAME:AddMessage("|cff8fd3ffBank Tabs|r " .. tostring(msg))
 end
 ns.Print = Print
 
@@ -32,7 +36,6 @@ ns.defaults = {
 	-- One switch per window family. Turning one off puts that window back under the game's own
 	-- control and forgets where the addon had been putting it.
 	windows = {
-		worldmap = true,
 		combined = true,
 		bags = true,
 		reagent = true,
@@ -51,24 +54,6 @@ ns.defaults = {
 	minimap = {
 		shown = true,
 		angle = 205,
-	},
-
-	map = {
-		resizeGrip = true,
-		scaleButtons = true,
-		topBarDrag = true,
-		cornerHandle = false, -- the handle appears on its own when the top bar has no room
-		scale = 1.0,
-		step = 10, -- percent per click of the scale buttons
-		minScale = 0.5,
-		maxScale = 2.0,
-		-- Your position and the cursor's, at the left end of the tab, with a button that puts
-		-- your position into chat.
-		coords = true,
-		coordsCursor = true,
-		-- Drawing the unexplored parts of the map, tinted so they can still be told apart.
-		reveal = false,
-		revealTint = "blue",
 	},
 
 	vault = {
@@ -167,7 +152,7 @@ function ns.Who()
 end
 
 -- What to call a stored character: the name and realm saved with the entry, or the key itself
--- for an entry saved by name before 1.2.1.
+-- for an entry saved by name before Casement 1.2.1.
 function ns.Label(who)
 	local entry = ns.vault and ns.vault.chars and ns.vault.chars[who]
 	if type(entry) == "table" and type(entry.name) == "string" then
@@ -189,47 +174,55 @@ end
 
 local function MirrorToAccount()
 	if not ns.db then return end
-	CasementAccountDB = CasementAccountDB or {}
-	CasementAccountDB.profile = DeepCopy(ns.db)
-	CasementAccountDB.version = ns.version
+	BankTabsAccountDB = BankTabsAccountDB or {}
+	BankTabsAccountDB.profile = DeepCopy(ns.db)
+	BankTabsAccountDB.version = ns.version
 end
 ns.MirrorToAccount = MirrorToAccount
 
 -- The client sometimes starts a session with a blank per character table even though the file on
 -- disk is fine. When the character table looks untouched we adopt the account mirror.
 local function LoadDB(phase)
-	local fresh = CountKeys(CasementDB) == 0
-	if fresh and type(CasementAccountDB) == "table" and type(CasementAccountDB.profile) == "table" then
-		CasementDB = DeepCopy(CasementAccountDB.profile)
-		-- Positions belong to the character that set them, not to whoever logged in first.
-		CasementDB.positions = {}
+	local fresh = CountKeys(BankTabsDB) == 0
+	if fresh and type(BankTabsAccountDB) == "table" and type(BankTabsAccountDB.profile) == "table" then
+		BankTabsDB = DeepCopy(BankTabsAccountDB.profile)
+		-- Positions belong to the character that set them, not to whoever logged in first, and so
+		-- does having had this character's old Casement settings brought over.
+		BankTabsDB.positions = {}
+		BankTabsDB.importedCasement = nil
 		report["db " .. phase] = "adopted the account copy"
 	else
-		CasementDB = type(CasementDB) == "table" and CasementDB or {}
+		BankTabsDB = type(BankTabsDB) == "table" and BankTabsDB or {}
 		report["db " .. phase] = fresh and "fresh (first run)" or "loaded from this character"
 	end
-	FillDefaults(CasementDB, ns.defaults)
-	ns.db = CasementDB
+	FillDefaults(BankTabsDB, ns.defaults)
+	ns.db = BankTabsDB
+	-- A table made this session holds nothing the user chose here yet, which the Casement import
+	-- needs to know.
+	ns.dbFresh = fresh
 
-	CasementAccountDB = type(CasementAccountDB) == "table" and CasementAccountDB or {}
-	CasementAccountDB.vault = type(CasementAccountDB.vault) == "table" and CasementAccountDB.vault or {}
-	CasementAccountDB.vault.chars = CasementAccountDB.vault.chars or {}
-	CasementAccountDB.vault.guilds = CasementAccountDB.vault.guilds or {}
-	ns.vault = CasementAccountDB.vault
+	BankTabsAccountDB = type(BankTabsAccountDB) == "table" and BankTabsAccountDB or {}
+	BankTabsAccountDB.vault = type(BankTabsAccountDB.vault) == "table" and BankTabsAccountDB.vault or {}
+	BankTabsAccountDB.vault.chars = BankTabsAccountDB.vault.chars or {}
+	BankTabsAccountDB.vault.guilds = BankTabsAccountDB.vault.guilds or {}
+	ns.vault = BankTabsAccountDB.vault
 
 	MirrorToAccount()
 end
 
 function ns.ResetToDefaults()
 	local vault = ns.vault
-	CasementDB = DeepCopy(ns.defaults)
-	ns.db = CasementDB
+	local imported = ns.db and ns.db.importedCasement
+	BankTabsDB = DeepCopy(ns.defaults)
+	-- The Casement import has been done for this character whatever the settings are now.
+	BankTabsDB.importedCasement = imported
+	ns.db = BankTabsDB
 	ns.vault = vault
 	MirrorToAccount()
 	if ns.Windows and ns.Windows.ResetAll then pcall(ns.Windows.ResetAll) end
 	ns.Refresh()
 	if ns.SyncOptions then pcall(ns.SyncOptions) end
-	Print("Settings reset to defaults. Saved bank snapshots were kept.")
+	Print("Settings reset to defaults. Saved banks and bags were kept.")
 end
 
 -- ------------------------------------------------------------------
@@ -239,10 +232,8 @@ end
 function ns.Refresh()
 	MirrorToAccount()
 	if ns.Windows and ns.Windows.Apply then pcall(ns.Windows.Apply) end
-	if ns.Map and ns.Map.Apply then pcall(ns.Map.Apply) end
 	if ns.Minimap and ns.Minimap.Apply then pcall(ns.Minimap.Apply) end
 	if ns.BagHeader and ns.BagHeader.Apply then pcall(ns.BagHeader.Apply) end
-	if ns.Reveal and ns.Reveal.Apply then pcall(ns.Reveal.Apply) end
 end
 
 -- Every character's gold and the total, as a tooltip on `owner`. Shown from the money on the
@@ -292,39 +283,6 @@ function ns.HookMoneyFrame(frame, label)
 	return true
 end
 
--- A box with some text selected in it, for anything the game will not put on the clipboard
--- itself: Ctrl+C in a selected edit box does reach the system clipboard.
-function ns.CopyBox(title, text)
-	local box = _G.CasementCopyBox
-	if not box then
-		box = ns.CreatePanel("CasementCopyBox")
-		box:SetSize(560, 400)
-		box:SetPoint("CENTER")
-		box:SetFrameStrata("DIALOG")
-		local scroll = CreateFrame("ScrollFrame", nil, box)
-		scroll:SetPoint("TOPLEFT", 16, -36)
-		scroll:SetPoint("BOTTOMRIGHT", -30, 40)
-		local edit = CreateFrame("EditBox", nil, scroll)
-		edit:SetMultiLine(true)
-		edit:SetAutoFocus(false)
-		edit:SetFontObject("ChatFontNormal")
-		edit:SetWidth(500)
-		edit:SetScript("OnEscapePressed", function(self) self:ClearFocus() box:Hide() end)
-		scroll:SetScrollChild(edit)
-		box.edit = edit
-		local hint = box:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-		hint:SetPoint("BOTTOMLEFT", 16, 16)
-		hint:SetText("The text is selected: press Ctrl+C to copy it, Escape to close.")
-		tinsert(UISpecialFrames, "CasementCopyBox")
-	end
-	box.csTitle:SetText(title or "Casement")
-	box.edit:SetText(text or "")
-	box:Show()
-	box.edit:SetFocus()
-	if box.edit.HighlightText then box.edit:HighlightText() end
-	return box
-end
-
 -- ------------------------------------------------------------------
 -- Shared window art
 --
@@ -341,7 +299,7 @@ local PANEL_TEMPLATES = {
 }
 
 -- A frame wearing the game's own panel art: the border and the background, nothing else. Used for
--- the addon's windows and for the small tab that hangs under the world map.
+-- the options window and as the fallback for the saved bank's portrait window.
 function ns.CreatePanelFrame(name, parent, key)
 	local panel, used
 	for _, candidate in ipairs(PANEL_TEMPLATES) do
@@ -386,55 +344,6 @@ function ns.CreatePanelFrame(name, parent, key)
 		if ButtonFrameTemplate_HideButtonBar then pcall(ButtonFrameTemplate_HideButtonBar, panel) end
 		if panel.Inset then panel.Inset:Hide() end
 	end
-	panel.csTemplate = used
-	return panel
-end
-
--- A small panel, for the tab under the world map. The big window templates are not used here: the
--- metal NineSlice border those bring breaks below roughly 156 by 110, and this is a third of that.
--- The tooltip backdrop is the game's own art and holds up at any size.
-function ns.CreateTabPanel(name, parent, key)
-	local panel, used
-	local ok, made = pcall(CreateFrame, "Frame", name, parent, "TooltipBackdropTemplate")
-	if ok and made and (made.NineSlice or made.SetBackdrop) then
-		panel, used = made, "TooltipBackdropTemplate"
-	elseif ok and made then
-		made:Hide()
-	end
-
-	if not panel then
-		local gotBackdrop, backdropFrame = pcall(CreateFrame, "Frame", name, parent, "BackdropTemplate")
-		if gotBackdrop and backdropFrame and backdropFrame.SetBackdrop then
-			panel, used = backdropFrame, "BackdropTemplate"
-			panel:SetBackdrop({
-				bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
-				edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
-				tile = true, tileSize = 16, edgeSize = 16,
-				insets = { left = 4, right = 4, top = 4, bottom = 4 },
-			})
-			panel:SetBackdropColor(0.06, 0.06, 0.07, 0.95)
-			panel:SetBackdropBorderColor(0.75, 0.62, 0.32, 1)
-		elseif gotBackdrop and backdropFrame then
-			backdropFrame:Hide()
-		end
-	end
-
-	if not panel then
-		panel, used = CreateFrame("Frame", name, parent), "painted"
-		local backing = panel:CreateTexture(nil, "BACKGROUND")
-		backing:SetAllPoints()
-		backing:SetColorTexture(0.06, 0.06, 0.07, 0.95)
-		for _, edge in ipairs({ { "TOPLEFT", "TOPRIGHT", false }, { "BOTTOMLEFT", "BOTTOMRIGHT", false },
-			{ "TOPLEFT", "BOTTOMLEFT", true }, { "TOPRIGHT", "BOTTOMRIGHT", true } }) do
-			local line = panel:CreateTexture(nil, "BORDER")
-			line:SetColorTexture(0.75, 0.62, 0.32, 1)
-			line:SetPoint(edge[1])
-			line:SetPoint(edge[2])
-			if edge[3] then line:SetWidth(1) else line:SetHeight(1) end
-		end
-	end
-
-	report[(key or "tab") .. " panel"] = used
 	panel.csTemplate = used
 	return panel
 end
@@ -535,10 +444,9 @@ end
 -- Getting on top of a Blizzard window
 --
 -- A grip laid over one of the game's windows has to win the mouse against everything that window
--- draws inside itself. The world map is the case that proved it: with the quest panel open, the
--- panel's own frames sit above a grip that is merely a few levels above the map, so the grip is
--- visible but unclickable. This walks the window, finds the highest strata and level anything
--- inside it uses, and puts our region above all of it.
+-- draws inside itself. With a window's own panels sitting above a grip that is merely a few
+-- levels above the window, the grip is visible but unclickable. This walks the window, finds the
+-- highest strata and level anything inside it uses, and puts our region above all of it.
 --
 -- Our own frames are marked so that repeated calls do not climb a level higher every time.
 -- ------------------------------------------------------------------
@@ -662,7 +570,7 @@ end
 -- Event frame
 -- ------------------------------------------------------------------
 
-local frame = CreateFrame("Frame", "CasementFrame", UIParent)
+local frame = CreateFrame("Frame", "BankTabsFrame", UIParent)
 ns.frame = frame
 
 local EVENTS = {
@@ -683,7 +591,6 @@ local EVENTS = {
 	"GUILDBANKBAGSLOTS_CHANGED",
 	"BAG_OPEN",
 	"BAG_CLOSED",
-	"MAP_EXPLORATION_UPDATED",
 }
 
 -- Some of these do not exist on every build. RegisterEvent on an unknown event errors, so each
@@ -718,10 +625,6 @@ local function Init()
 		local ok, err = pcall(ns.Windows.Init)
 		report["windows"] = ok and "ok" or ("failed: " .. tostring(err))
 	end
-	if ns.Map and ns.Map.Init then
-		local ok, err = pcall(ns.Map.Init)
-		report["world map"] = ok and "ok" or ("failed: " .. tostring(err))
-	end
 	if ns.Vault and ns.Vault.Init then
 		local ok, err = pcall(ns.Vault.Init)
 		report["vault"] = ok and "ok" or ("failed: " .. tostring(err))
@@ -733,10 +636,6 @@ local function Init()
 	if ns.Minimap and ns.Minimap.Init then
 		local ok, err = pcall(ns.Minimap.Init)
 		report["minimap"] = ok and "ok" or ("failed: " .. tostring(err))
-	end
-	if ns.Reveal and ns.Reveal.Init then
-		local ok, err = pcall(ns.Reveal.Init)
-		report["reveal"] = ok and "ok" or ("failed: " .. tostring(err))
 	end
 	if ns.Tooltips and ns.Tooltips.Init then
 		local ok, err = pcall(ns.Tooltips.Init)
@@ -763,7 +662,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
 
 	elseif event == "PLAYER_LOGIN" then
 		-- Second chance at the saved table, see the note above LoadDB.
-		if CountKeys(CasementDB) == 0 then LoadDB("player login") end
+		if CountKeys(BankTabsDB) == 0 then LoadDB("player login") end
+		-- Every addon has loaded by now, so an old Casement that is still running can be seen,
+		-- and what it saved can be read before anything is placed this session.
+		if ns.Import and ns.Import.Run then
+			local ok, err = pcall(ns.Import.Run)
+			if not ok then report["casement import"] = "failed: " .. tostring(err) end
+		end
 		ns.Refresh()
 		if ns.Windows and ns.Windows.Sweep then pcall(ns.Windows.Sweep, "login") end
 		if ns.SyncOptions then pcall(ns.SyncOptions) end
@@ -775,9 +680,7 @@ frame:SetScript("OnEvent", function(self, event, ...)
 	end
 
 	if ns.Windows and ns.Windows.OnEvent then pcall(ns.Windows.OnEvent, event, ...) end
-	if ns.Map and ns.Map.OnEvent then pcall(ns.Map.OnEvent, event, ...) end
 	if ns.Vault and ns.Vault.OnEvent then pcall(ns.Vault.OnEvent, event, ...) end
-	if ns.Reveal and ns.Reveal.OnEvent then pcall(ns.Reveal.OnEvent, event, ...) end
 end)
 
 -- ------------------------------------------------------------------
@@ -797,30 +700,31 @@ end
 local function PrintHelp()
 	Print("commands:")
 	local lines = {
-		"|cffffff00/casement|r opens the options",
-		"|cffffff00/casement vault|r opens the saved bank, |cffffff00/casement bags|r the saved bags, |cffffff00/casement guild|r the guild bank",
-		"|cffffff00/casement snapshot|r saves your bags, and the bank or guild bank if one is open",
-		"|cffffff00/casement scale <50-200>|r sets the world map scale",
-		"|cffffff00/casement reset|r puts every window back where the game had it",
-		"|cffffff00/casement lock|r or |cffffff00unlock|r turns every window switch off or on",
-		"|cffffff00/casement minimap|r shows or hides the minimap button",
-		"|cffffff00/casement gold|r lists every character's gold and the account total",
-		"|cffffff00/casement coords|r puts your coordinates in a box to copy",
-		"|cffffff00/casement mapdata|r reports how much of the shown map the reveal knows; |cffffff00dump|r opens all of it",
-		"|cffffff00/casement debug|r prints what resolved on this client",
+		"|cffffff00/banktabs|r opens the options",
+		"|cffffff00/banktabs bank|r opens the saved bank, |cffffff00/banktabs bags|r the saved bags, |cffffff00/banktabs guild|r the guild bank",
+		"|cffffff00/banktabs snapshot|r saves your bags, and the bank or guild bank if one is open",
+		"|cffffff00/banktabs gold|r lists every character's gold and the account total",
+		"|cffffff00/banktabs reset|r puts every bag and bank window back where the game had it",
+		"|cffffff00/banktabs lock|r or |cffffff00unlock|r turns every window switch off or on",
+		"|cffffff00/banktabs grips|r outlines the part of each window you can drag",
+		"|cffffff00/banktabs minimap|r shows or hides the minimap button",
+		"|cffffff00/banktabs debug|r prints what resolved on this client",
 	}
 	for _, line in ipairs(lines) do DEFAULT_CHAT_FRAME:AddMessage("   " .. line) end
-	DEFAULT_CHAT_FRAME:AddMessage("   Options also live in Esc > Options > AddOns > Casement.")
+	DEFAULT_CHAT_FRAME:AddMessage("   |cffffff00/btabs|r is the short form. Options also live in Esc > Options > AddOns > Bank Tabs.")
 end
 
-SLASH_CASEMENT1 = "/casement"
-SLASH_CASEMENT2 = "/cst"
-SlashCmdList["CASEMENT"] = function(msg)
+-- /casement and /cst are kept, unadvertised, for anyone with them in a macro from before 2.0.0.
+SLASH_BANKTABS1 = "/banktabs"
+SLASH_BANKTABS2 = "/btabs"
+SLASH_BANKTABS3 = "/casement"
+SLASH_BANKTABS4 = "/cst"
+SlashCmdList["BANKTABS"] = function(msg)
 	msg = (msg or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
 	local cmd, rest = msg:match("^(%S*)%s*(.-)$")
 
 	if cmd == "" then
-		if ns.ToggleOptions then ns.ToggleOptions() else Print("The options are not built on this client, see /casement debug.") end
+		if ns.ToggleOptions then ns.ToggleOptions() else Print("The options are not built on this client, see /banktabs debug.") end
 
 	elseif cmd == "debug" then
 		PrintDebug()
@@ -829,7 +733,8 @@ SlashCmdList["CASEMENT"] = function(msg)
 		if ns.ToggleOptions then ns.ToggleOptions(true) end
 
 	elseif cmd == "vault" or cmd == "bank" or cmd == "bags" or cmd == "guild" then
-		if not (ns.VaultUI and ns.VaultUI.Toggle) then Print("The vault window is not built on this client.") return end
+		if not (ns.VaultUI and ns.VaultUI.Toggle) then Print("The saved bank window is not built on this client.") return end
+		-- "vault" alone opens whatever was showing last; "vault bags" and the like still work.
 		local which = (cmd ~= "vault") and cmd or rest
 		if which == "guildbank" then which = "guild" end
 		if which ~= "bank" and which ~= "bags" and which ~= "guild" then which = nil end
@@ -842,37 +747,14 @@ SlashCmdList["CASEMENT"] = function(msg)
 
 	elseif cmd == "reset" then
 		if ns.Windows and ns.Windows.ResetAll then ns.Windows.ResetAll() end
-		if ns.Map and ns.Map.ResetSize then ns.Map.ResetSize() end
-		Print("every window is back where the game had it.")
+		Print("every bag and bank window is back where the game had it.")
 
 	elseif cmd == "lock" or cmd == "unlock" then
 		local want = (cmd == "unlock")
 		for key in pairs(ns.db.windows) do ns.db.windows[key] = want end
 		ns.Refresh()
 		if ns.SyncOptions then pcall(ns.SyncOptions) end
-		Print("every window is now " .. (want and "movable" or "locked") .. ".")
-
-	elseif cmd == "scale" then
-		local value = tonumber(rest)
-		if not value then Print("use /casement scale 50 to 200.") return end
-		if value <= 5 then value = value * 100 end
-		ns.db.map.scale = ns.Clamp(value / 100, ns.db.map.minScale, ns.db.map.maxScale)
-		ns.Refresh()
-		if ns.SyncOptions then pcall(ns.SyncOptions) end
-		Print("world map scale " .. math.floor(ns.db.map.scale * 100 + 0.5) .. "%.")
-
-	elseif cmd == "mapdata" then
-		if not ns.Reveal then Print("The map reveal is not built on this client.") return end
-		if rest == "dump" then
-			local maps = ns.Reveal.Dump()
-			Print(maps .. " maps of harvested overlay data are in the box; Ctrl+C copies them out.")
-		else
-			Print(ns.Reveal.Describe())
-		end
-
-	elseif cmd == "coords" then
-		local text = ns.Map and ns.Map.PlayerCoordText and ns.Map.PlayerCoordText()
-		if text then ns.CopyBox("Your position", text) else Print("your position on the map is not available here.") end
+		Print("every bag and bank window is now " .. (want and "movable" or "locked") .. ".")
 
 	elseif cmd == "gold" then
 		local rows, total = ns.Vault.Gold()
@@ -896,6 +778,10 @@ SlashCmdList["CASEMENT"] = function(msg)
 		ns.Refresh()
 		if ns.SyncOptions then pcall(ns.SyncOptions) end
 		Print("drag strips are now " .. (ns.db.showGrips and "outlined" or "invisible") .. ".")
+
+	elseif cmd == "scale" or cmd == "coords" or cmd == "mapdata" then
+		-- The world map commands went with the world map to Map Tab.
+		Print("the world map tab, coordinates and fog reveal are now a separate addon, Map Tab (/maptab).")
 
 	else
 		PrintHelp()

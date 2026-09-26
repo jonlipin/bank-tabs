@@ -1,8 +1,10 @@
-package-as: Casement
+package-as: BankTabs
+
+move-folders:
+  BankTabs/Legacy/Casement: Casement
 
 ignore:
   - tests
-  - tools
 
 manual-changelog:
   filename: RELEASE-NOTES.md

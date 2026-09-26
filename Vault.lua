@@ -1,4 +1,4 @@
--- Casement
+-- Bank Tabs
 -- Vault: remembering what the bank, the bags and the guild bank hold.
 --
 -- Everything is kept in the account wide saved variables, one entry per character, so that any

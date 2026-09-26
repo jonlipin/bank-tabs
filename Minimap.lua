@@ -1,9 +1,9 @@
--- Casement
+-- Bank Tabs
 -- Minimap: a button on the minimap rim.
 --
 -- Built by hand rather than through LibDBIcon, which this addon does not carry. It sits at a saved
--- angle and dragging it moves it around the rim. Left click opens the options, right click opens
--- the saved bank contents.
+-- angle and dragging it moves it around the rim. Left click opens the saved bank, right click
+-- opens the options, shift and left click locks or unlocks the bag and bank windows.
 
 local ADDON, ns = ...
 
@@ -39,10 +39,11 @@ local function Place()
 	button:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
 end
 
+-- A bag first, the bank's coin and crate after it: the icons every client carries.
 local ICONS = {
-	"Interface\\Icons\\INV_Misc_Map_01",
-	"Interface\\Icons\\INV_Misc_Map02",
 	"Interface\\Icons\\INV_Misc_Bag_10",
+	"Interface\\Icons\\INV_Misc_Bag_08",
+	"Interface\\Icons\\INV_Misc_Coin_01",
 	"Interface\\Icons\\INV_Box_01",
 	"Interface\\Cooldown\\ping4",
 	"Interface\\Buttons\\WHITE8X8",
@@ -60,8 +61,8 @@ end
 
 local function Tooltip(self)
 	GameTooltip:SetOwner(self, "ANCHOR_LEFT")
-	GameTooltip:SetText("Casement", 1, 1, 1)
-	GameTooltip:AddLine(ns.db.enabled and "Windows are unlocked" or "Windows are locked",
+	GameTooltip:SetText("Bank Tabs", 1, 1, 1)
+	GameTooltip:AddLine(ns.db.enabled and "Bag and bank windows are unlocked" or "Bag and bank windows are locked",
 		ns.db.enabled and 0.4 or 1, ns.db.enabled and 0.85 or 0.4, 0.4)
 
 	local banks, bags, guilds = 0, 0, 0
@@ -80,15 +81,15 @@ local function Tooltip(self)
 	end
 
 	GameTooltip:AddLine(" ")
-	GameTooltip:AddLine("Left-click: the options", 0.7, 0.7, 0.7)
-	GameTooltip:AddLine("Right-click: the saved bank", 0.7, 0.7, 0.7)
-	GameTooltip:AddLine("Shift and left-click: lock or unlock every window", 0.7, 0.7, 0.7)
+	GameTooltip:AddLine("Left-click: the saved bank", 0.7, 0.7, 0.7)
+	GameTooltip:AddLine("Right-click: the options", 0.7, 0.7, 0.7)
+	GameTooltip:AddLine("Shift and left-click: lock or unlock the bag and bank windows", 0.7, 0.7, 0.7)
 	GameTooltip:AddLine("Drag: move around the minimap", 0.7, 0.7, 0.7)
 	GameTooltip:Show()
 end
 
 local function Build()
-	button = CreateFrame("Button", "CasementMinimapButton", Minimap)
+	button = CreateFrame("Button", "BankTabsMinimapButton", Minimap)
 	button.csOurs = true
 	button:SetSize(31, 31)
 	button:SetFrameStrata("MEDIUM")
@@ -114,14 +115,14 @@ local function Build()
 
 	button:SetScript("OnClick", function(_, which)
 		if which == "RightButton" then
-			if ns.VaultUI and ns.VaultUI.Toggle then ns.VaultUI.Toggle("bank") end
+			if ns.ToggleOptions then ns.ToggleOptions() end
 		elseif IsShiftKeyDown and IsShiftKeyDown() then
 			ns.db.enabled = not ns.db.enabled
 			ns.Refresh()
 			if ns.SyncOptions then pcall(ns.SyncOptions) end
-			ns.Print("windows are now " .. (ns.db.enabled and "unlocked" or "locked") .. ".")
+			ns.Print("bag and bank windows are now " .. (ns.db.enabled and "unlocked" or "locked") .. ".")
 		else
-			if ns.ToggleOptions then ns.ToggleOptions() end
+			if ns.VaultUI and ns.VaultUI.Toggle then ns.VaultUI.Toggle("bank") end
 		end
 	end)
 
