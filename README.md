@@ -33,8 +33,10 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
   character you are playing, so your own bank can be looked at from anywhere too. Hover a tab for
   when that character was last saved and their gold.
 - **Three separate windows.** The saved bank, the saved bags and the saved guild bank can be open
-  at the same time, each on its own character with its own search. Drag each by its title; it
-  stays on screen and is remembered where you left it. Escape closes the one opened last first.
+  at the same time, each with its own search: the bank and the bags on the character you pick,
+  the guild bank on your guild. Drag each by its title; it stays on screen and is remembered
+  where you left it. Escape closes the one opened last first. Shift-click an item in any of them
+  to link it in chat.
 - **Bank, Bags and Guild tabs above your backpack** open the saved windows. They are the same tabs
   as the character tabs, glow while their window is open, and are dimmed while there is nothing
   saved for them. They hang off the top of the backpack, clear of its title, close button and
@@ -57,8 +59,8 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
   its own Reset.
 - Drag any of them by the strip along the top edge, the close button left clear. The strip is
   invisible unless you switch on "Show me where the drag strips are".
-- Hold alt (or shift, or ctrl, or nothing, your choice) and you can drag a window from anywhere on
-  it, which helps when its top edge is busy.
+- Hold alt (or shift, or ctrl, your choice, or switch it off) and you can drag a window from
+  anywhere on it, which helps when its top edge is busy.
 - Every window is remembered per character, and the game putting a bag window back in its stack,
   or placing the bank as it opens, does not undo your placing.
 - No window can be dragged off screen. It is clamped while you drag it, when the position is
@@ -67,8 +69,9 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
 
 ### A minimap button
 
-Left-click for the saved bank, right-click for the options, shift and left-click to lock or unlock
-the bag and bank windows, drag it around the rim. `/banktabs minimap` hides it.
+Left-click for the saved bank, right-click for the options, shift and left-click to switch Bank
+Tabs' window moving and the backpack tabs off or on, drag it around the rim. `/banktabs minimap`
+hides or shows it (`on` and `off` work too, for macros).
 
 ## Install
 
@@ -111,7 +114,7 @@ Everything is on by default except the drag strip outlines.
 | `/banktabs snapshot` | Saves your bags, and the bank or guild bank if one is open |
 | `/banktabs gold` | Lists every character's gold and the account total |
 | `/banktabs lock` / `unlock` | Turns every window switch off or on |
-| `/banktabs reset` | Puts every bag and bank window back where the game had it |
+| `/banktabs reset` | Puts every bag and bank window back where the game had it, and forgets where you left the saved windows |
 | `/banktabs grips` | Outlines the part of each window you can drag |
 | `/banktabs minimap` | Shows or hides the minimap button |
 | `/banktabs debug` | Prints what resolved on this client |
@@ -121,7 +124,8 @@ written before 2.0.0, once the old Casement is no longer running.
 
 ## Coming from Casement
 
-Update Casement as usual and it becomes Bank Tabs. The game names an addon's saved settings after
+Update Casement as usual and it becomes Bank Tabs; restart the game fully afterwards, since a
+new addon is not picked up by `/reload`. The game names an addon's saved settings after
 its folder, so the package also carries a small `Casement` folder ("Casement (old data)" in the
 AddOns list). It runs no code; it only keeps Casement's saved files where Bank Tabs and Map Tab can
 read them.
@@ -156,7 +160,12 @@ read them.
 - A character appears once it has logged in with Bank Tabs (or came over from Casement), and its
   bank once it has been opened. Other characters' tooltip counts are as old as their last
   snapshot.
-- Guild bank tabs your rank cannot view are not saved.
+- The saved guild bank shows the guild of the character you are playing (on a character with no
+  guild, one another character saved). There is no switching between guilds, but item tooltips
+  count every guild bank your characters have saved.
+- A guild bank tab your rank cannot view keeps what a character who could view it saved.
+- There is no way yet to remove a character you deleted or moved: it keeps its tab, its tooltip
+  lines and its share of the account gold.
 - Built for WoW Forever (build 1.60.1) only.
 
 ## If something does not work
