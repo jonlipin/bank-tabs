@@ -1,57 +1,62 @@
 # Bank Tabs
 
-Every character's bank, bags and guild bank, saved and shown from anywhere exactly as the real
-windows draw them, with a spellbook style tab for each character. And the game's bag, bank and
-guild bank windows made movable: drag them where you want them, and nothing can go off screen.
+Bank Tabs saves what every character on your account keeps in their bank, bags and guild bank,
+and shows it to you from anywhere, drawn like the game's own windows with a tab per character. It
+is for anyone with alts who is tired of logging over just to find out who has the thing. It also
+lets you drag the bag, bank and guild bank windows wherever you want them.
 
-Bank Tabs is for the World of Warcraft Forever client (build 1.60.1). Everything is a switch in
-**Esc > Options > AddOns > Bank Tabs**, or `/banktabs`.
+Made for the WoW Forever client (classic-era, build 1.60.1, Interface 16001). Get it on
+[CurseForge](https://www.curseforge.com/wow/addons/bank-tabs).
 
-Bank Tabs was called Casement until 2.0.0. Casement also moved and resized the world map; that part
-is now its own addon, **Map Tab** (the world map tab, coordinates and the fog reveal). Updating
-brings everything Casement saved over to Bank Tabs, see "Coming from Casement" below.
+Bank Tabs was called Casement until 2.0.0. The world map tab, the coordinates and the fog reveal
+are now a separate addon, **[Map Tab](https://github.com/jonlipin/map-tab)**. Updating brings
+everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-from-casement).
 
 ## What it does
 
-**Your bank, bags and guild bank, from anywhere**
+### Every character's bank, bags and guild bank, from anywhere
 
-- Whatever your bank holds is saved every time you open it, and shown back to you as the bank
-  window itself: the same portrait and title frame, the search box top right, the eight wide grid
-  with every empty slot drawn, the Bag Slots row underneath, the money bottom right. Every item is
-  in the slot it was actually in. Click a bank bag in the Bag Slots row to look inside it.
-- Your bags are saved too, a few seconds after you log in and whenever they settle. The saved bags
-  show your other characters' bags, as the combined backpack shows them; the character you are
+- **Open your bank once and it is saved**, and again every time you open it. The saved bank is
+  drawn as the bank window: the same portrait and title frame, the search box top right, the
+  eight wide grid with every empty slot drawn, the Bag Slots row underneath, the money bottom
+  right. Every item is in the slot it was actually in. Click a bank bag in the Bag Slots row to
+  look inside it. The layout is measured off the real bank window while it is open, so the slots
+  sit exactly where the real ones do on this client.
+- **Your bags** are saved a few seconds after you log in and whenever they settle. The saved bags
+  show your *other* characters' bags as the combined backpack shows them; the character you are
   playing already has its real backpack in front of it.
-- The guild bank is saved when you open it, one tab at a time, and shown in its own shape with its
-  tabs down the side.
-- Every character on the account is remembered. A row of tabs in the spellbook's style hangs off
-  the top of the saved bank and the saved bags, one per character with their class icon. The saved
-  bank's first tab is the character you are playing, so your own bank can be looked at from
-  anywhere too. Each window is titled for the character on show: "Vatik's Bank", "Choham's
-  Backpack".
-- The saved bank, the saved bags and the saved guild bank are separate windows that can be open
+- **The guild bank** is saved when you open it, one tab at a time, and shown in its own shape with
+  its tabs down the side.
+- **A tab per character.** A row of tabs in the spellbook's style, one per character with their
+  class icon, hangs off the top of the saved bank and the saved bags. Each window is titled for
+  the character on show: "Vatik's Bank", "Choham's Backpack". The saved bank's first tab is the
+  character you are playing, so your own bank can be looked at from anywhere too. Hover a tab for
+  when that character was last saved and their gold.
+- **Three separate windows.** The saved bank, the saved bags and the saved guild bank can be open
   at the same time, each on its own character with its own search. Drag each by its title; it
   stays on screen and is remembered where you left it. Escape closes the one opened last first.
-- Three tabs above your backpack, Bank, Bags and Guild, open the saved windows. They are the same
-  tabs as the character tabs, glow while their window is open, and are dimmed while there is
-  nothing saved for them. They hang off the top of the backpack, clear of its title, close button
-  and portrait, and move with it. On a backpack too narrow for all three in a row, the Guild tab
-  sits in a second row above, the way the character tabs wrap, and none hangs past its edge.
-- Every item tooltip says who has it and where: a line per character with the count in their bank
-  and bags, the guild bank, and an account total. Your own bags are counted live. Switch it off,
-  or have it only while holding a key, in the options.
-- `/banktabs gold` lists every character's gold and the account total, which also sits in the
-  corner of the saved bank and on the minimap button's tooltip. Hovering the money on your bag
-  window, the bank or the saved bank shows the same list.
-- The saved bank lays itself out from measurements taken off the real bank window while it was
-  open, so the slots sit exactly where the real ones do on this client.
+- **Bank, Bags and Guild tabs above your backpack** open the saved windows. They are the same tabs
+  as the character tabs, glow while their window is open, and are dimmed while there is nothing
+  saved for them. They hang off the top of the backpack, clear of its title, close button and
+  portrait, and move with it. On a backpack too narrow for all three in a row, the Guild tab sits
+  in a second row above.
 
-**Bag, bank and guild bank windows you can move**
+### Who has it, and your gold
 
-- Separate switches for the combined bag window, the individual bag windows, the reagent bag, the
-  bank window with its bank bags, and the guild bank, each with its own Reset.
-- Drag any of them by the strip along the top edge. The close button is left clear. The strip
-  is invisible unless you switch on "show me where the drag strips are".
+- **Item tooltips** say who has the item and where: a line per character with the count in their
+  bank and bags, the guild bank, and an account total when it is in more than one place. Your own
+  bags are counted live. Switch it off, or show it only while holding shift, ctrl or alt.
+- **Gold.** `/banktabs gold` lists every character's gold and the account total. The total also
+  sits in the corner of the saved bank and bags and on the minimap button's tooltip, and hovering
+  the money on your bag window, the bank or the saved bank shows the same list.
+
+### Bag, bank and guild bank windows you can move
+
+- Separate switches for the combined bag window, the individual bag windows, the reagent bag
+  (where the client has one), the bank window with its bank bags, and the guild bank, each with
+  its own Reset.
+- Drag any of them by the strip along the top edge, the close button left clear. The strip is
+  invisible unless you switch on "Show me where the drag strips are".
 - Hold alt (or shift, or ctrl, or nothing, your choice) and you can drag a window from anywhere on
   it, which helps when its top edge is busy.
 - Every window is remembered per character, and the game putting a bag window back in its stack,
@@ -60,10 +65,39 @@ brings everything Casement saved over to Bank Tabs, see "Coming from Casement" b
   saved, and again if you change your resolution or UI scale. The backpack is kept far enough
   below the top of the screen for its tabs to stay in reach.
 
-**A minimap button**
+### A minimap button
 
 Left-click for the saved bank, right-click for the options, shift and left-click to lock or unlock
 the bag and bank windows, drag it around the rim. `/banktabs minimap` hides it.
+
+## Install
+
+1. Download it from [CurseForge](https://www.curseforge.com/wow/addons/bank-tabs).
+2. Unzip it into `World of Warcraft\_classic_beta_\Interface\AddOns\`, so that you have a
+   `BankTabs` folder with `BankTabs.toc` inside it. The zip also holds a small `Casement` folder,
+   the old data holder; unzip that too (see [Coming from Casement](#coming-from-casement)).
+3. Restart the game fully the first time; `/reload` does not pick up a new addon. After that,
+   `/reload` is enough for updates.
+
+## Getting started
+
+1. Open your bags. The Bank, Bags and Guild tabs hang above the backpack. Drag any bag window by
+   its top edge.
+2. Visit a banker once on each character, and log in once on each so their bags are saved. Open
+   the guild bank once.
+3. Hover any item to see who has it.
+
+The options are in **Esc > Options > AddOns > Bank Tabs**, on `/banktabs`, or on a right-click of
+the minimap button, in three pages:
+
+- **Windows**: the master switch, one switch per window with its own Reset, the drag anywhere key,
+  the drag strip outlines, the minimap button.
+- **Bank snapshots**: saving the bank and the guild bank, the tabs above the backpack, the account
+  gold in the corner, the money hover, and the item tooltip lines (guild bank, total, only while
+  holding a key).
+- **About**: the commands, and buttons for the debug report and for resetting every setting.
+
+Everything is on by default except the drag strip outlines.
 
 ## Commands
 
@@ -87,16 +121,21 @@ written before 2.0.0, once the old Casement is no longer running.
 
 ## Coming from Casement
 
-The game names an addon's saved settings after its folder, so the package also carries a small
-`Casement` folder ("Casement (old data)" in the AddOns list). It runs no code; it only keeps
-Casement's saved files where Bank Tabs and Map Tab can read them.
+Update Casement as usual and it becomes Bank Tabs. The game names an addon's saved settings after
+its folder, so the package also carries a small `Casement` folder ("Casement (old data)" in the
+AddOns list). It runs no code; it only keeps Casement's saved files where Bank Tabs and Map Tab can
+read them.
 
 - At your first login Bank Tabs copies every character's saved bank, bags and guild banks, and the
   measured bank layout, and says so once in chat.
 - Each character's window switches, drag key, window positions, minimap button, snapshot and
   tooltip settings come over the first time that character logs in.
 - Nothing you have already set in Bank Tabs is overwritten, and a snapshot taken since is never
-  replaced by an older one. The world map's settings are left for Map Tab.
+  replaced by an older one. The world map's settings are left for Map Tab: install
+  [Map Tab](https://github.com/jonlipin/map-tab) if you used the world map tab, the coordinates or
+  the fog reveal, and it brings its own half over the same way.
+- The minimap button now opens the saved bank on left-click and the options on right-click, the
+  other way round from Casement.
 - If the old Casement is still running next to Bank Tabs, it is switched off from your next login
   and chat says so once. Until then it keeps the bag and bank windows, the backpack buttons, the
   minimap button, the tooltip lines and the `/casement` command, so the two do not fight over
@@ -110,18 +149,30 @@ Casement's saved files where Bank Tabs and Map Tab can read them.
   be deleted. Each Bank Tabs update puts it back, which does no harm. `/banktabs debug` shows what
   was found and what came over.
 
-## Source and issues
+## Known limits
 
-https://github.com/jonlipin/casement
+- The saved windows show what was there the last time each bank, set of bags or guild bank was
+  seen, and they are read only: nothing in them can be moved, used or taken out.
+- A character appears once it has logged in with Bank Tabs (or came over from Casement), and its
+  bank once it has been opened. Other characters' tooltip counts are as old as their last
+  snapshot.
+- Guild bank tabs your rank cannot view are not saved.
+- Built for WoW Forever (build 1.60.1) only.
 
 ## If something does not work
 
-Run `/banktabs debug` and send the output. Every part of the addon probes the client before it
-uses it, and the report says what it found: which windows it located, which templates resolved,
-whether the bag re-stacking hook took, what the bank scan saw, what the bank window measured, and
-what came over from Casement.
+Open an issue at https://github.com/jonlipin/bank-tabs/issues and paste the output of
+`/banktabs debug`. Every part of the addon probes the client before it uses it, and the report
+says what it found: which windows it located, which templates resolved, whether the bag
+re-stacking hook took, what the bank scan saw, what the bank window measured, and what came over
+from Casement.
 
-## Building and testing
+## Development and tests
+
+The addon files sit at the repo root, as the CurseForge packager expects. `.pkgmeta` packages them
+as `BankTabs`, moves `Legacy/Casement` to a top level `Casement` folder (the data holder), leaves
+`tests` out, and takes each release's notes from `RELEASE-NOTES.md`, which holds only the newest
+section of `CHANGELOG.md`.
 
 `tests/banktabstest.js` is an offline harness. It stubs the game API in fengari, including a small
 layout engine for points, anchors and scales, and walks the addon's main paths: clamping and
@@ -129,18 +180,25 @@ dragging the bag and bank windows, putting them back after the game re-anchors t
 switches, all three snapshots, the saved bank, bags and guild bank replicas slot by slot, the three
 saved windows open together (their own characters and searches, Escape order, where they open and
 are left), the tabs above the backpack, the tooltips, the gold, and the options. It also loads the
-addon afresh for each way the Casement
-import can meet a login (the data holder present, the old addon still running, nothing present,
-already imported, and the ways those go wrong), and checks the package files.
+addon afresh for each way the Casement import can meet a login (the data holder present, the old
+addon still running, nothing present, already imported, and the ways those go wrong), and checks
+the package files.
 
 ```
-node tests/banktabstest.js              # the normal client
-node tests/banktabstest.js --bare       # every UI template missing
-node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids
+node tests/banktabstest.js              # the normal client: 813 checks
+node tests/banktabstest.js --bare       # every UI template missing: 805
+node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 809
 ```
 
-It needs `fengari` on the module path. See `tests/README.md` for the counts.
+Run it from the repo root. It needs `fengari` on the module path (for example through
+`NODE_PATH`); the copy this was developed against is not checked in. See `tests/README.md` for what
+each part of the count covers.
 
 ## License
 
 MIT.
+
+## See also
+
+[Map Tab](https://github.com/jonlipin/map-tab): the world map tab, coordinates and fog reveal
+that used to be part of Casement.

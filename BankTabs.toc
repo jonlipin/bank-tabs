@@ -7,7 +7,7 @@
 ## SavedVariablesPerCharacter: BankTabsDB
 ## IconTexture: Interface\Icons\INV_Misc_Bag_10
 ## X-Category: Inventory
-## X-Website: https://github.com/jonlipin/casement
+## X-Website: https://github.com/jonlipin/bank-tabs
 ## X-License: MIT
 
 Core.lua
