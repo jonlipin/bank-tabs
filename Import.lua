@@ -17,7 +17,12 @@
 --    overwritten.
 --  * If the OLD Casement is still installed and running, it is switched off from the next session
 --    and the user is told once. Map Tab does the same thing; whichever of the two gets there first
---    speaks, and the other finds the old addon already switched off and stays quiet.
+--    speaks, and the other finds the old addon already switched off and stays quiet. For the rest
+--    of that session Bank Tabs leaves the bag and bank windows, the backpack buttons, the minimap
+--    button and the item tooltip lines to the old addon (ns.oldCasementRunning), since two of
+--    each on the same windows fight.
+--  * When Casement's files cannot be read yet, the user is told why once per account; the debug
+--    report says it at every login, and every login tries again.
 
 local ADDON, ns = ...
 
@@ -215,8 +220,9 @@ end
 
 -- Makes Casement's saved variables readable. They are already in memory when the old addon ran
 -- this session or the data holder was loaded earlier; otherwise the data holder is loaded on
--- demand. Returns whether they can be read, and a few words for the report.
-local function Open(info)
+-- demand. Returns whether they can be read, a few words for the report, and whether a failure is
+-- one the user chose and should not be told about.
+local function Open(info, needAccount)
 	if type(CasementAccountDB) == "table" or type(CasementDB) == "table" then return true, "read from memory" end
 	if not info.exists then return false, "no Casement installed" end
 	if info.loaded then return true, "loaded, but Casement had nothing saved" end
@@ -226,6 +232,13 @@ local function Open(info)
 		return false, "the old Casement is switched off"
 	end
 	if not info.enabled then
+		if not needAccount then
+			-- The account's share was done at an earlier login (the holder switched on to be read
+			-- if it had to be), so switching it off since was the user's doing. Only this
+			-- character's window settings are left, which is not worth overruling them for, or
+			-- switching it back on for every character; switched on again, it is read then.
+			return false, "the data holder is switched off, and the account was done at an earlier login, so it is left off", true
+		end
 		-- The data holder, switched off (usually by an earlier session's notice, before Casement
 		-- was updated). It runs no code, so switching it back on to read it is safe.
 		local okEnable = Call("EnableAddOn", OLD)
@@ -239,20 +252,35 @@ local function Open(info)
 	return false, "the game would not load it (" .. tostring(why or (ok and "refused") or "no LoadAddOn") .. ")"
 end
 
+-- Whether Map Tab, the other half, is installed.
+local function MapTabInstalled()
+	if type(_G.MapTabFrame) == "table" then return true end
+	local ok, name, _, _, _, reason = Call("GetAddOnInfo", "MapTab")
+	return (ok and name ~= nil and reason ~= "MISSING") and true or false
+end
+
 -- The old addon still running next to this one: switched off from the next session, and the user
--- told, once between Bank Tabs and Map Tab.
+-- told, once between Bank Tabs and Map Tab. Until then it keeps the windows (see the note at the
+-- top), which the notice says, and a user who has only Bank Tabs so far is told Map Tab is a
+-- separate download, since switching the old addon off takes the world map tab with it.
+local ASIDE = "; Bank Tabs leaves the bag and bank windows, the backpack tabs, the minimap button and the item tooltip lines to it until the next session"
+
 local function StandDown(info)
 	if not info.running then return false end
 	if _G[NOTICE] or not info.enabled then
-		report["old casement"] = "running this session, already switched off for the next"
+		report["old casement"] = "running this session, already switched off for the next" .. ASIDE
 		return false
 	end
 	_G[NOTICE] = ADDON
 	local ok = Call("DisableAddOn", OLD)
 	if ok then Call("SaveAddOns") end
-	report["old casement"] = ok and "was running, switched off from the next session" or "was running, could not be switched off"
+	local mapTab = MapTabInstalled()
+	report["old casement"] = (ok and "was running, switched off from the next session" or "was running, could not be switched off") .. ASIDE
+		.. (mapTab and "" or "; told the user Map Tab is a separate download")
 	ns.Print("is one of the two addons that replace Casement: Bank Tabs keeps the bags, bank and saved banks, and Map Tab the world map tab, coordinates and fog reveal."
-		.. (ok and " The old Casement is switched off from your next login or /reload." or " Please switch the old Casement off in the AddOns list."))
+		.. (ok and " The old Casement is switched off from your next login; type /reload to finish the switch now. Until then it keeps the bag and bank windows, and Bank Tabs takes over after the reload."
+			or " Please switch the old Casement off in the AddOns list and /reload. Until then it keeps the bag and bank windows, and Bank Tabs leaves them to it.")
+		.. (mapTab and "" or " Map Tab is a separate download: install it too to keep the world map tab, coordinates and fog reveal."))
 	return true
 end
 
@@ -267,6 +295,8 @@ local function RunOnce()
 	local info = Import.Probe()
 	Import.last = info
 	report["casement addon"] = Describe(info)
+	-- The old addon's code ran this session: it keeps its windows until the next one.
+	ns.oldCasementRunning = info.running or nil
 
 	local needAccount = not account.importedCasement
 	local needChar = not db.importedCasement
@@ -276,7 +306,7 @@ local function RunOnce()
 		return "done before"
 	end
 
-	local open, how = Open(info)
+	local open, how, quiet = Open(info, needAccount)
 	local told = StandDown(info)
 
 	if not open then
@@ -287,10 +317,19 @@ local function RunOnce()
 			db.importedCasement = true
 			report["casement import"] = "nothing to import: no Casement installed"
 			return "nothing"
-		elseif how == "the old Casement is switched off" then
+		end
+		if quiet then return "not open" end
+		-- Said once per account, the first time, so the user knows why and what to do. Every login
+		-- after that tries again without a word, and the report gives the reason each time.
+		if account.casementUnreadableTold then
+			report["casement import"] = report["casement import"] .. " (the user was told at an earlier login)"
+			return "not open"
+		end
+		account.casementUnreadableTold = true
+		if how == "the old Casement is switched off" then
 			ns.Print("cannot read what Casement saved while the old Casement is switched off. Switch it on in the AddOns list for one login and Bank Tabs brings everything over (and switches it off again).")
 		else
-			ns.Print("could not open what Casement saved: " .. how .. ". It tries again at your next login.")
+			ns.Print("could not open what Casement saved: " .. how .. ". It tries again at each login.")
 		end
 		return "not open"
 	end
@@ -302,14 +341,17 @@ local function RunOnce()
 		account.importedCasement = true
 	end
 	if needChar then
-		-- This character's own Casement settings, or else the account copy Casement itself would
-		-- have handed a character it had never seen (without positions, which are per character).
-		local source, withPositions = CasementDB, true
+		-- This character's own Casement settings, which replace a table made or adopted this
+		-- session, since nothing in it is this character's own choice yet. Or else the account copy
+		-- Casement itself would have handed a character it had never seen (without positions,
+		-- which are per character): Bank Tabs' own account copy, which a character new to it has
+		-- just adopted, is newer than that, so it only fills in what is still at its default.
+		local source, withPositions, fresh = CasementDB, true, ns.dbFresh
 		if ns.CountKeys(source) == 0 then
 			source = type(CasementAccountDB) == "table" and CasementAccountDB.profile or nil
-			withPositions = false
+			withPositions, fresh = false, false
 		end
-		settings = ImportCharacter(source, db, ns.dbFresh, withPositions)
+		settings = ImportCharacter(source, db, fresh, withPositions)
 		db.importedCasement = true
 	end
 

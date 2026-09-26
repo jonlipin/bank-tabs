@@ -10,6 +10,11 @@
 -- portrait, and never meet the drag strip, which lies inside the top bar. Being the backpack's
 -- children, anchored to it, they go wherever it goes, in the same frame, and hide with it.
 --
+-- A backpack too narrow for the three in a row (a separate backpack can be under 200 wide) gets
+-- them in two rows, by the rule the character tabs wrap by, so none hangs past its right edge.
+-- While they are up, the backpack is kept on screen with them: the move engine clamps it with
+-- their height added (Room), and the game's own clamp is told about them too.
+--
 -- A tab wears its chosen state while its saved window is open, and is dimmed while there is
 -- nothing saved for it to show.
 
@@ -146,30 +151,62 @@ local function Paint(set)
 	end
 end
 
+-- The height the tabs stand above the backpack's top edge (0 while they are down). The game's
+-- clamp is widened to take them in, the insets the frame had kept to put back, and a window the
+-- user has placed is put back through the move engine, which now clamps it with them.
+local function SetRoom(frame, set, room)
+	if set.room == room then return end
+	set.room = room
+	if frame.SetClampRectInsets then
+		if not set.insets then
+			local ok, l, r, t, b = pcall(frame.GetClampRectInsets, frame)
+			set.insets = { ok and tonumber(l) or 0, ok and tonumber(r) or 0, ok and tonumber(t) or 0, ok and tonumber(b) or 0 }
+		end
+		local base = set.insets
+		pcall(frame.SetClampRectInsets, frame, base[1], base[2], math.max(base[3], room), base[4])
+	end
+	if ns.Windows and ns.Windows.ReapplyAll then pcall(ns.Windows.ReapplyAll) end
+end
+
 function BagHeader.Update(frame)
 	if not frame or not ns.db then return end
 	-- The money readout on a bag window shows every character's gold on hover.
 	if IsBackpack(frame) then ns.HookMoneyFrame(frame, "bags") end
 
 	-- The game hands its bag frames out as it needs them, so the frame that was the backpack last
-	-- time can be bag 1 this time; the tabs built on it then have to go away.
-	local wanted = ns.db.enabled and ns.db.vault.bagButtons and IsBackpack(frame)
+	-- time can be bag 1 this time; the tabs built on it then have to go away. An old Casement
+	-- still running this session has its own buttons on the backpack, so these wait for the next.
+	local wanted = ns.db.enabled and ns.db.vault.bagButtons and IsBackpack(frame) and not ns.oldCasementRunning
 	local set = sets[frame]
 
 	if not wanted then
-		if set then for _, tab in ipairs(set.list) do tab:Hide() end end
+		if set then
+			for _, tab in ipairs(set.list) do tab:Hide() end
+			SetRoom(frame, set, 0)
+		end
 		return
 	end
 	if not set then set = BuildSet(frame) end
 
 	-- Hung again every time, so they stay one level under the window whatever level the game
-	-- has raised it to.
+	-- has raised it to, and wrap to the window's width as it is now.
+	local perRow = ns.TabsPerRow(frame)
 	for index, tab in ipairs(set.list) do
-		ns.HangTab(tab, frame, index - 1, 0)
+		ns.HangTab(tab, frame, (index - 1) % perRow, math.floor((index - 1) / perRow))
 		tab:Show()
 	end
+	local rows = math.ceil(#set.list / perRow)
+	SetRoom(frame, set, ns.TabRowsHeight(rows))
 	Paint(set)
 	report["backpack tabs"] = "above the top edge of " .. tostring(frame.GetName and frame:GetName() or "the backpack")
+		.. ", " .. (rows == 1 and "in one row" or ("in " .. rows .. " rows (the window is narrow)"))
+end
+
+-- How far the tabs stand above `frame`'s top edge, in its own units, while they are up; 0 for a
+-- frame without them. The move engine keeps this much room above the window.
+function BagHeader.Room(frame)
+	local set = sets[frame]
+	return set and set.room or 0
 end
 
 -- The chosen and dimmed states again, after a saved window opens or closes or a snapshot lands.
@@ -200,6 +237,10 @@ function BagHeader.Sweep()
 			frame:HookScript("OnShow", function()
 				pcall(BagHeader.Update, frame)
 				ns.After(0, function() pcall(BagHeader.Update, frame) end)
+			end)
+			-- A window that changes width may fit the row differently.
+			frame:HookScript("OnSizeChanged", function()
+				if sets[frame] and frame:IsShown() then pcall(BagHeader.Update, frame) end
 			end)
 			if frame:IsShown() then pcall(BagHeader.Update, frame) end
 		end

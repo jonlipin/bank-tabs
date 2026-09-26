@@ -544,9 +544,27 @@ end
 -- ------------------------------------------------------------------
 
 -- w, h: the tab. gap: between two tabs. start: how far in from the window's left edge the row
--- starts, clear of the portrait. tuck: how much of the tab's foot hides behind the window's
+-- starts, clear of the portrait. right: what a row leaves free at the window's right hand end,
+-- for the corner and its close button. tuck: how much of the tab's foot hides behind the window's
 -- border. rowStep: how far a second row sits above the first.
-ns.TAB = { w = 43, h = 37, gap = 2, start = 64, tuck = 8, rowStep = 31 }
+ns.TAB = { w = 43, h = 37, gap = 2, start = 64, right = 20, tuck = 8, rowStep = 31 }
+
+-- How many tabs fit in one row along the top of `host`. The rest wrap into a row above rather
+-- than march past the right hand edge, where they would hang off the window (and off the screen,
+-- for a window pushed into a corner). Both kinds of tab wrap by this one rule.
+function ns.TabsPerRow(host)
+	local T = ns.TAB
+	local width = host and host.GetWidth and host:GetWidth() or 0
+	if type(width) ~= "number" or width <= 0 then width = 380 end
+	return math.max(1, math.floor((width - T.start - T.right) / (T.w + T.gap)))
+end
+
+-- How far the top of the highest of `rows` rows of tabs stands above the window's top edge.
+function ns.TabRowsHeight(rows)
+	local T = ns.TAB
+	if not rows or rows <= 0 then return 0 end
+	return (rows - 1) * T.rowStep + T.h - T.tuck
+end
 
 local TAB_ART = {
 	tab = "spellbook-Tab-Frame-C60",

@@ -35,7 +35,8 @@ brings everything Casement saved over to Bank Tabs, see "Coming from Casement" b
 - Three tabs above your backpack, Bank, Bags and Guild, open the saved windows. They are the same
   tabs as the character tabs, glow while their window is open, and are dimmed while there is
   nothing saved for them. They hang off the top of the backpack, clear of its title, close button
-  and portrait, and move with it.
+  and portrait, and move with it. On a backpack too narrow for all three in a row, the Guild tab
+  sits in a second row above, the way the character tabs wrap, and none hangs past its edge.
 - Every item tooltip says who has it and where: a line per character with the count in their bank
   and bags, the guild bank, and an account total. Your own bags are counted live. Switch it off,
   or have it only while holding a key, in the options.
@@ -56,7 +57,8 @@ brings everything Casement saved over to Bank Tabs, see "Coming from Casement" b
 - Every window is remembered per character, and the game putting a bag window back in its stack,
   or placing the bank as it opens, does not undo your placing.
 - No window can be dragged off screen. It is clamped while you drag it, when the position is
-  saved, and again if you change your resolution or UI scale.
+  saved, and again if you change your resolution or UI scale. The backpack is kept far enough
+  below the top of the screen for its tabs to stay in reach.
 
 **A minimap button**
 
@@ -96,9 +98,14 @@ Casement's saved files where Bank Tabs and Map Tab can read them.
 - Nothing you have already set in Bank Tabs is overwritten, and a snapshot taken since is never
   replaced by an older one. The world map's settings are left for Map Tab.
 - If the old Casement is still running next to Bank Tabs, it is switched off from your next login
-  and chat says so once.
+  and chat says so once. Until then it keeps the bag and bank windows, the backpack buttons, the
+  minimap button and the tooltip lines, so the two do not fight over them; after a `/reload` Bank
+  Tabs takes over.
+- If Casement's files cannot be read yet (the old Casement switched off, say), chat says why once
+  and Bank Tabs tries again at each login.
 - Once Bank Tabs and Map Tab have both loaded on every character you play, the Casement folder can
-  be deleted. `/banktabs debug` shows what was found and what came over.
+  be deleted. Each Bank Tabs update puts it back, which does no harm. `/banktabs debug` shows what
+  was found and what came over.
 
 ## Source and issues
 

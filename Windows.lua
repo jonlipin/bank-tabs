@@ -113,10 +113,19 @@ local function ClampXY(x, y, w, h)
 end
 Windows.ClampXY = ClampXY
 
+-- How far above a window's top edge something of ours hangs that has to stay on screen with it:
+-- the backpack's Bank, Bags and Guild tabs. In UIParent units; 0 for every other window.
+local function TopRoom(frame)
+	local room = ns.BagHeader and ns.BagHeader.Room and ns.BagHeader.Room(frame) or 0
+	if type(room) ~= "number" or room <= 0 then return 0 end
+	return room / Ratio(frame)
+end
+Windows.TopRoom = TopRoom
+
 local function Place(frame, x, y)
 	local _, _, w, h = Measure(frame)
 	if not w then w, h = frame:GetWidth() or 0, frame:GetHeight() or 0 end
-	x, y = ClampXY(x, y, w, h)
+	x, y = ClampXY(x, y, w, h + TopRoom(frame))
 	local ratio = Ratio(frame)
 	frame:ClearAllPoints()
 	frame:SetPoint("BOTTOMLEFT", UIParent, "BOTTOMLEFT", x * ratio, y * ratio)
@@ -150,7 +159,7 @@ local function Save(entry)
 	if not key then return end
 	local x, y, w, h = Measure(entry.frame)
 	if not x then return end
-	x, y = ClampXY(x, y, w, h)
+	x, y = ClampXY(x, y, w, h + TopRoom(entry.frame))
 	ns.db.positions[key] = { x = ns.Round(x, 1), y = ns.Round(y, 1) }
 	Place(entry.frame, x, y)
 	ns.MirrorToAccount()
@@ -429,8 +438,23 @@ end
 -- Applying the current settings
 -- ------------------------------------------------------------------
 
+-- The old, whole Casement still running beside this addon this session (Import sees it at login).
+-- It moves these same windows, and two engines on one window fight over it, so this one lets go
+-- of every window until the next session. Nothing the old one set is undone: no points or panel
+-- settings are put back; the grips and overlays are hidden and the hooks go quiet.
+local function StandAside(entry)
+	entry.active = false
+	if entry.grip then entry.grip:Hide() end
+	if entry.overlay then entry.overlay:Hide() end
+end
+
 function Windows.Apply()
 	if not ns.db then return end
+	if ns.oldCasementRunning then
+		for _, entry in ipairs(entries) do StandAside(entry) end
+		report["window engine"] = "standing aside: the old Casement moves these windows this session"
+		return
+	end
 	for _, entry in ipairs(entries) do
 		local option = OptionKey(entry)
 		local wanted = ns.db.enabled and option and ns.db.windows[option] and true or false

@@ -718,8 +718,7 @@ end
 local function LayoutCharTabs(W)
 	local list = VaultUI.Characters(W.kind)
 	local T = ns.TAB
-	local pitch = T.w + T.gap
-	local perRow = math.max(1, math.floor(((W.frame:GetWidth() or 380) - T.start - 20) / pitch))
+	local perRow = ns.TabsPerRow(W.frame)
 	for index, source in ipairs(list) do
 		local tab = W.charTabs[index] or NewCharTab(W, index)
 		tab.csWho, tab.csEntry = source.who, source.entry
@@ -1131,13 +1130,14 @@ local function Build(kind)
 
 	frame:SetScript("OnShow", function()
 		Refresh(W)
-		-- Placed when it opens, not when it merely comes back into view with the whole interface
-		-- (the interface hidden and shown again leaves the window itself open, and where it was).
+		-- Placed and put in front when it opens, not when it merely comes back into view with the
+		-- whole interface (the interface hidden and shown again, Alt-Z or a cinematic, leaves the
+		-- window itself open, where it was and where it stood among the others).
 		if not W.placed then
 			PlaceOnOpen(W)
 			W.placed = true
+			Front(W)
 		end
-		Front(W)
 		HeaderTabsChanged()
 	end)
 	frame:SetScript("OnHide", function(self)
@@ -1146,7 +1146,10 @@ local function Build(kind)
 			self:StopMovingOrSizing()
 			SavePosition(W)
 		end
-		if not self:IsShown() then W.placed = false end
+		-- Hidden only along with the whole interface, it is still open: it keeps its place in the
+		-- order Escape closes them in, and its tab stays chosen.
+		if self:IsShown() then return end
+		W.placed = false
 		Unlist(kind)
 		SyncEsc()
 		HeaderTabsChanged()
@@ -1177,6 +1180,8 @@ function VaultUI.Show(kind, character)
 		Front(W)
 		Refresh(W)
 	else
+		-- A real open, whatever happened while the interface was hidden: placed and put in front.
+		W.placed = false
 		W.frame:Show()
 	end
 	return W.frame

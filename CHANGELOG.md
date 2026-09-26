@@ -27,12 +27,17 @@ once. Each character's own window switches, drag key, window positions, minimap 
 and tooltip settings come over the first time that character logs in. Nothing already set in Bank
 Tabs is overwritten, and a snapshot taken since is never replaced by an older one. The world map's
 settings and the reveal's collected map data are left for Map Tab, which brings its own half over
-the same way. Once both addons have loaded on every character you play, the Casement folder can be
-deleted. `/banktabs debug` reports what was found and what came over.
+the same way. If Casement's files cannot be read yet (the old Casement switched off, say), chat
+says why once and Bank Tabs tries again at each login. Once both addons have loaded on every
+character you play, the Casement folder can be deleted; each Bank Tabs update puts it back, which
+does no harm. `/banktabs debug` reports what was found and what came over.
 
 **If the old Casement is still running** (for example Bank Tabs was unzipped next to Casement 1.2.3
 rather than over it), Bank Tabs still brings everything over, switches the old Casement off from
-your next login, and says so once in chat. Map Tab does the same, and only one of the two speaks.
+your next login, and says so once in chat. Until then the old Casement keeps the bag and bank
+windows, the backpack buttons, the minimap button and the tooltip lines, so the two do not fight
+over them; after a /reload Bank Tabs takes over. Map Tab does the same, and only one of the two
+speaks.
 
 **New names.** The commands are `/banktabs` and the short `/btabs`; `/casement` and `/cst` still
 work for old macros. The options are under Esc > Options > AddOns > Bank Tabs. The map commands
@@ -68,9 +73,11 @@ line asking you to visit a banker once.
 now tabs in exactly the style of the character tabs, built by the same code: the same size, the
 spellbook tab art with its chosen glow, the same clipped icon. They hang off the top edge of the
 backpack (the combined backpack, or the backpack's own window when bags are separate), clear of
-its title, close button and portrait, and move with it. Left to right: Bank, Bags, Guild. A tab
-glows while its saved window is open and is dimmed while there is nothing saved for it; clicking
-one opens that window, or closes it when it is in front. The option is now called "Tabs above the
+its title, close button and portrait, and move with it. On a backpack too narrow for all three in
+a row, the Guild tab sits in a second row above, the way the character tabs wrap. The backpack is
+kept far enough below the top of the screen for its tabs to stay in reach. Left to right: Bank,
+Bags, Guild. A tab glows while its saved window is open and is dimmed while there is nothing saved
+for it; clicking one opens that window, or closes it when it is in front. The option is now called "Tabs above the
 backpack".
 
 ## 1.2.3 - 2026-09-24

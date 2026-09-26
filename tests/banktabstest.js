@@ -134,6 +134,8 @@ local function obj(kind, template, name)
     if k == "SetMovable" then return function(s, v) s.movable = v end end
     if k == "IsMovable" then return function(s) return s.movable end end
     if k == "SetClampedToScreen" then return function(s, v) s.clamped = v end end
+    if k == "SetClampRectInsets" then return function(s, l, r, t, b) s.clampInsets = { l, r, t, b } end end
+    if k == "GetClampRectInsets" then return function(s) local c = s.clampInsets or { 0, 0, 0, 0 } return c[1], c[2], c[3], c[4] end end
     if k == "StartMoving" then return function(s) if not s.movable then error("frame is not movable") end s.moving = true MOVING = s end end
     if k == "StopMovingOrSizing" then return function(s) s.moving = false MOVING = nil end end
     if k == "SetAttribute" then return function(s, key, v) s.attributes = s.attributes or {} s.attributes[key] = v end end
@@ -1966,11 +1968,20 @@ check("the guild bank opens beside what is open, covering neither", Clear(ul, uw
 check("and moved neither", near(Rect(BankTabsBank), bl) and near(Rect(BankTabsBags), gl))
 check("a window never moved saves no place", ns.db.positions.savedBank == nil and ns.db.positions.savedBags == nil
   and ns.db.positions.savedGuild == nil)
--- The whole interface hidden and shown again (the game's Alt-Z): the windows stay open, and stay put.
+-- The whole interface hidden and shown again (the game's Alt-Z, or a cinematic): the windows stay
+-- open, stay put, and keep their order, so Escape still closes the one brought forward last. The
+-- game fires OnHide on each while it still counts as shown, then OnShow in an order of its own.
+ns.VaultUI.Show("bank")
+local orderBefore = table.concat(ns.VaultUI.Open(), ",")
 for _, f in ipairs({ BankTabsBank, BankTabsBags, BankTabsGuild }) do f.scripts.OnHide(f) end
+check("hidden with the interface they still count as open", table.concat(ns.VaultUI.Open(), ",") == orderBefore
+  and ns.VaultUI.IsShown("bank") and ns.VaultUI.IsShown("bags") and ns.VaultUI.IsShown("guild"), table.concat(ns.VaultUI.Open(), ","))
 for _, f in ipairs({ BankTabsGuild, BankTabsBags, BankTabsBank }) do f.scripts.OnShow(f) end
 check("coming back into view with the interface moves none of them", near(Rect(BankTabsBank), bl) and near(Rect(BankTabsBags), gl)
   and near(Rect(BankTabsGuild), ul), tostring(Rect(BankTabsGuild)))
+check("or changes their order: the bank, brought forward last, is still the one Escape closes first", orderBefore == "bags,guild,bank"
+  and table.concat(ns.VaultUI.Open(), ",") == orderBefore and Listed("BankTabsBank") == 1
+  and Listed("BankTabsBags") + Listed("BankTabsGuild") == 0, table.concat(ns.VaultUI.Open(), ","))
 
 DragWindow(BankTabsBags, 100, 900)
 local pos = ns.db.positions.savedBags
@@ -2176,7 +2187,66 @@ check("dragging the backpack carries them along at once", Hung(backpack, htabs) 
 check("and the drag strip still works with them up", near(ns.db.positions["bag0"].x, 700), ns.db.positions["bag0"].x)
 UpdateContainerFrameAnchors()
 check("the game re-stacking the bags leaves them on the backpack", Hung(backpack, htabs) and near(ns.Windows.Measure(bankTab), 700 + 64))
+
+-- Kept on screen with them: the tabs stand 29 above the backpack's top edge, so a backpack
+-- dragged to the top of the screen has to stop that far short of it, or they could not be reached.
+local function TabTop(tabs)
+  local top = -math.huge
+  for _, t in ipairs(tabs) do
+    local _, tb, _, th = ns.Windows.Measure(t)
+    if tb + th > top then top = tb + th end
+  end
+  return top
+end
+check("while the tabs are up, the game's own clamp on the backpack takes them in", backpack.clampInsets ~= nil
+  and backpack.clampInsets[3] == 29 and backpack.clampInsets[1] == 0, backpack.clampInsets and backpack.clampInsets[3])
+check("and the move engine keeps that room above it", near(ns.BagHeader.Room(backpack), 29) and near(ns.Windows.TopRoom(backpack), 29))
+DragTo(backpack, bagGrip, 500, 5000)
+check("dragged to the top of the screen, the backpack stops with its tabs still on screen", near(TabTop(htabs), SCREEN_H)
+  and Hung(backpack, htabs), TabTop(htabs) .. " / " .. SCREEN_H)
+check("and that is the place it saves", near(ns.db.positions["bag0"].y, SCREEN_H - 400 - 29), ns.db.positions["bag0"].y)
+UpdateContainerFrameAnchors()
+RunTimers(0.1)
+check("the game re-stacking the bags puts it back there, tabs on screen", near(TabTop(htabs), SCREEN_H), TabTop(htabs))
+ns.db.vault.bagButtons = false
+ns.Refresh()
+check("with the tabs switched off the clamp is as the game had it", backpack.clampInsets[3] == 0 and ns.BagHeader.Room(backpack) == 0)
+DragTo(backpack, bagGrip, 500, 5000)
+check("and the backpack itself can go right up to the top", near(select(2, ns.Windows.Measure(backpack)) + 400, SCREEN_H),
+  select(2, ns.Windows.Measure(backpack)))
+ns.db.vault.bagButtons = true
+ns.Refresh()
+check("switched back on, the tabs bring it back down far enough to show them", near(TabTop(htabs), SCREEN_H) and bankTab.shown,
+  TabTop(htabs))
+
+-- A backpack too narrow for the row (a separate backpack can be about 180 wide): the tabs wrap
+-- into a second row, by the rule the character tabs wrap by, rather than hang past its right edge.
+backpack:SetSize(178, 260)
+backpack.scripts.OnSizeChanged(backpack)
+RunTimers(0.1)
+local nl, nb, nw, nh = ns.Windows.Measure(backpack)
+local inside = true
+for _, t in ipairs(htabs) do
+  local tl, _, tw = ns.Windows.Measure(t)
+  if tl < nl - 0.5 or tl + tw > nl + nw + 0.5 then inside = false end
+end
+check("on a narrow backpack no tab hangs past either edge", inside and bankTab.shown and guildTab.shown)
+local function At(tab) local l, b = ns.Windows.Measure(tab) return l - nl, b - (nb + nh) end
+local bx, by = At(bankTab)
+local sx, sy = At(bagsTab)
+local gx, gy = At(guildTab)
+check("Bank and Bags share the first row, still clear of the portrait", near(bx, 64) and near(by, -8) and near(sx, 64 + 45) and near(sy, -8),
+  bx .. "," .. by .. " " .. sx .. "," .. sy)
+check("and Guild wraps into the row above, over the Bank tab", near(gx, 64) and near(gy, -8 + 31), gx .. "," .. gy)
+check("the clamp takes in both rows", backpack.clampInsets[3] == 60 and near(ns.BagHeader.Room(backpack), 60), backpack.clampInsets[3])
+check("the report says the window is narrow", (ns.report["backpack tabs"] or ""):find("in 2 rows", 1, true) ~= nil, ns.report["backpack tabs"])
+DragTo(backpack, bagGrip, 500, 5000)
+check("dragged to the top, both rows stay on screen", near(TabTop(htabs), SCREEN_H), TabTop(htabs))
+backpack:SetSize(340, 400)
+backpack.scripts.OnSizeChanged(backpack)
 DragTo(backpack, bagGrip, 500, 300)
+check("back at its width they are one row again", Hung(backpack, htabs) and backpack.clampInsets[3] == 29
+  and (ns.report["backpack tabs"] or ""):find("in one row", 1, true) ~= nil, ns.report["backpack tabs"])
 
 -- Bright while there is something to open, dimmed while there is not.
 check("all three are bright: a bank, another character's bags and a guild bank are saved", Alpha(bankTab) == 0.85
@@ -2251,17 +2321,26 @@ backpack:SetID(3)
 backpack:Hide()
 backpack:Show()
 check("a pooled frame showing some other bag hides them", not bankTab.shown and not guildTab.shown)
+check("and gives the frame its own clamp back", backpack.clampInsets[3] == 0 and ns.BagHeader.Room(backpack) == 0)
 backpack:SetID(0)
 backpack:Hide()
 backpack:Show()
 RunTimers(0.1)
-check("and they come back when it is the backpack again", bankTab.shown and Hung(backpack, htabs))
+check("and they come back when it is the backpack again", bankTab.shown and Hung(backpack, htabs) and backpack.clampInsets[3] == 29)
 
 -- The combined bag window is a backpack too; an ordinary bag is not.
 ContainerFrameCombinedBags:Show()
 RunTimers(0.1)
 local combined = HeaderTabs(ContainerFrameCombinedBags)
 check("the combined bag window gets the tabs too", #combined == 3 and combined[1].shown and Hung(ContainerFrameCombinedBags, combined))
+local combinedGrip
+for _, f in ipairs(FRAMES) do
+  if f.parent == ContainerFrameCombinedBags and f.dragButtons and f.h == 26 then combinedGrip = f end
+end
+DragTo(ContainerFrameCombinedBags, combinedGrip, 500, 5000)
+check("dragged to the top of the screen, the combined bag keeps its tabs on screen too", near(TabTop(combined), SCREEN_H)
+  and Hung(ContainerFrameCombinedBags, combined), TabTop(combined))
+ns.Windows.ResetGroup("combined")
 ContainerFrameCombinedBags:Hide()
 ContainerFrame2:Show()
 RunTimers(0.1)
@@ -2760,6 +2839,39 @@ check("nothing is said: the account's line was the first time", ChatWith("Caseme
 check("the report says it was this character only", (ns.report["casement import"] or ""):find("this character only", 1, true) ~= nil,
   ns.report["casement import"])
 `},
+{ name: 'A3: a character Casement never saw logs in later', code: String.raw`
+-- The account was imported on Vatik, and Bank Tabs' own account copy carries what the user has
+-- chosen in Bank Tabs since. Newbie was made after the split: Casement never ran on it, so it has
+-- no CasementDB, and the only Casement settings left are Casement's older account copy. Those may
+-- only fill in what is still at its default: the choices adopted from Bank Tabs stay.
+function UnitGUID() return "Player-70-0BEEF000" end
+function UnitName() return "Newbie" end
+ADDONS.Casement = { lod = true, enabled = true, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount() } }
+BankTabsAccountDB = { importedCasement = true, version = "2.0.0",
+  profile = { enabled = true, dragModifier = "shift", showGrips = false, importedCasement = true,
+    windows = { combined = true, bags = true, reagent = true, bank = true, guildbank = true },
+    minimap = { shown = false, angle = 250 },
+    tooltips = { enabled = true, guild = true, total = true, modifier = "none" },
+    positions = { bag0 = { x = 1, y = 1 } } },
+  vault = { chars = {}, guilds = {} } }
+BankTabsDB = nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+check("the new character adopts Bank Tabs' account copy", ns.report["db addon loaded"] == "adopted the account copy" and ns.dbFresh == true,
+  ns.report["db addon loaded"])
+fire("PLAYER_LOGIN")
+check("the data holder is loaded for this character", Called("LoadAddOn Casement") and CasementDB == nil)
+check("the choices adopted from Bank Tabs' account copy are kept", ns.db.dragModifier == "shift" and ns.db.minimap.shown == false
+  and ns.db.minimap.angle == 250,
+  tostring(ns.db.dragModifier) .. "/" .. tostring(ns.db.minimap.shown) .. "/" .. tostring(ns.db.minimap.angle))
+check("a setting still at its default takes Casement's account copy", ns.db.tooltips.modifier == "alt", ns.db.tooltips.modifier)
+check("no window positions come from an account copy", next(ns.db.positions) == nil)
+check("the report counts the one setting, for this character only", (ns.report["casement import"] or ""):find(", 1 setting (this character only", 1, true) ~= nil,
+  ns.report["casement import"])
+check("this character is flagged", BankTabsDB.importedCasement == true)
+check("and nothing is said", ChatWith("Casement") == 0, ChatLine("Casement"))
+`},
 { name: 'B: the old Casement is still running', code: String.raw`
 -- Bank Tabs was installed by hand next to Casement 1.2.3, which still loads. The game loads addons
 -- in name order, so Casement's saved variables and event frame arrive after Bank Tabs has loaded.
@@ -2784,12 +2896,61 @@ local line = ChatLine("replace Casement") or ""
 check("naming both new addons and what each does", line:find("Bank Tabs", 1, true) and line:find("Map Tab", 1, true)
   and line:find("world map", 1, true), line)
 check("and that it is off from the next login", line:find("switched off from your next login", 1, true), line)
+check("and that until then it keeps the windows, Bank Tabs taking over after a reload", line:find("Until then it keeps the bag and bank windows", 1, true)
+  and line:find("takes over after the reload", 1, true), line)
+check("with Map Tab not installed, it says Map Tab is a separate download", line:find("Map Tab is a separate download", 1, true), line)
 check("the import line leaves Map Tab to that notice", ChatWith("brought over what Casement saved") == 1 and ChatWith("Map Tab") == 1)
 check("Map Tab can see it has been said", CASEMENT_REPLACED_NOTICE == "BankTabs")
-check("the report records it", ns.report["old casement"] == "was running, switched off from the next session", ns.report["old casement"])
+check("the report records it", (ns.report["old casement"] or ""):find("^was running, switched off from the next session; Bank Tabs leaves") ~= nil
+  and (ns.report["old casement"] or ""):find("separate download", 1, true) ~= nil, ns.report["old casement"])
+
+-- For the rest of this session the old addon keeps its windows: two engines on one window fight.
+local bankEntry = ns.Windows.Entry(BankFrame)
+local bankGrip
+for _, f in ipairs(FRAMES) do if f.parent == BankFrame and f.dragButtons and f.h == 26 then bankGrip = f end end
+check("Bank Tabs lets go of the bag and bank windows until the next session", ns.oldCasementRunning == true and bankEntry ~= nil
+  and bankEntry.active == false and (ns.report["window engine"] or ""):find("^standing aside") ~= nil, ns.report["window engine"])
+check("its drag strip on the bank is put away", bankGrip ~= nil and bankGrip.shown == false)
+check("without undoing what the old addon set on the bank", BankFrame.attributes and BankFrame.attributes["UIPanelLayout-enabled"] == false)
+BankFrame:Show()
+RunTimers(0.1)
+check("a bank opened now is not grabbed again", bankEntry.active == false and bankGrip.shown == false)
+BankFrame:Hide()
+ContainerFrame1:Show()
+RunTimers(0.1)
+local tabs = ns.BagHeader.Tabs(ContainerFrame1)
+check("the backpack tabs wait for the next session", tabs == nil or not tabs.bank.shown)
+check("so does the minimap button", BankTabsMinimapButton == nil or BankTabsMinimapButton.shown == false)
+GameTooltip:SetOwner(nil)
+GameTooltip.csTooltipStamp = nil
+GameTooltip.csItemName, GameTooltip.csItemLink = "Linen Cloth", nil
+TOOLTIP_CALLBACKS[0](GameTooltip, { id = 2589 })
+check("and the item tooltip lines", #GameTooltip.csLines == 0, #GameTooltip.csLines)
+check("the saved windows still open", ns.VaultUI.Show("bank") ~= nil and ns.VaultUI.IsShown("bank"))
+ns.VaultUI.Hide("bank")
+ContainerFrame1:Hide()
+
 fire("PLAYER_LOGIN")
 check("it is not said twice", ChatWith("replace Casement") == 1 and CountCalls("DisableAddOn Casement") == 1)
+check("after a /reload with the old code still loaded, Bank Tabs still stands aside", ns.oldCasementRunning == true and bankEntry.active == false)
 check("Casement's own tables are left as they were", CasementAccountDB.vault.chars[VATIK] ~= nil and CasementDB.dragModifier == "shift")
+`},
+{ name: 'B4: the old Casement is running, and Map Tab is installed', code: String.raw`
+-- As B, with Map Tab installed as well but reaching PLAYER_LOGIN after Bank Tabs. Bank Tabs
+-- speaks, and does not send the user off to download what they already have.
+ADDONS.Casement = { lod = false, enabled = true, loaded = true, title = "Casement" }
+ADDONS.MapTab = { lod = false, enabled = true, loaded = true, title = "Map Tab" }
+BankTabsDB, BankTabsAccountDB = nil, nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+CasementAccountDB = OldCasementAccount()
+CasementDB = OldCasementChar()
+CreateFrame("Frame", "CasementFrame", UIParent)
+fire("PLAYER_LOGIN")
+local line = ChatLine("replace Casement") or ""
+check("Bank Tabs tells the user", line ~= "" and line:find("takes over after the reload", 1, true) ~= nil, line)
+check("without calling Map Tab a separate download", line:find("separate download", 1, true) == nil, line)
+check("nor does the report", (ns.report["old casement"] or ""):find("separate download", 1, true) == nil, ns.report["old casement"])
 `},
 { name: 'B2: Map Tab told the user first', code: String.raw`
 -- Both new addons are installed next to the old Casement. Map Tab reached PLAYER_LOGIN first: it
@@ -2806,7 +2967,10 @@ ADDONS.Casement.enabled = false
 fire("PLAYER_LOGIN")
 check("Bank Tabs does not say it again", ChatWith("replace Casement") == 0)
 check("or switch it off a second time", not Called("DisableAddOn Casement"))
-check("the report says it was already done", ns.report["old casement"] == "running this session, already switched off for the next", ns.report["old casement"])
+check("the report says it was already done", (ns.report["old casement"] or ""):find("^running this session, already switched off for the next; Bank Tabs leaves") ~= nil,
+  ns.report["old casement"])
+check("and Bank Tabs still leaves the windows to the old addon this session", ns.oldCasementRunning == true
+  and ns.Windows.Entry(BankFrame) and ns.Windows.Entry(BankFrame).active == false)
 check("its own half is still brought over", ns.vault.chars[CHOHAM_GUID] ~= nil and BankTabsAccountDB.importedCasement == true)
 check("and the import line names Map Tab, since Bank Tabs did not", ChatWith("brought over what Casement saved") == 1 and ChatWith("Map Tab") == 1)
 `},
@@ -2869,6 +3033,29 @@ check("and then read", ADDONS.Casement.loaded == true and ns.vault.chars[CHOHAM_
 check("the report says why it was switched on", ns.report["casement data holder"] == "switched back on to be read", ns.report["casement data holder"])
 check("everything is flagged", BankTabsAccountDB.importedCasement == true and BankTabsDB.importedCasement == true)
 `},
+{ name: 'E2: the data holder switched off after the saved banks came over', code: String.raw`
+-- The account was imported on Vatik, with the data holder switched on. Since then the user has
+-- switched "Casement (old data)" off in the AddOns list. Choham logs in for the first time: only
+-- its window settings are left to bring over, which is no reason to switch the holder back on for
+-- every character behind the user's back.
+function UnitGUID() return CHOHAM_GUID end
+function UnitName() return "Choham" end
+ADDONS.Casement = { lod = true, enabled = false, loaded = false, title = "Casement (old data)",
+  saved = { CasementAccountDB = OldCasementAccount(), CasementDB = OldCasementChar() } }
+BankTabsAccountDB = { importedCasement = true, version = "2.0.0", vault = { chars = {}, guilds = {} } }
+BankTabsDB = nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+fire("PLAYER_LOGIN")
+check("the holder is not switched back on", not Called("EnableAddOn Casement") and ADDONS.Casement.enabled == false)
+check("or loaded", not Called("LoadAddOn Casement") and CasementDB == nil)
+check("nothing is said, at either login", ChatWith("Casement") == 0, ChatLine("Casement"))
+check("the character's question is left open, for if the user switches it on again", BankTabsDB.importedCasement == nil)
+check("the report says why", (ns.report["casement import"] or ""):find("^not done: the data holder is switched off") ~= nil, ns.report["casement import"])
+check("the user is not marked as told", BankTabsAccountDB.casementUnreadableTold == nil)
+check("the run says how it ended", ns.Import.lastRun == "not open", ns.Import.lastRun)
+`},
 { name: 'F: the old Casement is installed but switched off', code: String.raw`
 -- The old addon itself (not the data holder) is there but switched off. Its files could only be
 -- opened by running its code, so Bank Tabs asks the user rather than loading it, and tries again
@@ -2883,6 +3070,37 @@ check("the user is asked to switch it on for one login", ChatWith("switched off"
 check("nothing is flagged, so the next login tries again", BankTabsAccountDB.importedCasement == nil and BankTabsDB.importedCasement == nil)
 check("the report says why", ns.report["casement import"] == "not done: the old Casement is switched off", ns.report["casement import"])
 check("the run says how it ended", ns.Import.lastRun == "not open", ns.Import.lastRun)
+check("the account remembers the user was told", BankTabsAccountDB.casementUnreadableTold == true)
+fire("PLAYER_LOGIN")
+fire("PLAYER_LOGIN")
+check("later logins try again without a word", ChatWith("for one login") == 1 and ChatWith("Casement") == 1, ChatWith("Casement"))
+check("the report still gives the reason at each", (ns.report["casement import"] or ""):find("^not done: the old Casement is switched off")
+  and (ns.report["casement import"] or ""):find("told at an earlier login", 1, true), ns.report["casement import"])
+check("and nothing is flagged yet", BankTabsAccountDB.importedCasement == nil and BankTabsDB.importedCasement == nil)
+`},
+{ name: 'F2: another character after Bank Tabs switched the old Casement off', code: String.raw`
+-- Case B happened on Vatik: everything came over and Bank Tabs switched the old Casement off, but
+-- its old code is still in the Casement folder. Choham logs in for the first time since, and again,
+-- and again. The user hears once why Choham's own Casement settings cannot be read, not every time.
+function UnitGUID() return CHOHAM_GUID end
+function UnitName() return "Choham" end
+ADDONS.Casement = { lod = false, enabled = false, loaded = false, title = "Casement" }
+BankTabsAccountDB = { importedCasement = true, version = "2.0.0", profile = { importedCasement = true },
+  vault = { chars = {}, guilds = {} } }
+BankTabsDB = nil
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+check("the first login says why, once", ChatWith("for one login") == 1, ChatLine("Casement"))
+fire("PLAYER_LOGIN")
+fire("PLAYER_LOGIN")
+check("three logins, still one line", ChatWith("Casement") == 1, ChatWith("Casement"))
+check("the old code is never loaded or switched on", not Called("LoadAddOn Casement") and not Called("EnableAddOn Casement"))
+check("this character's question stays open", BankTabsDB.importedCasement == nil and BankTabsAccountDB.casementUnreadableTold == true)
+check("the report gives the reason every time", (ns.report["casement import"] or ""):find("told at an earlier login", 1, true) ~= nil,
+  ns.report["casement import"])
+check("the old code is not running, so Bank Tabs has the windows", ns.oldCasementRunning == nil and ns.Windows.Entry(BankFrame) ~= nil
+  and ns.Windows.Entry(BankFrame).active == true)
 `},
 { name: 'G: settings already chosen in Bank Tabs are kept', code: String.raw`
 -- An earlier login could not import (the data holder would not load), and the user has changed a
@@ -2931,6 +3149,10 @@ check("it was tried", Called("LoadAddOn Casement"))
 check("nothing is flagged", BankTabsAccountDB.importedCasement == nil and BankTabsDB.importedCasement == nil)
 check("the user hears why", ChatWith("could not open what Casement saved") == 1 and ChatWith("INTERFACE_VERSION") == 1, ChatLine("Casement"))
 check("the report records the game's reason", (ns.report["casement import"] or ""):find("INTERFACE_VERSION", 1, true) ~= nil, ns.report["casement import"])
+fire("PLAYER_LOGIN")
+check("the next login tries again", CountCalls("LoadAddOn Casement") == 2, CountCalls("LoadAddOn Casement"))
+check("without saying it a second time", ChatWith("could not open what Casement saved") == 1, ChatWith("could not open what Casement saved"))
+check("while the report still says why", (ns.report["casement import"] or ""):find("INTERFACE_VERSION", 1, true) ~= nil, ns.report["casement import"])
 `},
 ];
 
@@ -3041,6 +3263,10 @@ const parts = [];
       && field(holder, 'SavedVariablesPerCharacter') === 'CasementDB');
     check('it runs no code', codeLines(holder).length === 0, codeLines(holder).join(','));
     check('its notes say what it is and that it can go', /old/i.test(field(holder, 'Notes') || '') && /delete/i.test(field(holder, 'Notes') || ''), field(holder, 'Notes'));
+    // Deleted after the first character, it would take every other character's Casement settings
+    // with it, so the AddOns list says what the docs say.
+    check('but only once both addons have loaded on every character', /Bank Tabs and Map Tab have loaded on every character you play/.test(field(holder, 'Notes') || ''),
+      field(holder, 'Notes'));
 
     const pkg = read('.pkgmeta');
     check('the package is BankTabs', /^package-as: BankTabs\s*$/m.test(pkg));

@@ -133,6 +133,8 @@ local MODIFIERS = {
 local function Wanted()
 	local db = ns.db and ns.db.tooltips
 	if not (db and db.enabled) then return false end
+	-- An old Casement still running this session writes the same lines from the same data.
+	if ns.oldCasementRunning then return false end
 	local check = MODIFIERS[db.modifier or "none"] or MODIFIERS.none
 	local ok, down = pcall(check)
 	return ok and down and true or false

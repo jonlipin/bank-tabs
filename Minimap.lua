@@ -147,14 +147,17 @@ end
 
 function Minimap_.Apply()
 	if not Minimap or not ns.db then return end
+	-- An old Casement still running this session has its own button, at the same angle once the
+	-- import has brought that over, so this one waits for the next session.
+	local wanted = ns.db.minimap.shown and not ns.oldCasementRunning
 	if not button then
 		-- Nothing is built until it is actually wanted, so turning it off costs nothing.
-		if not ns.db.minimap.shown then return end
+		if not wanted then return end
 		local ok, err = pcall(Build)
 		report["minimap button"] = ok and "ok" or ("failed: " .. tostring(err))
 		if not ok then return end
 	end
-	button:SetShown(ns.db.minimap.shown)
+	button:SetShown(wanted and true or false)
 	Place()
 end
 
