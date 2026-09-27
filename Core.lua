@@ -548,7 +548,10 @@ end
 -- for the corner and its close button. tuck: how much of the tab's foot hides behind the window's
 -- border. rowStep: how far a second row sits above the first.
 -- icon, iconTop: the icon's size and how far down it starts (the dark plate behind it matches).
-ns.TAB = { w = 43, h = 37, gap = 2, start = 64, right = 20, tuck = 8, rowStep = 31, icon = 36, iconTop = 2 }
+-- iconTop is 4 because the frame art's top border sits about 3.7 pixels down: from 2, the icon and
+-- its plate showed as a dark strip above the frame (the user's screenshot). The icon's lower edge
+-- runs under the window's border, where the tab's foot is tucked.
+ns.TAB = { w = 43, h = 37, gap = 2, start = 64, right = 20, tuck = 8, rowStep = 31, icon = 36, iconTop = 4 }
 
 -- How many tabs fit in one row along the top of `host`. The rest wrap into a row above rather
 -- than march past the right hand edge, where they would hang off the window (and off the screen,

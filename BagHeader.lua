@@ -27,15 +27,17 @@ ns.BagHeader = BagHeader
 local sets = {}   -- frame -> { list = { tab, tab, tab }, byKey = { bank = tab, ... } }
 local hooked = {}
 
--- Left to right. Each tries the game's own atlas first and falls back to an icon file that every
--- client carries; the bag icon is the one the game's own bag button uses. The fallback lists
--- never share a file, so the three stay telling apart even with no atlas.
+-- Left to right. Full colour item icons that every client carries, so the three tabs read alike:
+-- the game's "Banker" and "GuildBanker" map symbols have see-through parts, and the dark plate
+-- behind showed through them, which made the Bank tab look darker than the others (the user's
+-- screenshot). The bag icon is the one the game's own bag button uses. The lists never share a
+-- file, so the three stay telling apart.
 local TABS = {
-	{ key = "bank", label = "Saved bank", atlas = "Banker",
+	{ key = "bank", label = "Saved bank",
 		icons = { "Interface\\Icons\\INV_Misc_Coin_01", "Interface\\Icons\\INV_Misc_Coin_02" } },
 	{ key = "bags", label = "Saved bags",
 		icons = { "Interface\\Icons\\INV_Misc_Bag_08", "Interface\\Icons\\INV_Misc_Bag_10" } },
-	{ key = "guild", label = "Saved guild bank", atlas = "GuildBanker",
+	{ key = "guild", label = "Saved guild bank",
 		icons = { "Interface\\Icons\\INV_Box_01", "Interface\\Icons\\INV_Crate_01" } },
 }
 

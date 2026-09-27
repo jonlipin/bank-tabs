@@ -134,12 +134,21 @@ local function LiveClass()
 end
 
 -- Paints a class icon into a texture: the character creation sheet where the client has it, the
--- single icon files otherwise, a bag as a last resort.
-local function SetClassIcon(texture, token)
+-- single icon files otherwise, a bag as a last resort. With `crop`, a tab's icon is cut 7 percent
+-- in from each edge of its cell, as item icons are: the sheet draws a bevelled frame round every
+-- icon, which showed as a second border inside the tab's own frame (the user saw two layers of
+-- border on the saved bank's character tabs). The round portrait keeps the whole cell.
+local CLASS_CROP = 0.07
+local function SetClassIcon(texture, token, crop)
 	local coords = token and _G.CLASS_ICON_TCOORDS and _G.CLASS_ICON_TCOORDS[token]
 	if coords and ns.TextureExists(CLASS_SHEET) then
 		texture:SetTexture(CLASS_SHEET)
-		texture:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+		if crop then
+			local w, h = (coords[2] - coords[1]) * CLASS_CROP, (coords[4] - coords[3]) * CLASS_CROP
+			texture:SetTexCoord(coords[1] + w, coords[2] - w, coords[3] + h, coords[4] - h)
+		else
+			texture:SetTexCoord(coords[1], coords[2], coords[3], coords[4])
+		end
 		return
 	end
 	texture:SetTexCoord(0.07, 0.93, 0.07, 0.93)
@@ -738,7 +747,7 @@ local function LayoutCharTabs(W)
 		local tab = W.charTabs[index] or NewCharTab(W, index)
 		tab.csWho, tab.csEntry = source.who, source.entry
 		ns.HangTab(tab, W.frame, (index - 1) % perRow, math.floor((index - 1) / perRow))
-		SetClassIcon(tab.icon, source.entry and source.entry.class)
+		SetClassIcon(tab.icon, source.entry and source.entry.class, true)
 		tab:SetChosen(source.who == W.current)
 		tab:Show()
 	end

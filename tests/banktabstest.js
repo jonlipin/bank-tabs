@@ -1862,10 +1862,14 @@ check("the first is this character", ctabs[1] and ctabs[1].csWho == me, ctabs[1]
 check("and is the chosen one", ctabs[1] and ctabs[1].icon:GetAlpha() == 1 and ctabs[2].icon:GetAlpha() == 0.85)
 check("the second is the other character, by name", ctabs[2] ~= nil and ctabs[2].csWho == CHOHAM and ctabs[3] ~= nil and ctabs[3].csWho == "Oldtoon - Voidpact")
 check("the tabs sit one level under the window", ctabs[1] and ctabs[1].level == math.max(0, vault.level - 1))
-check("the class icon comes from the class sheet with that class's coordinates", ctabs[1] and ctabs[1].icon.texture == CLASS_SHEET
-  and ctabs[1].icon.texCoord and ctabs[1].icon.texCoord[1] == 0.5 and ctabs[1].icon.texCoord[2] == 0.75
-  and ctabs[1].icon.texCoord[3] == 0.25 and ctabs[1].icon.texCoord[4] == 0.5)
-check("the warrior gets the warrior's corner of the sheet", ctabs[2] and ctabs[2].icon.texture == CLASS_SHEET and ctabs[2].icon.texCoord[2] == 0.25)
+check("the class icon comes from the class sheet with that class's cell, cropped 7 percent in from each edge", ctabs[1] and ctabs[1].icon.texture == CLASS_SHEET
+  and ctabs[1].icon.texCoord and near(ctabs[1].icon.texCoord[1], 0.5 + 0.0175, 0.0001) and near(ctabs[1].icon.texCoord[2], 0.75 - 0.0175, 0.0001)
+  and near(ctabs[1].icon.texCoord[3], 0.25 + 0.0175, 0.0001) and near(ctabs[1].icon.texCoord[4], 0.5 - 0.0175, 0.0001),
+  ctabs[1] and ctabs[1].icon.texCoord and table.concat(ctabs[1].icon.texCoord, ","))
+-- The sheet draws a bevelled frame round each icon, which showed as a second border inside the
+-- tab's frame (the user saw two layers of border). The crop cuts it off; the portrait keeps it.
+check("so the sheet's own frame round the icon is cut off", ctabs[1] and ctabs[1].icon.texCoord and ctabs[1].icon.texCoord[1] > 0.5 and ctabs[1].icon.texCoord[2] < 0.75)
+check("the warrior gets the warrior's corner of the sheet", ctabs[2] and ctabs[2].icon.texture == CLASS_SHEET and near(ctabs[2].icon.texCoord[2], 0.25 - 0.0175, 0.0001))
 check("a class the sheet does not know falls back to a plain icon", ctabs[3] ~= nil and ctabs[3].icon.texture ~= CLASS_SHEET
   and (ctabs[3].icon.texture or ""):find("Interface") ~= nil, ctabs[3] and ctabs[3].icon.texture)
 if BARE then
@@ -2146,7 +2150,7 @@ check("under this character's name", vault.csTitle.text == "Vatik's Bank", vault
 ns.vault.chars[me] = nil
 ns.VaultUI.Refresh()
 check("a character with nothing saved at all still gets its tab, its class read live", CharTabs()[1] and CharTabs()[1].csWho == me
-  and CharTabs()[1].icon.texture == CLASS_SHEET and CharTabs()[1].icon.texCoord[2] == 0.75)
+  and CharTabs()[1].icon.texture == CLASS_SHEET and near(CharTabs()[1].icon.texCoord[2], 0.75 - 0.0175, 0.0001))
 check("and its name read live for the title", vault.csTitle.text == "Vatik's Bank", vault.csTitle.text)
 ns.vault.chars[me] = myEntry
 myEntry.bank = myBank
@@ -2292,7 +2296,7 @@ for _, t in ipairs(htabs) do
 end
 check("they come from the character tabs' builder, at the spellbook's 43 by 37", same)
 check("with the icon in the same place, at the same size", bankTab.icon.w == 36 and bankTab.icon.h == 36
-  and bankTab.icon.points[1] and bankTab.icon.points[1][1] == "TOP" and bankTab.icon.points[1][5] == -2)
+  and bankTab.icon.points[1] and bankTab.icon.points[1][1] == "TOP" and bankTab.icon.points[1][5] == -4)
 -- The user saw the dark plate first stop short of the frame's window (inset 4 across, 3 down),
 -- then stick out past the frame art (1 pixel in; the art sits about 2.5 pixels inside the tab).
 -- The plate now has exactly the icon's size, place and mask, on both kinds of tab, so it can only
@@ -2314,8 +2318,14 @@ else
     and bankTab.glow ~= nil, bankTab.frameTex and bankTab.frameTex.atlas)
   check("with the icon clipped by the same mask", bankTab.icon.csMask ~= nil and bankTab.icon.csMask.atlas == "UI-HUD-ActionBar-IconFrame-Mask")
 end
-check("the icons found their art", (ns.report["backpack tab icon bank"] or ""):find("atlas") or (ns.report["backpack tab icon bank"] or ""):find("Interface"),
-  ns.report["backpack tab icon bank"])
+check("the icons found their art", (ns.report["backpack tab icon bank"] or ""):find("Interface") ~= nil, ns.report["backpack tab icon bank"])
+-- The map symbols ("Banker", "GuildBanker") have see-through parts, and the dark plate showed
+-- through them, so the Bank tab looked darker than the others. All three are full colour item icons.
+check("all three backpack tabs use full colour item icons, not the see-through map symbols",
+  (ns.report["backpack tab icon bank"] or ""):find("^Interface.Icons.") ~= nil
+  and (ns.report["backpack tab icon bags"] or ""):find("^Interface.Icons.") ~= nil
+  and (ns.report["backpack tab icon guild"] or ""):find("^Interface.Icons.") ~= nil,
+  tostring(ns.report["backpack tab icon bank"]) .. " / " .. tostring(ns.report["backpack tab icon guild"]))
 
 -- Hanging off the top edge, clear of the portrait, their feet behind the border.
 local function Hung(frame, tabs)
