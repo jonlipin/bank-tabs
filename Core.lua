@@ -547,9 +547,8 @@ end
 -- starts, clear of the portrait. right: what a row leaves free at the window's right hand end,
 -- for the corner and its close button. tuck: how much of the tab's foot hides behind the window's
 -- border. rowStep: how far a second row sits above the first.
--- plate: how far the dark plate behind the icon sits in from the tab's edges. icon, iconTop: the
--- icon's size and how far down it starts.
-ns.TAB = { w = 43, h = 37, gap = 2, start = 64, right = 20, tuck = 8, rowStep = 31, plate = 1, icon = 36, iconTop = 2 }
+-- icon, iconTop: the icon's size and how far down it starts (the dark plate behind it matches).
+ns.TAB = { w = 43, h = 37, gap = 2, start = 64, right = 20, tuck = 8, rowStep = 31, icon = 36, iconTop = 2 }
 
 -- How many tabs fit in one row along the top of `host`. The rest wrap into a row above rather
 -- than march past the right hand edge, where they would hang off the window (and off the screen,
@@ -637,15 +636,15 @@ function ns.CreateTab(host)
 	tab:SetSize(T.w, T.h)
 	tab:SetFrameLevel(math.max(0, (host:GetFrameLevel() or 1) - 1))
 
-	-- The dark plate and the icon both run under the frame art's edges, so no gap is left inside
-	-- the frame's window: the plate 1 pixel in from every edge but the foot, the icon 36 pixels
-	-- square from 2 down. (Inset 4 across and 3 down, as the spellbook's own numbers have it, the
-	-- plate stopped short of the frame's window and the world showed round it; the user saw that
-	-- on the backpack's tabs.) Both are clipped to the tab's shape, so the rounded top corners
-	-- stay clean.
+	-- The icon is 36 pixels square from 2 down, so its edges run under the frame art's border and
+	-- no gap is left inside the frame's window. The dark plate behind it has exactly the icon's
+	-- size, place and mask, so it only shows through an icon with see-through parts and never past
+	-- the frame. (Inset 4 across and 3 down, as the spellbook's own numbers have it, the plate and
+	-- icon stopped short of the frame's window; 1 pixel in, the plate stuck out past the frame art,
+	-- which sits about 2.5 pixels inside the tab's box. The user saw both on the backpack's tabs.)
 	local back = tab:CreateTexture(nil, "BACKGROUND")
-	back:SetPoint("TOPLEFT", T.plate, -T.plate)
-	back:SetPoint("BOTTOMRIGHT", -T.plate, 0)
+	back:SetPoint("TOP", 0, -T.iconTop)
+	back:SetSize(T.icon, T.icon)
 	back:SetColorTexture(0.02, 0.02, 0.02, 1)
 	tab.plate = back
 
@@ -655,15 +654,7 @@ function ns.CreateTab(host)
 	tab.icon = icon
 
 	local masked = MaskTabTexture(tab, icon, T.icon)
-	MaskTabTexture(tab, back, nil)
-	if back.csMask then
-		-- Sized from the plate's own box, which is known before layout: the tab less the plate's
-		-- inset.
-		local w, h = T.w - 2 * T.plate, T.h - T.plate
-		back.csMask:ClearAllPoints()
-		back.csMask:SetPoint("TOPLEFT", back, "TOPLEFT", -MASK_OVER * w, MASK_OVER * h)
-		back.csMask:SetPoint("BOTTOMRIGHT", back, "BOTTOMRIGHT", MASK_OVER * w, -MASK_OVER * h)
-	end
+	MaskTabTexture(tab, back, T.icon)
 	report["tab mask"] = masked and TAB_MASK or "none (the icon keeps its corners)"
 
 	local art = TabArt()

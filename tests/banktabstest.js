@@ -1831,8 +1831,8 @@ else
   check("drawn a quarter larger than the icon on every side", tabMask and tabMask.points[1] and near(tabMask.points[1][4], -0.26 * 36, 0.01)
     and near(tabMask.points[1][5], 0.26 * 36, 0.01) and tabMask.points[1][2] == ctabs[1].icon)
   local plateMask = ctabs[1].plate and ctabs[1].plate.csMask
-  check("the dark plate wears the mask too, sized from the plate's own box", plateMask ~= nil and plateMask.points[1]
-    and near(plateMask.points[1][4], -0.26 * 41, 0.01) and near(plateMask.points[1][5], 0.26 * 36, 0.01) and plateMask.points[1][2] == ctabs[1].plate,
+  check("the dark plate wears the same mask as the icon, at the icon's size", plateMask ~= nil and plateMask.points[1]
+    and near(plateMask.points[1][4], -0.26 * 36, 0.01) and near(plateMask.points[1][5], 0.26 * 36, 0.01) and plateMask.points[1][2] == ctabs[1].plate,
     plateMask and plateMask.points[1] and (plateMask.points[1][4] .. "," .. plateMask.points[1][5]))
   check("the report names the mask", ns.report["tab mask"] == "UI-HUD-ActionBar-IconFrame-Mask", ns.report["tab mask"])
 end
@@ -2234,21 +2234,20 @@ end
 check("they come from the character tabs' builder, at the spellbook's 43 by 37", same)
 check("with the icon in the same place, at the same size", bankTab.icon.w == 36 and bankTab.icon.h == 36
   and bankTab.icon.points[1] and bankTab.icon.points[1][1] == "TOP" and bankTab.icon.points[1][5] == -2)
--- The user saw the dark plate stop short of the frame's window on the backpack's tabs, with the
--- world showing round it. It now runs to 1 pixel in from every edge but the foot, under the frame
--- art's own edges, on both kinds of tab.
-local function PlateFills(t)
-  local p = t.plate and t.plate.points
-  if not p then return false end
-  local tl, br
-  for _, pt in ipairs(p) do
-    if pt[1] == "TOPLEFT" then tl = pt elseif pt[1] == "BOTTOMRIGHT" then br = pt end
-  end
-  return tl and br and tl[4] == 1 and tl[5] == -1 and br[4] == -1 and br[5] == 0
+-- The user saw the dark plate first stop short of the frame's window (inset 4 across, 3 down),
+-- then stick out past the frame art (1 pixel in; the art sits about 2.5 pixels inside the tab).
+-- The plate now has exactly the icon's size, place and mask, on both kinds of tab, so it can only
+-- show through an icon's see-through parts and never past the frame.
+local function PlateMatchesIcon(t)
+  local p, i = t.plate, t.icon
+  if not (p and i and p.points and i.points and p.points[1] and i.points[1]) then return false end
+  return #p.points == 1 and p.w == i.w and p.h == i.h and p.points[1][1] == i.points[1][1]
+    and p.points[1][4] == i.points[1][4] and p.points[1][5] == i.points[1][5]
 end
-check("the backpack tab's dark plate fills the frame's window, 1 pixel in", PlateFills(bankTab))
-check("and so does a character tab's", ctabs and ctabs[1] and PlateFills(ctabs[1]))
-check("the icon is wider than the old plate, so its edges run under the frame art", bankTab.icon.w > 43 - 8)
+check("the backpack tab's dark plate has exactly the icon's size and place", PlateMatchesIcon(bankTab))
+check("and so does a character tab's", ctabs and ctabs[1] and PlateMatchesIcon(ctabs[1]))
+check("the plate is no wider than the icon, so it stays inside the frame art", bankTab.plate.w <= bankTab.icon.w and bankTab.plate.w <= 43 - 5)
+check("the icon is wider than the old 33, so its edges run under the frame art", bankTab.icon.w > 43 - 8)
 if BARE then
   check("with no spellbook atlas they go without it, as the character tabs do", bankTab.frameTex == nil and bankTab.glow == nil)
 else
