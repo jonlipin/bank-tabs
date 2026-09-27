@@ -593,6 +593,29 @@ function Vault.SnapshotBags(reason)
 
 	local who = ns.Who()
 	local entry = Vault.CharRecord(who, true)
+	local previous = entry.bags
+
+	-- A read with no backpack is the game having emptied its bag information, which this client
+	-- does by the time PLAYER_LOGOUT fires: every character's bags, and with them its gold, were
+	-- being saved as empty on the way out, over the good copy taken in play. A live backpack always
+	-- has slots, so such a read never replaces what was saved. Nor does a logout read with fewer
+	-- bag slots than the last snapshot (no bag can be swapped while logging out), and a logout read
+	-- of no gold keeps the gold last seen.
+	local refuse
+	if NumSlots(0) == 0 then
+		refuse = "the game reported no backpack"
+	elseif reason == "logout" and previous and (previous.slots or 0) > (record.slots or 0) then
+		refuse = "fewer bag slots than the last snapshot"
+	end
+	if refuse then
+		report["bags scan"] = (previous and ("kept the " .. tostring(previous.reason or "earlier") .. " snapshot") or "nothing saved")
+			.. " (" .. refuse .. ", " .. tostring(reason) .. ")"
+		return previous
+	end
+	if reason == "logout" and previous and record.money == 0 and type(previous.money) == "number" and previous.money > 0 then
+		record.money = previous.money
+	end
+
 	StampCharacter(entry)
 	AdoptLegacy(who, entry)
 	entry.bags = record
@@ -797,6 +820,18 @@ function Vault.OnEvent(event, ...)
 		-- No timers run once this fires, so the bags are read on the spot.
 		Vault.SnapshotBags("logout")
 
+	elseif event == "PLAYER_MONEY" then
+		-- Gold changes without the bags always changing (a quest reward, the mail, repairs), and
+		-- the logout read cannot be trusted for it, so the saved purse follows it as it happens.
+		local entry = Vault.CharRecord(ns.Who())
+		if entry and entry.bags and GetMoney then
+			local ok, money = pcall(GetMoney)
+			if ok and type(money) == "number" then
+				entry.bags.money = money
+				Vault.Changed()
+			end
+		end
+
 	elseif event == "BANKFRAME_OPENED" then
 		Vault.bankOpen = true
 		if ns.db.vault.autoBank then
@@ -848,6 +883,19 @@ end
 
 function Vault.Init()
 	for who, raw in pairs(ns.vault.chars) do Migrate(who, raw) end
+	-- Bags saved as empty by the logout read that is now refused (see SnapshotBags; Casement did
+	-- it too). A live backpack always has slots, so a record with none says nothing, and dropping
+	-- it lets that character's gold fall back to its bank's copy until it logs in again.
+	local dropped = 0
+	for _, entry in pairs(ns.vault.chars) do
+		local bags = type(entry) == "table" and entry.bags
+		if type(bags) == "table" and (bags.slots or 0) == 0
+			and (type(bags.containers) ~= "table" or #bags.containers == 0) then
+			entry.bags = nil
+			dropped = dropped + 1
+		end
+	end
+	if dropped > 0 then report["empty bag snapshots dropped"] = dropped end
 	local chars, guilds = 0, 0
 	for _ in pairs(ns.vault.chars) do chars = chars + 1 end
 	for _ in pairs(ns.vault.guilds) do guilds = guilds + 1 end

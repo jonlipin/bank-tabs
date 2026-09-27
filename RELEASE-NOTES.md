@@ -80,3 +80,19 @@ kept far enough below the top of the screen for its tabs to stay in reach. Left 
 Bags, Guild. A tab glows while its saved window is open and is dimmed while there is nothing saved
 for it; clicking one opens that window, or closes it when it is in front. The option is now called "Tabs above the
 backpack".
+
+**Fixed: other characters' saved bags came back empty, with no gold.** This client empties its
+bag information by the time you log out, and the logout snapshot saved that empty read over the
+good copy taken in play, gold included. Casement did the same, but it only showed once the saved
+bags began showing your other characters. A read with no backpack, or a logout read with fewer
+bag slots than the last snapshot, now never replaces what was saved; a logout read of no gold
+keeps the gold last seen; and your gold is saved whenever it changes. A bags record already saved
+empty is dropped when you log in, so that character's gold shows its bank's copy again until it
+next logs in and its bags are saved properly.
+
+**Fixed: opening the guild bank on a lower rank character wiped tabs it cannot view.** A tab
+your rank cannot view came back empty and was saved over what a character who could view it had
+saved, which also took those items out of the tooltip counts. It now keeps its saved contents.
+
+**Changed: the minimap button is a treasure chest,** not the brown bag, which Stockpile also uses.
+The tabs' dark fill now sits exactly behind the icon, inside the frame.

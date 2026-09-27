@@ -858,7 +858,7 @@ check("the map's settings are not in the defaults", ns.db.map == nil and ns.db.w
 local groups = {}
 for _, group in ipairs(ns.Windows.GROUPS) do groups[#groups + 1] = group.key end
 check("the window switches are the bag, bank and guild bank ones", table.concat(groups, ",") == "combined,bags,reagent,bank,guildbank", table.concat(groups, ","))
-check("the map exploration event is not registered", ns.report["events"] == "17/17 registered", ns.report["events"])
+check("the map exploration event is not registered", ns.report["events"] == "18/18 registered", ns.report["events"])
 end -- scope
 
 -- ------------------------------------------------------------------
@@ -1323,6 +1323,65 @@ check("logging out reads the bags at once", ns.vault.chars[me].bags.items == 6, 
 check("without waiting on a timer", #TIMERS == timersBefore, #TIMERS - timersBefore)
 check("and says so", ns.vault.chars[me].bags.reason == "logout")
 check("the account copy was written at logout", BankTabsAccountDB.profile ~= nil)
+
+-- This client empties its bag information by the time PLAYER_LOGOUT fires. The user saw another
+-- character's saved bags come back empty with no gold. A read with no backpack, or a logout read
+-- with fewer bag slots than the last snapshot, never replaces the good copy; a logout read of no
+-- gold keeps the gold last seen; and PLAYER_MONEY keeps the saved purse current meanwhile.
+do
+  local good = ns.vault.chars[me].bags
+  local keep = {}
+  for k, v in pairs(SLOTS) do keep[k] = v end
+  for k in pairs(SLOTS) do SLOTS[k] = 0 end
+  fire("PLAYER_LOGOUT")
+  check("a logout read with no backpack keeps the good snapshot", ns.vault.chars[me].bags == good and good.items == 6, ns.vault.chars[me].bags.items)
+  check("and the report says why", (ns.report["bags scan"] or ""):find("no backpack", 1, true) ~= nil, ns.report["bags scan"])
+  for k, v in pairs(keep) do SLOTS[k] = v end
+  SLOTS[2] = 0
+  fire("PLAYER_LOGOUT")
+  check("a logout read with a bag already gone keeps it too", ns.vault.chars[me].bags == good, ns.report["bags scan"])
+  check("and says so", (ns.report["bags scan"] or ""):find("fewer bag slots", 1, true) ~= nil, ns.report["bags scan"])
+  SLOTS[2] = keep[2]
+  local realMoney = GetMoney
+  GetMoney = function() return 0 end
+  fire("PLAYER_LOGOUT")
+  check("a logout read of no gold keeps the gold last seen", ns.vault.chars[me].bags.money == 1234567 and ns.vault.chars[me].bags.items == 6,
+    ns.vault.chars[me].bags.money)
+  GetMoney = function() return 7654321 end
+  fire("PLAYER_MONEY")
+  check("the saved purse follows the gold as it changes", ns.vault.chars[me].bags.money == 7654321, ns.vault.chars[me].bags.money)
+  GetMoney = realMoney
+  fire("PLAYER_MONEY")
+  check("and back", ns.vault.chars[me].bags.money == 1234567)
+end
+
+-- A character whose bags were saved empty by that logout read before this fix (the user saw
+-- "Vatik's Backpack" empty and Vatik's gold as 0): a newer, empty bags record beside a good bank
+-- record. Loading drops the empty record, so the gold falls back to the bank's copy. Added, loaded
+-- and taken away again here so the rest of the walk keeps its three characters.
+do
+  local key = "Player-70-0E0E0E0E"
+  ns.vault.chars[key] = { class = "WARLOCK", level = 20, name = "Emptytoon", realm = "Voidpact", guid = key,
+    bank = { time = time() - 90000, reason = "bank closed", money = 39638, items = 1, slots = 48, free = 47,
+      containers = { { id = 6, label = "Bank tab 1", slots = 48, items = {
+        { slot = 1, id = 2592, icon = 2, count = 3, quality = 1, link = link(2592, "Wool Cloth"), name = "Wool Cloth" } } } } },
+    bags = { time = time() - 60, reason = "logout", money = 0, items = 0, slots = 0, free = 0, containers = {},
+      equipped = { { id = 1, slots = 0 }, { id = 2, slots = 0 } } } }
+  local goldBefore
+  for _, row in ipairs(ns.Vault.Gold()) do if row.who == key then goldBefore = row.money end end
+  check("before the repair, the empty logout record shows its gold as 0", goldBefore == 0, goldBefore)
+  ns.Vault.Init()
+  local empty = ns.vault.chars[key]
+  check("an empty bags record saved at logout is dropped at load", empty ~= nil and empty.bags == nil and empty.bank ~= nil)
+  check("the report counts it", ns.report["empty bag snapshots dropped"] == 1, ns.report["empty bag snapshots dropped"])
+  local gold
+  for _, row in ipairs(ns.Vault.Gold()) do if row.who == key then gold = row.money end end
+  check("so its gold is its bank's copy, not 0", gold == 39638, gold)
+  check("a good bags record is left alone", ns.vault.chars[me].bags ~= nil and ns.vault.chars[me].bags.items == 6)
+  ns.vault.chars[key] = nil
+  ns.report["empty bag snapshots dropped"] = nil
+  ns.Vault.Changed()
+end
 
 -- ------------------------------------------------------------------
 -- 9c. Records saved by Casement 1.0.x are lifted into the new shape
