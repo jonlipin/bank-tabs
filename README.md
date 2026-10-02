@@ -29,7 +29,9 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
   the top with the backpack's first slot first; the character you are playing already has its real
   backpack in front of it.
 - **The guild bank** is saved when you open it, one tab at a time, and shown in its own shape with
-  its tabs down the side.
+  its tabs down the side. Every guild your characters have saved a guild bank for gets a tab along
+  the top, your current character's guild first: hover one for when it was last seen, its gold and
+  which of your characters are in it.
 - **A tab per character.** A row of tabs in the spellbook's style, one per character with their
   class icon, hangs off the top of the saved bank and the saved bags. Each window is titled for
   the character on show, by first name and surname: "Vatik Voidpact's Bank". The saved bank's first tab is the
@@ -163,9 +165,9 @@ read them.
 - A character appears once it has logged in with Bank Tabs (or came over from Casement), and its
   bank once it has been opened. Other characters' tooltip counts are as old as their last
   snapshot.
-- The saved guild bank shows the guild of the character you are playing (on a character with no
-  guild, one another character saved). There is no switching between guilds, but item tooltips
-  count every guild bank your characters have saved.
+- The saved guild bank opens on the guild of the character you are playing (on a character with
+  no guild, the first saved by name); every other saved guild bank is a tab away, and item
+  tooltips count each one. A guild bank shows what the last character to open it could see.
 - A guild bank tab your rank cannot view keeps what a character who could view it saved.
 - There is no way yet to remove a character you deleted or moved: it keeps its tab, its tooltip
   lines and its share of the account gold.
@@ -197,9 +199,9 @@ addon still running, nothing present, already imported, and the ways those go wr
 the package files.
 
 ```
-node tests/banktabstest.js              # the normal client: 895 checks
-node tests/banktabstest.js --bare       # every UI template missing: 886
-node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 870
+node tests/banktabstest.js              # the normal client: 923 checks
+node tests/banktabstest.js --bare       # every UI template missing: 914
+node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 898
 ```
 
 Run it from the repo root. It needs `fengari` on the module path (for example through

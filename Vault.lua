@@ -222,6 +222,16 @@ local function StampCharacter(entry)
 		local ok, guid = pcall(UnitGUID, "player")
 		if ok and type(guid) == "string" and guid ~= "" then entry.guid = guid end
 	end
+	-- The guild, so a guild's tab can say which characters are in it. Early in a session the client
+	-- knows a character is in a guild before it knows the guild's name, which is no reason to forget
+	-- the name saved before; only a character in no guild at all loses it.
+	local guild = Vault.GuildKey and Vault.GuildKey()
+	if guild then
+		entry.guild = guild
+	elseif IsInGuild then
+		local ok, inGuild = pcall(IsInGuild)
+		if ok and inGuild == false then entry.guild = nil end
+	end
 end
 
 -- Snapshots taken before 1.2.1 were keyed by name, and the name this client hands back has been
@@ -918,6 +928,16 @@ function Vault.SnapshotGuildBank(reason)
 	end
 
 	local ok, tabs = pcall(GetNumGuildBankTabs)
+	if ok and tabs == 0 then
+		-- The guild bank opened with no tabs to show (none bought, or none handed over to this
+		-- character). That is worth saving too, so the saved guild bank stops asking for it to be
+		-- opened; tabs saved before are kept.
+		local saved = ns.vault.guilds[key]
+		if not (saved and type(saved.tabs) == "table" and next(saved.tabs)) then
+			ns.vault.guilds[key] = { time = time(), reason = reason, tabs = {}, items = 0, noTabs = true }
+			Vault.Changed()
+		end
+	end
 	if not ok or not tabs or tabs == 0 then
 		report["guild bank scan"] = "no tabs reported"
 		return nil
@@ -933,6 +953,7 @@ function Vault.SnapshotGuildBank(reason)
 	record.time = time()
 	record.reason = reason
 	record.tabs = record.tabs or {}
+	record.noTabs = nil
 	if GetGuildBankMoney then
 		local gotMoney, money = pcall(GetGuildBankMoney)
 		if gotMoney then record.money = money end

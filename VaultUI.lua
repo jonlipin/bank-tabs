@@ -182,11 +182,19 @@ local function SetClassIcon(texture, token, crop)
 	texture:SetTexture("Interface\\Icons\\INV_Misc_Bag_08")
 end
 
-local function GuildRecord()
-	local key = ns.Vault.GuildKey and ns.Vault.GuildKey()
-	if key and ns.vault.guilds[key] then return ns.vault.guilds[key], key end
-	for savedKey, record in pairs(ns.vault.guilds or {}) do return record, savedKey end
-	return nil
+-- Every guild bank the saved guild bank can show, one tab each: the guild of the character being
+-- played first, saved or not, then every other guild bank saved on the account by name. Each is
+-- { key = "Guild - Realm", record = the snapshot or nil, mine = true for this character's guild }.
+function VaultUI.Guilds()
+	local mine = ns.Vault.GuildKey and ns.Vault.GuildKey()
+	local list, keys = {}, {}
+	for key in pairs(ns.vault and ns.vault.guilds or {}) do
+		if key ~= mine then keys[#keys + 1] = key end
+	end
+	table.sort(keys)
+	if mine then list[1] = { key = mine, record = ns.vault.guilds[mine], mine = true } end
+	for _, key in ipairs(keys) do list[#list + 1] = { key = key, record = ns.vault.guilds[key] } end
+	return list
 end
 
 -- The bank's main containers (the tabs) and its bags, told apart by the snapshot's Bag Slots row.
@@ -314,8 +322,14 @@ end
 -- character with bags saved, or to nobody.
 local function Resolve(W)
 	if W.kind == "guild" then
-		local _, key = GuildRecord()
-		return key
+		local guilds = VaultUI.Guilds()
+		if W.who then
+			for _, guild in ipairs(guilds) do
+				if guild.key == W.who then return W.who end
+			end
+			W.who = nil
+		end
+		return guilds[1] and guilds[1].key or nil
 	end
 	local list = VaultUI.Characters(W.kind)
 	if W.who then
@@ -851,6 +865,49 @@ local function CharTabTooltip(self)
 	GameTooltip:Show()
 end
 
+-- A guild's tab: the guild, its realm, when its bank was last seen, its gold, and which of the
+-- account's characters are in it.
+local function GuildTabTooltip(self)
+	local key, record = self.csWho or "", self.csEntry
+	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+	local name, realm = key:match("^(.-) %- (.*)$")
+	GameTooltip:SetText(name or key, 1, 1, 1)
+	if realm and realm ~= "" then GameTooltip:AddLine(realm, 0.6, 0.6, 0.6) end
+	if record then
+		GameTooltip:AddLine("Guild bank: " .. (record.items or 0) .. " items, " .. Ago(record.time), 0.6, 0.85, 1)
+		if record.money then GameTooltip:AddDoubleLine("Gold", ns.Money(record.money), 1, 0.82, 0, 1, 1, 1) end
+	else
+		GameTooltip:AddLine("Guild bank: not opened yet", 0.6, 0.85, 1)
+	end
+	-- This character by the guild it is in now; the others by the guild they were last seen in.
+	local me, myGuild = ns.Who(), ns.Vault.GuildKey and ns.Vault.GuildKey()
+	local members = {}
+	if myGuild == key then members[1] = ns.ShortLabel(me) end
+	for who, entry in pairs(ns.vault.chars or {}) do
+		if who ~= me and type(entry) == "table" and entry.guild == key then members[#members + 1] = ns.ShortLabel(who) end
+	end
+	table.sort(members)
+	if #members > 0 then
+		GameTooltip:AddLine((#members == 1 and "Your character in it: " or "Your characters in it: ") .. table.concat(members, ", "),
+			0.8, 0.8, 0.8, true)
+	end
+	GameTooltip:Show()
+end
+
+-- A guild's tab wears the icon of its bank's first tab, the one emblem a snapshot has of a guild,
+-- or a guild tabard while nothing is saved.
+local GUILD_ICON = "Interface/Icons/INV_Shirt_GuildTabard_01"
+local function SetGuildIcon(texture, record)
+	local icon, lowest
+	for index, tab in pairs(record and record.tabs or {}) do
+		if type(index) == "number" and type(tab) == "table" and tab.icon and (not lowest or index < lowest) then
+			icon, lowest = tab.icon, index
+		end
+	end
+	texture:SetTexture(icon or GUILD_ICON)
+	texture:SetTexCoord(CLASS_CROP, 1 - CLASS_CROP, CLASS_CROP, 1 - CLASS_CROP)
+end
+
 local function NewCharTab(W, index)
 	local tab = ns.CreateTab(W.frame)
 	tab:SetScript("OnClick", function(self)
@@ -863,7 +920,9 @@ local function NewCharTab(W, index)
 		if PlaySound and SOUNDKIT and SOUNDKIT.IG_ABILITY_PAGE_TURN then pcall(PlaySound, SOUNDKIT.IG_ABILITY_PAGE_TURN) end
 		Refresh(W)
 	end)
-	tab:SetScript("OnEnter", CharTabTooltip)
+	tab:SetScript("OnEnter", function(self)
+		if self.csGuild then GuildTabTooltip(self) else CharTabTooltip(self) end
+	end)
 	tab:SetScript("OnLeave", function() GameTooltip:Hide() end)
 	W.charTabs[index] = tab
 	return tab
@@ -873,13 +932,23 @@ end
 -- a second row rather than marching past the right edge once an account has more characters than
 -- fit along the top.
 local function LayoutCharTabs(W)
-	local list = VaultUI.Characters(W.kind)
+	-- The saved guild bank has a tab per guild instead, built and hung the same way.
+	local list = {}
+	if W.kind == "guild" then
+		for index, guild in ipairs(VaultUI.Guilds()) do list[index] = { who = guild.key, entry = guild.record, guild = true } end
+	else
+		list = VaultUI.Characters(W.kind)
+	end
 	local perRow = ns.TabsPerRow(W.frame)
 	for index, source in ipairs(list) do
 		local tab = W.charTabs[index] or NewCharTab(W, index)
-		tab.csWho, tab.csEntry = source.who, source.entry
+		tab.csWho, tab.csEntry, tab.csGuild = source.who, source.entry, source.guild
 		ns.HangTab(tab, W.frame, (index - 1) % perRow, math.floor((index - 1) / perRow))
-		SetClassIcon(tab.icon, source.entry and source.entry.class, true)
+		if source.guild then
+			SetGuildIcon(tab.icon, source.entry)
+		else
+			SetClassIcon(tab.icon, source.entry and source.entry.class, true)
+		end
 		tab:SetChosen(source.who == W.current)
 		tab:Show()
 	end
@@ -944,7 +1013,8 @@ local function PortraitTooltip(W, self)
 	local entry = CharEntry(W)
 	GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
 	if W.kind == "guild" then
-		local record, key = GuildRecord()
+		local key = W.current
+		local record = key and ns.vault.guilds[key]
 		GameTooltip:SetText(key and key:gsub(" %- .*$", "") or "Guild Bank", 1, 1, 1)
 		GameTooltip:AddLine(record and ("Checked " .. When(record.time)) or "Not seen yet", 0.6, 0.85, 1)
 		GameTooltip:Show()
@@ -1154,42 +1224,53 @@ local function LayoutBags(W)
 	Footer(W, record)
 end
 
+-- The guild bank on show (W.current, one of VaultUI.Guilds): seven columns of fourteen filled down
+-- each column, its tabs down the right. Where there is nothing to draw, a short line says why and
+-- no empty slots are drawn behind it: a guild bank not opened yet, one that showed no tabs, or a
+-- tab nobody who opened the guild bank could see into.
 local function LayoutGuild(W)
-	local record, key = GuildRecord()
+	local key = W.current
+	local record = key and ns.vault.guilds[key]
 	W.frame.csTitle:SetText(key and ("Guild Bank: " .. key:gsub(" %- .*$", "")) or "Guild Bank")
 
 	local tabs, tabList = {}, {}
-	if record then
-		local keys = {}
-		for index in pairs(record.tabs or {}) do keys[#keys + 1] = index end
-		table.sort(keys)
-		for _, index in ipairs(keys) do
-			local tab = record.tabs[index]
-			tabList[#tabList + 1] = tab
-			tabs[#tabs + 1] = {
-				label = (tab.name and tab.name ~= "" and tab.name) or ("Tab " .. index),
-				icon = tab.icon,
-				detail = tab.viewable == false and "Not viewable by this character" or (#(tab.items or {}) .. " items"),
-			}
-		end
+	local keys = {}
+	for index in pairs(record and record.tabs or {}) do keys[#keys + 1] = index end
+	table.sort(keys)
+	for _, index in ipairs(keys) do
+		local tab = record.tabs[index]
+		tabList[#tabList + 1] = tab
+		tabs[#tabs + 1] = {
+			label = (tab.name and tab.name ~= "" and tab.name) or ("Tab " .. index),
+			icon = tab.icon,
+			detail = tab.viewable == false and "Not viewable by this character" or (#(tab.items or {}) .. " items"),
+		}
+	end
+
+	if #tabList == 0 then
+		ShowNote(W, (not record and "Open the guild bank once and it will be remembered here.")
+			or "This guild bank had no tabs to show when it was last opened.")
+		SizeWindow(W, GUILD_COLS, GUILD_ROWS, 0, false, nil, PLAIN)
+		Footer(W, record)
+		return
 	end
 	if type(W.viewing) ~= "number" or not tabList[W.viewing] then W.viewing = 1 end
 	local tab = tabList[W.viewing]
 
-	local rows = LayoutGrid(W, GUILD_SLOTS, GUILD_COLS, true, tab and tab.items or {}, PLAIN)
+	if tab.viewable == false and #(tab.items or {}) == 0 then
+		HideCellsFrom(W, 1)
+		W.noteText:SetText("The character who last opened this guild bank could not see into this tab.")
+		W.noteText:Show()
+	else
+		LayoutGrid(W, GUILD_SLOTS, GUILD_COLS, true, tab.items or {}, PLAIN)
+		W.noteText:Hide()
+	end
 	local tabColumn = LayoutTabs(W, tabs, MARGIN_X + GUILD_COLS * PITCH + 4)
 	if #tabs == 1 then tabColumn = TAB_SIZE + 10 end
 	HideBagRow(W)
 	W.divider:Hide()
-	SizeWindow(W, GUILD_COLS, rows, tabColumn, false, nil, PLAIN)
+	SizeWindow(W, GUILD_COLS, GUILD_ROWS, tabColumn, false, nil, PLAIN)
 	Footer(W, record)
-
-	if record and tab then
-		W.noteText:Hide()
-	else
-		W.noteText:SetText("Open the guild bank once and it will be remembered here.")
-		W.noteText:Show()
-	end
 end
 
 Refresh = function(W)
@@ -1382,7 +1463,8 @@ end
 function VaultUI.Show(kind, character)
 	kind = Kind(kind) or "bank"
 	local W = Build(kind)
-	if character and kind ~= "guild" then
+	-- A character to look at, or for the guild bank a guild ("Guild - Realm").
+	if character then
 		W.who = character
 		W.viewing, W.viewingBag = nil, nil
 	end

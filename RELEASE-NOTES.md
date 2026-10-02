@@ -1,28 +1,25 @@
-## 2.0.2 - 2026-10-02
+## 2.1.0 - 2026-10-02
 
-**Fixed: bank bags.** On WoW Forever a Bag Slot is a bank tab: buying a Bag Slot and putting a bag
-in it adds the bag's slots to the bottom of the bank's own grid. Bank Tabs looked for those bags
-the classic way, as inventory slots, and found none.
+**A tab per guild on the saved guild bank.** Every guild bank saved on your account now has a tab
+of its own along the top of the saved guild bank, built like the character tabs: the guild of the
+character you are playing first, even before its bank is saved, then the others by name. Hover a
+guild's tab for when its bank was last seen, its gold and which of your characters are in it, and
+click it to look at that guild bank. Bank Tabs now remembers which guild each character is in for
+this. Until now the window showed only the guild of the character you were playing, or whichever
+saved guild came first, with no way to switch. Item tooltips already gave every guild bank a line
+of its own, and still do.
 
-- The saved bank showed each bag as a tab of its own down the side, and the main grid without the
-  bag's slots. It now draws the bank as the real window does: one grid, the main tab's slots first
-  and each bag's after them, a page of 88 slots at a time with a tab per page.
-- The Bag Slots row showed every slot as "Not purchased" with nothing in it. It now shows the bag
-  in each bought slot and the real bank's padlock on the rest, and pointing at a bag lights up its
-  slots in the grid.
-- A bank saved before this release is drawn the new way straight away, its bought Bag Slots read
-  from its saved tabs. The bags' icons come back the next time that character opens the bank.
+**Fixed: empty slots drawn over the saved guild bank's notes.** With nothing to show, the window
+still drew its seven columns of empty slots, the note hidden behind them. The note now stands
+alone and says why there is nothing to show:
 
-**Fixed: the saved bags were upside down.** They were drawn from the bottom right corner up, a
-guess at the combined backpack that the real one has now shown to be the wrong way round. They
-now read like a page, left to right from the top, the backpack's first slot starting the top
-row, which is the short one when the slots do not fill it.
+- the guild bank has not been opened yet;
+- it had no tabs to show when it was last opened (none bought, or none handed to that
+  character), which is now saved instead of the window asking for it to be opened again;
+- nobody who opened it could see into the tab on show.
 
-**Characters are named by first name and surname**, as every character on WoW Forever has both:
-"Vatik Voidpact's Bank" rather than "Vatik's Bank", the same on the character tabs, in the item
-tooltip lines and in the gold list. Two characters can share a first name. A character saved by
-an earlier version shows its surname after its next login.
+The Guild tab above the backpack speaks for the guild the saved guild bank opens on and counts
+the other guild banks saved.
 
-The test harness now models WoW Forever's bank from the client's own interface code: its real
-list of containers, its bank tabs and its Bag Slots. 895 checks against the normal client, 886
-with every UI template missing and 870 for a classic client without `Enum.BagIndex`.
+923 checks against the normal client, 914 with every UI template missing and 898 for a classic
+client without `Enum.BagIndex`.

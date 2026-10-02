@@ -47,11 +47,19 @@ local function IsBackpack(frame)
 	return id == 0
 end
 
+-- The guild bank the Guild tab speaks for, in the saved guild bank's own order (this character's
+-- guild, then the others by name), and how many guild banks are saved in all.
 local function GuildRecord()
-	local key = ns.Vault and ns.Vault.GuildKey and ns.Vault.GuildKey()
-	if key and ns.vault.guilds[key] then return key, ns.vault.guilds[key] end
-	for savedKey, record in pairs(ns.vault.guilds or {}) do return savedKey, record end
-	return nil
+	local guilds = ns.VaultUI and ns.VaultUI.Guilds and ns.VaultUI.Guilds() or {}
+	local first, saved = nil, 0
+	for _, guild in ipairs(guilds) do
+		if guild.record then
+			saved = saved + 1
+			first = first or guild
+		end
+	end
+	if first then return first.key, first.record, saved end
+	return nil, nil, 0
 end
 
 local function Ago(record)
@@ -95,8 +103,12 @@ local function Describe(spec)
 		end
 		return Plural(#others, "other character") .. "' bags.", true
 	else
-		local key, record = GuildRecord()
-		if record then return key .. ": " .. CountItems(record, true) .. " items, checked " .. Ago(record) .. ".", true end
+		local key, record, saved = GuildRecord()
+		if record then
+			local text = key .. ": " .. CountItems(record, true) .. " items, checked " .. Ago(record) .. "."
+			if saved > 1 then text = text .. " And " .. Plural(saved - 1, "other guild bank") .. "." end
+			return text, true
+		end
 		return "Nothing saved yet: open the guild bank once.", false
 	end
 end

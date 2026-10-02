@@ -318,7 +318,10 @@ function GetRealmName() return "Voidpact" end
 function UnitClass() return "Warlock", "WARLOCK" end
 function UnitLevel() return 60 end
 GUILD_NAME = "Night Owls"
-function GetGuildInfo(unit) if GUILD_NAME == "" then return nil end return GUILD_NAME, "Officer", 1 end
+-- In a guild whose name the client has not handed over yet, as early in a session.
+GUILD_LOADING = false
+function GetGuildInfo(unit) if GUILD_NAME == "" or GUILD_LOADING then return nil end return GUILD_NAME, "Officer", 1 end
+function IsInGuild() return GUILD_NAME ~= "" end
 function GetMoney() return 1234567 end
 function GetCoinTextureString(v) return tostring(v) .. "c" end
 function GetFileIDFromPath(p) return 12345 end
@@ -897,7 +900,7 @@ check("with no old Casement installed the window engine does not wait for login"
 check("the old commands are not taken before login", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil)
 
 do -- scope: 1b. This is Bank Tabs, and only its half of Casement
-check("the version is 2.0.2", ns.version == "2.0.2", ns.version)
+check("the version is 2.1.0", ns.version == "2.1.0", ns.version)
 check("the saved variables are Bank Tabs' own", ns.db == BankTabsDB and ns.vault == BankTabsAccountDB.vault
   and CasementDB == nil and CasementAccountDB == nil)
 check("the event frame is Bank Tabs' own", BankTabsFrame ~= nil and CasementFrame == nil)
@@ -1206,6 +1209,17 @@ do -- scope: the shapes of a name
   check("Unknown is no name at all", ns.PlayerName() == nil)
   check("and the name last saved stands in", ns.ShortLabel(me) == "Vatik Voidpact", ns.ShortLabel(me))
   NAME_SHAPE = "two"
+  -- The guild travels with the entry, so a guild's tab can name the characters in it.
+  check("the character's guild is saved with it", ns.vault.chars[me].guild == "Night Owls - Voidpact", ns.vault.chars[me].guild)
+  GUILD_LOADING = true
+  ns.Vault.SnapshotBank("bank opened")
+  check("a guild whose name the client has not handed over yet leaves the saved one alone", ns.vault.chars[me].guild == "Night Owls - Voidpact")
+  GUILD_LOADING = false
+  GUILD_NAME = ""
+  ns.Vault.SnapshotBank("bank opened")
+  check("a character in no guild at all loses it", ns.vault.chars[me].guild == nil)
+  GUILD_NAME = "Night Owls"
+  ns.Vault.SnapshotBank("bank opened")
   -- This character is named live: an entry saved by 2.0.1 kept the first name alone.
   ns.vault.chars[me].name = "Vatik"
   check("this character is named live, over a name saved without its surname", ns.ShortLabel(me) == "Vatik Voidpact", ns.ShortLabel(me))
@@ -2098,12 +2112,104 @@ check("a tab this character cannot see says so", side[3] and side[3].csDetail ==
 check("a tab that can be seen says how full it is", side[1] and side[1].csDetail == "2 items", side[1] and side[1].csDetail)
 check("the guild tab tooltip runs", pcall(side[3].scripts.OnEnter, side[3]))
 side[3].scripts.OnClick(side[3])
-check("looking at the unviewable tab shows an empty grid", #Cells(37) == 98 and ItemCount(Cells(37)) == 0)
+-- Nothing is known of a tab nobody who opened the guild bank could see into: a line says so, with
+-- no empty slots drawn behind it (they were, and the line sat behind them).
+check("looking at a tab nobody could see into says so, with no empty slots behind it", #Cells(37) == 0
+  and TextOn(vault, "The character who last opened this guild bank could not see into this tab.") ~= nil, #Cells(37))
 check("and it is the one outlined now", side[3].border.shown == true and side[1].border.shown == false)
 side[2].scripts.OnClick(side[2])
 local ruby = CellWith(Cells(37), 7910)
 check("tab two shows the star ruby in slot 3, third down", ruby ~= nil and ruby == CellAt(Cells(37), GridXY(0, 2)))
-check("the guild bank has no character tabs", #CharTabs() == 0, #CharTabs())
+check("and the line goes again", TextOn(vault, "The character who last opened this guild bank could not see into this tab.") == nil)
+-- A tab per guild along the top, built and hung like the character tabs.
+check("the guild bank has a tab per guild along the top, this character's guild on it", #CharTabs() == 1
+  and CharTabs()[1].csWho == "Night Owls - Voidpact" and CharTabs()[1].csGuild == true, #CharTabs())
+check("wearing the icon of its bank's first tab", CharTabs()[1] and CharTabs()[1].icon.texture == "icon1", CharTabs()[1] and CharTabs()[1].icon.texture)
+check("chosen, as the guild on show", CharTabs()[1] and CharTabs()[1].csChosen == true)
+do -- scope: several guilds on one account
+  local function Said()
+    local out = {}
+    for _, l in ipairs(GameTooltip.csLines) do out[#out + 1] = tostring(l[1]) end
+    return table.concat(out, " | ")
+  end
+  -- Another of the account's characters is in another guild, and saved its bank.
+  ns.vault.guilds["Iron Circle - Voidpact"] = { time = time() - 3600, money = 4200, items = 1, tabs = {
+    [1] = { name = "Ore", icon = "ironicon", viewable = true, items = {
+      { slot = 2, id = 2770, icon = 2870, count = 10, quality = 1, link = link(2770, "Copper Ore"), name = "Copper Ore" } } } } }
+  ns.vault.chars[CHOHAM].guild = "Iron Circle - Voidpact"
+  ns.VaultUI.Refresh()
+  local gtabs = CharTabs()
+  check("each guild saved on the account gets a tab, this character's first, then by name", #gtabs == 2
+    and gtabs[1].csWho == "Night Owls - Voidpact" and gtabs[2].csWho == "Iron Circle - Voidpact", #gtabs)
+  check("still showing this character's guild", ns.VaultUI.Selected("guild") == "Night Owls - Voidpact"
+    and gtabs[1].csChosen and not gtabs[2].csChosen)
+  gtabs[2].scripts.OnEnter(gtabs[2])
+  check("a guild's tab says which of the account's characters are in it", Said():find("Your character in it: Choham", 1, true) ~= nil, Said())
+  check("and how full its bank was, and its gold", Said():find("Guild bank: 1 items", 1, true) ~= nil
+    and Said():find("| Gold", 1, true) ~= nil, Said())
+  gtabs[1].scripts.OnEnter(gtabs[1])
+  check("this character is named in its own guild's", Said():find("Your character in it: Vatik Voidpact", 1, true) ~= nil, Said())
+  gtabs[2].scripts.OnClick(gtabs[2])
+  check("clicking a guild's tab shows its bank", ns.VaultUI.Selected("guild") == "Iron Circle - Voidpact"
+    and vault.csTitle.text == "Guild Bank: Iron Circle", vault.csTitle.text)
+  local ore = CellWith(Cells(37), 2770)
+  check("with its items where they sat", ore ~= nil and ore == CellAt(Cells(37), GridXY(0, 1)))
+  check("and its own gold", TextOn(vault, ns.Money(4200)) ~= nil)
+  check("its tab chosen now, wearing its bank's first tab icon", CharTabs()[2].csChosen and not CharTabs()[1].csChosen
+    and CharTabs()[2].icon.texture == "ironicon")
+
+  -- A character whose guild bank has not been opened: its guild still comes first, asking to be
+  -- opened, with no empty slots behind the line.
+  GUILD_NAME = "Brand New"
+  ns.VaultUI.Refresh()
+  gtabs = CharTabs()
+  check("a character's own guild gets the first tab before its bank is saved", #gtabs == 3 and gtabs[1].csWho == "Brand New - Voidpact", #gtabs)
+  check("wearing a guild tabard until it is", gtabs[1].icon.texture == "Interface/Icons/INV_Shirt_GuildTabard_01", gtabs[1].icon.texture)
+  gtabs[1].scripts.OnEnter(gtabs[1])
+  check("its tab says its bank has not been opened", Said():find("Guild bank: not opened yet", 1, true) ~= nil, Said())
+  gtabs[1].scripts.OnClick(gtabs[1])
+  check("its bank asks to be opened", TextOn(vault, "Open the guild bank once and it will be remembered here.") ~= nil)
+  check("with no empty slots drawn behind the line, and no tabs down the side", #Cells(37) == 0 and #SideTabs() == 0, #Cells(37))
+  -- Opened, it showed no tabs (none bought, or none handed to this character): saved as such.
+  local tabsBefore = GUILD_TABS
+  GUILD_TABS = 0
+  fire("GUILDBANKFRAME_OPENED")
+  RunTimers(1)
+  local brandNew = ns.vault.guilds["Brand New - Voidpact"]
+  check("a guild bank that opened with no tabs is saved as such", brandNew ~= nil and brandNew.noTabs == true)
+  ns.VaultUI.Refresh()
+  check("and says so instead of asking to be opened", TextOn(vault, "This guild bank had no tabs to show when it was last opened.") ~= nil
+    and TextOn(vault, "Open the guild bank once and it will be remembered here.") == nil and #Cells(37) == 0)
+  -- Once it shows tabs, they replace the line.
+  GUILD_TABS = tabsBefore
+  fire("GUILDBANKFRAME_OPENED")
+  RunTimers(3)
+  check("once it shows tabs they replace the line", brandNew.noTabs == nil and brandNew.tabs[1] ~= nil)
+  fire("GUILDBANKFRAME_CLOSED")
+  GUILD_TABS = 0
+  -- Tabs it once showed are never thrown away for a read of none.
+  GUILD_NAME = "Night Owls"
+  fire("GUILDBANKFRAME_OPENED")
+  RunTimers(1)
+  check("a read of no tabs keeps the tabs saved before", ns.vault.guilds["Night Owls - Voidpact"].noTabs == nil
+    and ns.vault.guilds["Night Owls - Voidpact"].tabs[1] ~= nil)
+  fire("GUILDBANKFRAME_CLOSED")
+  GUILD_TABS = tabsBefore
+  -- Out of any guild, the first guild bank saved by name.
+  GUILD_NAME = ""
+  ns.vault.guilds["Brand New - Voidpact"] = nil
+  ns.VaultUI.Refresh()
+  check("out of any guild, the first guild bank saved is shown by name", ns.VaultUI.Selected("guild") == "Iron Circle - Voidpact"
+    and #CharTabs() == 2, ns.VaultUI.Selected("guild"))
+  GUILD_NAME = "Night Owls"
+  ns.VaultUI.Show("guild", "Night Owls - Voidpact")
+  ns.VaultUI.Show("guild", "Iron Circle - Voidpact")
+  check("Show can name the guild to look at", ns.VaultUI.Selected("guild") == "Iron Circle - Voidpact", ns.VaultUI.Selected("guild"))
+  ns.vault.guilds["Iron Circle - Voidpact"] = nil
+  ns.vault.chars[CHOHAM].guild = nil
+  ns.VaultUI.Refresh()
+  check("a guild forgotten falls back to this character's", ns.VaultUI.Selected("guild") == "Night Owls - Voidpact" and #CharTabs() == 1)
+end
 check("and no Bag Slots row", #BagRow() == 0 and TextOn(vault, "Bag Slots:") == nil)
 check("the guild money is shown", TextOn(vault, ns.Money(9876543)) ~= nil)
 
@@ -2270,7 +2376,7 @@ check("the saved bags keep their own character", ns.VaultUI.Selected("bags") == 
 check("and list only the other characters with bags saved", #CharTabs() == 1 and CharTabs()[1].csWho == CHOHAM, #CharTabs())
 check("with that character's grid", ItemCount(Cells(37)) == 1 and #Cells(37) == 16)
 vault = BankTabsGuild
-check("the guild bank still has no character tabs", #CharTabs() == 0)
+check("the guild bank keeps its own guild tab, not the bank's character", #CharTabs() == 1 and CharTabs()[1].csWho == "Night Owls - Voidpact")
 vault = BankTabsBank
 ns.VaultUI.Show("bank", me)
 check("Show can name the character to look at", ns.VaultUI.Selected("bank") == me and vault.csTitle.text == "Vatik Voidpact's Bank")
@@ -2800,6 +2906,17 @@ check("and brightens once there is one", Alpha(bankTab) == 0.85)
 check("the tab tooltips run", pcall(bankTab.scripts.OnEnter, bankTab) and pcall(bagsTab.scripts.OnEnter, bagsTab)
   and pcall(guildTab.scripts.OnEnter, guildTab))
 guildTab.scripts.OnLeave(guildTab)
+-- With guild banks from more than one guild saved, the Guild tab speaks for this character's and
+-- counts the others.
+ns.vault.guilds["Iron Circle - Voidpact"] = { time = time(), items = 0, tabs = { [1] = { name = "Ore", items = {} } } }
+guildTab.scripts.OnEnter(guildTab)
+local guildLines = {}
+for _, l in ipairs(GameTooltip.csLines) do guildLines[#guildLines + 1] = tostring(l[1]) end
+guildLines = table.concat(guildLines, " | ")
+check("the Guild tab speaks for this character's guild and counts the other guild banks", guildLines:find("^Night Owls %- Voidpact: ")
+  and guildLines:find("And 1 other guild bank.", 1, true) ~= nil, guildLines)
+guildTab.scripts.OnLeave(guildTab)
+ns.vault.guilds["Iron Circle - Voidpact"] = nil
 
 -- Chosen while the window is open, however it closes.
 local function Chosen(tab)
@@ -4078,7 +4195,7 @@ const parts = [];
   check('the TOC is BankTabs.toc', toc !== null);
   check('titled Bank Tabs', field(toc, 'Title') === 'Bank Tabs', field(toc, 'Title'));
   const version = (sources['Core.lua'].match(/ns\.version = "([^"]+)"/) || [])[1];
-  check('its version is the addon\'s own, 2.0.2', field(toc, 'Version') === '2.0.2' && version === '2.0.2', field(toc, 'Version') + ' / ' + version);
+  check('its version is the addon\'s own, 2.1.0', field(toc, 'Version') === '2.1.0' && version === '2.1.0', field(toc, 'Version') + ' / ' + version);
   check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
     && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
   check('its icon is the treasure chest from the game\'s icons (not Stockpile\'s bag), the path intact', /^Interface\\Icons\\Racial_Dwarf_FindTreasure$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
@@ -4126,7 +4243,7 @@ const parts = [];
     const changelog = (read('CHANGELOG.md') || '').replace(/\r\n/g, '\n');
     const notes = (read('RELEASE-NOTES.md') || '').replace(/\r\n/g, '\n');
     const top = changelog.split(/\r?\n(?=## )/).find(s => s.startsWith('## ')) || '';
-    check('the changelog opens on 2.0.2', /^## 2\.0\.2 - /.test(top), top.slice(0, 30));
+    check('the changelog opens on 2.1.0', /^## 2\.1\.0 - /.test(top), top.slice(0, 30));
     check('the release notes are that section and nothing else', notes.replace(/\s+$/, '') === top.replace(/\s+$/, ''));
 
     // Every text file, docs and code: no em or en dashes, as the author asked.

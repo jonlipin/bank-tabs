@@ -2,7 +2,7 @@
 ## Title: Bank Tabs
 ## Notes: Every character's bank, bags and guild bank, saved and shown like the real windows from anywhere, with movable bag, bank and guild bank windows.
 ## Author: jonlipin
-## Version: 2.0.2
+## Version: 2.1.0
 ## SavedVariables: BankTabsAccountDB
 ## SavedVariablesPerCharacter: BankTabsDB
 ## IconTexture: Interface\Icons\Racial_Dwarf_FindTreasure

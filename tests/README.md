@@ -11,14 +11,14 @@ node tests/banktabstest.js [addon dir] [--bare] [--verbose] [--noenum]
 
 Run it from the repo root; the addon dir defaults to the folder above `tests`.
 
-- no flags: 895 checks against the normal client, WoW Forever as its own interface code describes
+- no flags: 923 checks against the normal client, WoW Forever as its own interface code describes
   it: its real `Enum.BagIndex`, its bank tabs through `C_Bank` (a Bag Slot is a bank tab, its bag
   in the `Characterbanktab` container), the bank drawn as one grid of every tab, and `UnitName`
   giving a first name and a surname
-- `--bare`: 886; every UI template and atlas is missing, so every fallback path runs. As on the
+- `--bare`: 914; every UI template and atlas is missing, so every fallback path runs. As on the
   client, `SetAtlas` raises nothing for a missing atlas, so only a real check of the atlas table
   lets a fallback step in.
-- `--noenum`: 870; a classic client: no `Enum.BagIndex` and no bank tabs, so the bank scan falls back
+- `--noenum`: 898; a classic client: no `Enum.BagIndex` and no bank tabs, so the bank scan falls back
   to the classic container ids, the bank bags hang off inventory slots and the saved bank shows one
   tab or bag at a time
 - `--verbose`: prints everything the addon puts in the chat frame
@@ -33,7 +33,9 @@ The result line adds up three parts, printed just above it:
   through the item location when the container read has nothing), the replicas (never drawn from
   a layout that is no grid; the bank as one grid with its pages, a bank saved by 2.0.1, the Bag
   Slots with their bags and padlocks and a bag lighting up its slots; the bags read like a page
-  with the short row on top), the names with their surnames, the three saved windows open at once (each on its
+  with the short row on top; the guild bank with a tab per guild, this character's first, and its
+  lines with no empty slots behind them: not opened, no tabs, a tab nobody could see into), the
+  names with their surnames and each character's guild, the three saved windows open at once (each on its
   own character with its own search, the Escape order and its surviving the interface being hidden
   and shown, where they open in each order and where they are left, kept on screen with their
   character tabs by the backpack tabs' rule, the saved bags leaving out the character
