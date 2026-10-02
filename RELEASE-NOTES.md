@@ -1,25 +1,28 @@
-## 2.0.1 - 2026-10-02
+## 2.0.2 - 2026-10-02
 
-**Fixed: the saved bank could show every character's items in one long column instead of the
-bank's grid.** Bank Tabs draws the saved bank from measurements of the real bank window, taken
-while it is open: how many slots across, how far apart, and where the grid starts. It took the
-topmost row of slot sized buttons in the window for the grid's first row, so one more button of
-a slot's size above the grid, from another addon for example, was read as a bank one slot wide.
-That measurement was then used for every character's saved bank, and a later, correct one could
-not replace it, because it counted one slot more than the real grid. Measuring the window in the
-moment before WoW Forever has made the bank's slots, with only the Bag Slots and the sort button
-in it, could go the same way.
+**Fixed: bank bags.** On WoW Forever a Bag Slot is a bank tab: buying a Bag Slot and putting a bag
+in it adds the bag's slots to the bottom of the bank's own grid. Bank Tabs looked for those bags
+the classic way, as inventory slots, and found none.
 
-- The measurement now finds the grid itself: the longest run of full rows lying one under another
-  at the same spacing. Other buttons of a slot's size are left out, and `/banktabs debug` says how
-  many were.
-- Only what is on screen is measured. A button inside a hidden part of the window no longer counts.
-- A measurement that is not a grid (fewer than four columns, or slots overlapping or far apart) is
-  not used, and the last good one stands.
-- Layouts saved one column wide by earlier versions are dropped at login, and a saved layout is
-  checked again before the saved bank is drawn with it. Until your bank is next opened and
-  measured, the saved banks are drawn on the classic bank's grid, which is very close to this
-  client's. The items in every saved bank are kept as they were.
+- The saved bank showed each bag as a tab of its own down the side, and the main grid without the
+  bag's slots. It now draws the bank as the real window does: one grid, the main tab's slots first
+  and each bag's after them, a page of 88 slots at a time with a tab per page.
+- The Bag Slots row showed every slot as "Not purchased" with nothing in it. It now shows the bag
+  in each bought slot and the real bank's padlock on the rest, and pointing at a bag lights up its
+  slots in the grid.
+- A bank saved before this release is drawn the new way straight away, its bought Bag Slots read
+  from its saved tabs. The bags' icons come back the next time that character opens the bank.
 
-867 checks against the normal client, 858 with every UI template missing and 863 without
-`Enum.BagIndex`.
+**Fixed: the saved bags were upside down.** They were drawn from the bottom right corner up, a
+guess at the combined backpack that the real one has now shown to be the wrong way round. They
+now read like a page, left to right from the top, the backpack's first slot starting the top
+row, which is the short one when the slots do not fill it.
+
+**Characters are named by first name and surname**, as every character on WoW Forever has both:
+"Vatik Voidpact's Bank" rather than "Vatik's Bank", the same on the character tabs, in the item
+tooltip lines and in the gold list. Two characters can share a first name. A character saved by
+an earlier version shows its surname after its next login.
+
+The test harness now models WoW Forever's bank from the client's own interface code: its real
+list of containers, its bank tabs and its Bag Slots. 895 checks against the normal client, 886
+with every UI template missing and 870 for a classic client without `Enum.BagIndex`.

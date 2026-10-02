@@ -16,7 +16,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "2.0.1"
+ns.version = "2.0.2"
 ns.report = {}
 
 local report = ns.report
@@ -163,16 +163,29 @@ function ns.Label(who)
 	return tostring(who)
 end
 
--- The character's name alone, no realm: what the character tabs' tooltips and the saved windows'
--- titles say. This character is named live when nothing has been saved for it yet, rather than by
--- its GUID.
+-- This character's name as the game shows it. Every character on this client has a first name and
+-- a surname, which UnitName hands back as two values ("Vatic", "Vellum"); at some logins the first
+-- already holds both. Nil while the game still answers "Unknown".
+function ns.PlayerName()
+	if not UnitName then return nil end
+	local ok, first, surname = pcall(UnitName, "player")
+	if not ok or type(first) ~= "string" or first == "" or first == (_G.UNKNOWNOBJECT or "Unknown") then return nil end
+	if type(surname) == "string" and surname ~= "" and not first:find(" ", 1, true) then
+		return first .. " " .. surname
+	end
+	return first
+end
+
+-- The character's name alone, first name and surname, no realm: what the saved windows' titles,
+-- the character tabs and the tooltips say. Two characters can share a first name. This character
+-- is named live, and an entry keeps the name it was last saved with.
 function ns.ShortLabel(who)
+	if who == ns.Who() then
+		local live = ns.PlayerName()
+		if live then return live end
+	end
 	local entry = ns.vault and ns.vault.chars and ns.vault.chars[who]
 	if type(entry) == "table" and type(entry.name) == "string" then return entry.name end
-	if who == ns.Who() and UnitName then
-		local ok, name = pcall(UnitName, "player")
-		if ok and type(name) == "string" and name ~= "" then return name end
-	end
 	return (tostring(who):gsub(" %- .*$", ""))
 end
 

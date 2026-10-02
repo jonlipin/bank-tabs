@@ -305,7 +305,15 @@ function IsShiftKeyDown() return SHIFT end
 function IsControlKeyDown() return CTRL end
 function IsAltKeyDown() return ALT end
 
-function UnitName() return "Vatik" end
+-- Every character on WoW Forever has a first name and a surname, and UnitName gives them as two
+-- values. NAME_SHAPE switches to the other shapes the client has been seen to give.
+NAME_SHAPE = "two"
+function UnitName()
+  if NAME_SHAPE == "whole" then return "Vatik Voidpact", "Voidpact" end
+  if NAME_SHAPE == "unknown" then return "Unknown" end
+  if NAME_SHAPE == "first" then return "Vatik" end
+  return "Vatik", "Voidpact"
+end
 function GetRealmName() return "Voidpact" end
 function UnitClass() return "Warlock", "WARLOCK" end
 function UnitLevel() return 60 end
@@ -389,13 +397,30 @@ if NO_ADDON_API then C_AddOns = nil end
 
 NO_ENUM = NO_ENUM or false
 if not NO_ENUM then
+  -- WoW Forever's own list (Blizzard_APIDocumentationGenerated/BagIndexConstantsDocumentation.lua):
+  -- nine character bank tabs from 6, nine account tabs from 15, and below zero the containers that
+  -- hold the bags put in the Bag Slots (Characterbanktab, Accountbanktab) and the keyring.
   Enum = { BagIndex = {
+    Accountbanktab = -3, Characterbanktab = -2, Keyring = -1,
     Backpack = 0, Bag_1 = 1, Bag_2 = 2, Bag_3 = 3, Bag_4 = 4, ReagentBag = 5,
-    Bank = -1, Reagentbank = -3,
-    -- One real tab, and the purchasable bank bag slots as their own containers. A container can
-    -- only ever be one of the two, which is what the bag slot matching relies on.
-    CharacterBankTab_1 = 6, BankBag_1 = 7, BankBag_2 = 8,
-  } }
+  }, BankType = { Character = 0, Guild = 1, Account = 2 } }
+  for i = 1, 9 do
+    Enum.BagIndex["CharacterBankTab_" .. i] = 5 + i
+    Enum.BagIndex["AccountBankTab_" .. i] = 14 + i
+  end
+  -- The bank's tabs: the main one and, bought with the first Bag Slot, tab 2. A Bag Slot is a bank
+  -- tab on this client; the bag put in it gives the tab its slots.
+  BANK_TABS_BOUGHT = 2
+  C_Bank = {
+    ShouldUsePlayerBagsInBank = function() return true end,
+    FetchMaxNumBankTabs = function(bankType) return 9 end,
+    FetchNumPurchasedBankTabs = function(bankType) return BANK_TABS_BOUGHT end,
+    FetchPurchasedBankTabData = function(bankType)
+      local out = {}
+      for i = 1, BANK_TABS_BOUGHT do out[i] = { ID = 5 + i, bankType = bankType, name = "Tab " .. i, icon = 0 } end
+      return out
+    end,
+  }
 else
   Enum = {}
 end
@@ -404,7 +429,9 @@ end
 -- it, which is exactly the trap the scan has to avoid.
 -- Bags 0 to 4 are the carried bags, 5 is the reagent bag, 6 the real bank tab and 7 the one bank
 -- bag that is equipped in the first Bag Slot.
-SLOTS = { [0] = 16, [1] = 16, [2] = 16, [3] = 14, [4] = 12, [5] = 12, [-1] = 32, [-3] = 0, [6] = 48, [7] = 48 }
+-- Under the enum, 7 is bank tab 2, given its 16 slots by the bag in the first Bag Slot; under the
+-- classic ids it is a 48 slot bank bag.
+SLOTS = { [0] = 16, [1] = 16, [2] = 16, [3] = 14, [4] = 12, [5] = 12, [-1] = 32, [-3] = 0, [6] = 48, [7] = NO_ENUM and 48 or 16 }
 
 function link(id, name) return "|cffffffff|Hitem:" .. id .. "::::::::60:::::::::|h[" .. name .. "]|h|r" end
 BANK_ITEMS = {
@@ -417,6 +444,9 @@ BANK_ITEMS = {
     [2] = { id = 13446, name = "Major Healing Potion", count = 5, quality = 1 },
   },
   [-1] = { [1] = { id = 4306, name = "Silk Cloth", count = 3, quality = 1 } },
+  -- The bags in the Bag Slots, under the enum: the first Bag Slot's bag sits at slot 2, its tab's
+  -- number, the way the game's own Bag Slot buttons read it.
+  [-2] = { [2] = { id = 4500, name = "Traveler's Backpack", count = 1, quality = 1 } },
 }
 -- What the carried bags hold, in particular slots so the replica can be checked for drawing each
 -- one where it sat.
@@ -470,7 +500,7 @@ function GetInventoryItemTexture(unit, inv) return INVENTORY[inv] and INVENTORY[
 function GetInventoryItemLink(unit, inv) return INVENTORY[inv] and INVENTORY[inv].link or nil end
 
 -- Atlases this client is known to carry. A bare client carries none.
-KNOWN_ATLASES = { ["bags-item-slot64"] = true, ["bags-glow-white"] = true, ["UI-HUD-ActionBar-IconFrame-Mask"] = true, ["spellbook-Tab-Frame-C60"] = true,
+KNOWN_ATLASES = { ["bags-item-slot64"] = true, ["bags-glow-white"] = true, ["bankslot-icon-lock"] = true, ["UI-HUD-ActionBar-IconFrame-Mask"] = true, ["spellbook-Tab-Frame-C60"] = true,
   ["spellbook-Tab-Frame-Glow-C60"] = true, ["spellbook-Tab-Frame-glow-gradient-C60"] = true }
 C_Texture = {
   GetAtlasInfo = function(name)
@@ -540,6 +570,10 @@ RAID_CLASS_COLORS = { WARLOCK = { r = 0.53, g = 0.53, b = 0.93 }, WARRIOR = { r 
 -- What this character is carrying right now, by item id.
 LIVE_COUNTS = {}
 C_Item = C_Item or {}
+ItemLocation = { CreateFromBagAndSlot = function(self, bag, slot) return { bag = bag, slot = slot } end }
+C_Item.DoesItemExist = function(location) return ItemAt(location.bag, location.slot) ~= nil end
+C_Item.GetItemIcon = function(location) local e = ItemAt(location.bag, location.slot) return e and (100 + e.id) or nil end
+C_Item.GetItemLink = function(location) local e = ItemAt(location.bag, location.slot) return e and link(e.id, e.name) or nil end
 C_Item.GetItemCount = function(id, includeBank) return LIVE_COUNTS[id] or 0 end
 
 -- ------------------------------------------------------------------
@@ -601,6 +635,10 @@ BANK_PURCHASE = CreateFrame("Button", nil, BankFrame)
 BANK_PURCHASE:SetSize(120, 22)
 BANK_PURCHASE:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", 200, -410)
 BANK_PURCHASE:EnableMouse(true)
+-- The panel the slots belong to, with the page size the real one gets from its XML (88).
+BankFrame.BankPanel = CreateFrame("Frame", nil, BankFrame)
+BankFrame.BankPanel:SetAllPoints(BankFrame)
+BankFrame.BankPanel.maximumTotalSlotsPerPage = 88
 NUM_BANKBAGSLOTS = 8
 function UnitGUID(unit) return "Player-70-0A1B2C3D" end
 BankFrame:Hide()
@@ -837,7 +875,10 @@ check("the new defaults are in", ns.db.minimap.shown == true and ns.db.minimap.a
 -- Two at load: the 1.0.x record and the name keyed copy of this character, which the first
 -- snapshot folds in.
 check("the report counts the saved characters", ns.report["vault holds"] == "2 characters, 0 guild banks", ns.report["vault holds"])
-check("the bank bag slots API was found", ns.report["bank bag slots api"] == "BankButtonIDToInvSlotID", ns.report["bank bag slots api"])
+check("the bank bag slots API was found: the bank tabs on WoW Forever, the inventory slots on a classic client",
+  ns.report["bank bag slots api"] == (NO_ENUM and "BankButtonIDToInvSlotID" or "bank tabs (C_Bank)"), ns.report["bank bag slots api"])
+check("and the report says how the bank is laid out", ns.report["bank shape"] == (NO_ENUM and "one tab at a time" or "one grid of every bank tab"),
+  ns.report["bank shape"])
 check("windows module ok", ns.report["windows"] == "ok", ns.report["windows"])
 check("vault module ok", ns.report["vault"] == "ok", ns.report["vault"])
 check("options module ok", ns.report["options"] == "ok", ns.report["options"])
@@ -856,7 +897,7 @@ check("with no old Casement installed the window engine does not wait for login"
 check("the old commands are not taken before login", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil)
 
 do -- scope: 1b. This is Bank Tabs, and only its half of Casement
-check("the version is 2.0.1", ns.version == "2.0.1", ns.version)
+check("the version is 2.0.2", ns.version == "2.0.2", ns.version)
 check("the saved variables are Bank Tabs' own", ns.db == BankTabsDB and ns.vault == BankTabsAccountDB.vault
   and CasementDB == nil and CasementAccountDB == nil)
 check("the event frame is Bank Tabs' own", BankTabsFrame ~= nil and CasementFrame == nil)
@@ -1151,7 +1192,25 @@ RunTimers(1)
 local me = ns.Who()
 check("the character is keyed by GUID, which never changes", me == "Player-70-0A1B2C3D", me)
 check("the name and realm are still to hand", ns.NameKey() == "Vatik - Voidpact", ns.NameKey())
-check("and the entry carries them for display", ns.Label(me) == "Vatik - Voidpact" and ns.ShortLabel(me) == "Vatik", ns.Label(me))
+-- The display name is the first name and the surname, the two values UnitName gives on this client.
+check("and the entry carries them for display, surname and all", ns.Label(me) == "Vatik Voidpact - Voidpact"
+  and ns.ShortLabel(me) == "Vatik Voidpact" and ns.vault.chars[me].name == "Vatik Voidpact", ns.Label(me))
+-- The other shapes the client has been seen to give: the whole name as the first value, the first
+-- name alone, and "Unknown" early in a session, which is no name at all.
+do -- scope: the shapes of a name
+  NAME_SHAPE = "whole"
+  check("a name given whole is kept whole", ns.PlayerName() == "Vatik Voidpact", ns.PlayerName())
+  NAME_SHAPE = "first"
+  check("a first name alone is used as it is", ns.PlayerName() == "Vatik", ns.PlayerName())
+  NAME_SHAPE = "unknown"
+  check("Unknown is no name at all", ns.PlayerName() == nil)
+  check("and the name last saved stands in", ns.ShortLabel(me) == "Vatik Voidpact", ns.ShortLabel(me))
+  NAME_SHAPE = "two"
+  -- This character is named live: an entry saved by 2.0.1 kept the first name alone.
+  ns.vault.chars[me].name = "Vatik"
+  check("this character is named live, over a name saved without its surname", ns.ShortLabel(me) == "Vatik Voidpact", ns.ShortLabel(me))
+  ns.vault.chars[me].name = "Vatik Voidpact"
+end
 -- The name this client gave before had a second word, which left a second entry. It has been
 -- folded into this one and dropped.
 check("the old name keyed entry was adopted", ns.vault.chars["Vatik Voidpact - Voidpact"] == nil)
@@ -1300,7 +1359,7 @@ labels = table.concat(labels, ",")
 -- storage is the character bank tabs and the legacy container is a ghost to be skipped; without
 -- it, the classic ids are all there is to go on.
 local EXPECT_ITEMS = NO_ENUM and 5 or 4
-local EXPECT_FREE = NO_ENUM and ((32 - 1) + (12 - 0) + (48 - 3) + (48 - 1)) or ((48 - 3) + (48 - 1))
+local EXPECT_FREE = NO_ENUM and ((32 - 1) + (12 - 0) + (48 - 3) + (48 - 1)) or ((48 - 3) + (16 - 1))
 check("it counted every item", record and record.items == EXPECT_ITEMS, record and record.items)
 check("it counted the free slots", record and record.free == EXPECT_FREE, record and record.free)
 
@@ -1329,15 +1388,38 @@ check("the item's icon was kept", tab6 and tab6.items[1].icon == 100 + 2589)
 local bagSlots = record and record.bagSlots
 check("the Bag Slots row was read, all eight of this client's slots", type(bagSlots) == "table" and #bagSlots == 8, bagSlots and #bagSlots)
 check("it knows how many are purchased", bagSlots and bagSlots.purchased == 1, bagSlots and bagSlots.purchased)
-check("the first bag slot hangs off the right inventory slot", bagSlots and bagSlots[1].inv == 68, bagSlots and bagSlots[1].inv)
+-- On WoW Forever a Bag Slot is a bank tab: the first is tab 2, its bag read from the container
+-- that holds the Bag Slots' bags. A classic client hangs it off an inventory slot.
+local BAG1_ICON = NO_ENUM and INVENTORY[68].icon or (100 + 4500)
+if NO_ENUM then
+  check("the first bag slot hangs off the right inventory slot", bagSlots and bagSlots[1].inv == 68, bagSlots and bagSlots[1].inv)
+else
+  check("the first bag slot is bank tab 2", bagSlots and bagSlots.tabs == true and bagSlots[1].tab == 2, bagSlots and bagSlots[1].tab)
+  check("the record says this client draws its bank as one grid", record and record.oneGrid == true)
+end
 check("the first bag slot is purchased and holds the bank bag", bagSlots and bagSlots[1].purchased == true
-  and bagSlots[1].icon == INVENTORY[68].icon)
+  and bagSlots[1].icon == BAG1_ICON, bagSlots and bagSlots[1].icon)
 check("the bag slot names the container the bag opens as", bagSlots and bagSlots[1].id == 7, bagSlots and bagSlots[1].id)
-check("and how many slots that bag has", bagSlots and bagSlots[1].slots == 48, bagSlots and bagSlots[1].slots)
+check("and how many slots that bag has", bagSlots and bagSlots[1].slots == (NO_ENUM and 48 or 16), bagSlots and bagSlots[1].slots)
 check("the bag's link was kept", bagSlots and bagSlots[1].link == INVENTORY[68].link)
 check("an unbought slot is marked so", bagSlots and bagSlots[2].purchased == false, bagSlots and tostring(bagSlots[2].purchased))
 check("an unbought slot holds no bag", bagSlots and bagSlots[7].id == nil and bagSlots[7].slots == 0)
 check("the bank bag's items are in the record too", BucketByID(record, 7) ~= nil and #BucketByID(record, 7).items == 1)
+check("the bank's page size was measured off the real window", record and record.layout and record.layout.perPage == 88,
+  record and record.layout and record.layout.perPage)
+if not NO_ENUM then
+  -- The container holding the Bag Slots' bags is not part of the bank's contents, even with slots.
+  SLOTS[-2] = 9
+  local again = ns.Vault.SnapshotBank("bank opened")
+  check("the container holding the Bag Slots' bags is never saved as a tab", again ~= nil and BucketByID(again, -2) == nil
+    and #again.containers == 2, again and #again.containers)
+  SLOTS[-2] = nil
+  -- A client without bank tabs to read keeps its bank bags the classic way.
+  local keep = C_Bank.FetchMaxNumBankTabs
+  C_Bank.FetchMaxNumBankTabs = function() error("no bank tabs on this client") end
+  check("with no bank tabs to read the classic reading takes over", ns.Vault.TabBagSlots() == nil)
+  C_Bank.FetchMaxNumBankTabs = keep
+end
 
 -- A slot changing while the bank is open re-reads it, but only once the storm is over.
 BANK_ITEMS[6][12] = { id = 8153, name = "Wildvine", count = 2, quality = 1 }
@@ -1352,8 +1434,27 @@ check("and the entry keeps its class through a re-read", ns.vault.chars[me].clas
 
 -- The game hides the bank window before addons hear BANKFRAME_CLOSED, so the closing snapshot
 -- cannot measure anything: it has to carry the earlier measurement forward, not drop it.
+-- By then the client may have let go of its tab list and the bags in the Bag Slots too.
+local savedTabs, savedBag = BANK_TABS_BOUGHT, BANK_ITEMS[-2]
+if not NO_ENUM then BANK_TABS_BOUGHT, BANK_ITEMS[-2] = 0, nil end
 BankFrame:Hide()
 fire("BANKFRAME_CLOSED")
+if not NO_ENUM then
+  local closing = ns.vault.chars[me].bank.bagSlots
+  check("a Bag Slot whose tab has slots counts as bought, with no tab list to say so", closing and closing[1].purchased == true
+    and closing[1].slots == 16 and closing.purchased == 1, closing and tostring(closing[1].purchased))
+  check("and keeps the bag it had when its icon cannot be read", closing and closing[1].icon == 100 + 4500
+    and closing[1].link == link(4500, "Traveler's Backpack"), closing and tostring(closing[1].icon))
+  check("an unbought slot stays unbought", closing and closing[2].purchased == false and closing[2].icon == nil)
+  BANK_TABS_BOUGHT, BANK_ITEMS[-2] = savedTabs, savedBag
+  -- Where the container read has nothing, the bag is read through its item location.
+  local keepInfo = C_Container.GetContainerItemInfo
+  C_Container.GetContainerItemInfo = function(bag, slot) if bag == -2 then return nil end return keepInfo(bag, slot) end
+  local read = ns.Vault.TabBagSlots()
+  check("the bag is read through its item location when the container read has nothing", read and read[1].icon == 100 + 4500
+    and read[1].link == link(4500, "Traveler's Backpack"), read and tostring(read[1].icon))
+  C_Container.GetContainerItemInfo = keepInfo
+end
 check("the bank is marked shut", ns.Vault.BankIsOpen() == false)
 check("closing the bank takes a last snapshot", ns.vault.chars[me].bank.reason == "bank closed", ns.vault.chars[me].bank.reason)
 local kept = ns.vault.chars[me].bank.layout
@@ -1642,6 +1743,13 @@ local function SideTabs()
 end
 -- The Bag Slots cells are the measured 24 pixels; a record without a measurement would draw them
 -- at the classic 24 as well.
+-- An unbought Bag Slot wears the real bank's padlock at full strength, or is dimmed where the
+-- client has no padlock art.
+local function Locked(cell)
+  if not cell then return false end
+  if cell.lock then return cell.lock.shown == true and cell:GetAlpha() == 1 end
+  return cell:GetAlpha() == 0.45
+end
 local function BagRow()
   local out = {}
   for _, c in ipairs(Cells(24)) do if c.csLabel == nil then out[#out + 1] = c end end
@@ -1686,7 +1794,8 @@ vault = BankTabsBank
 check("the saved bank opened", vault ~= nil and vault.shown == true)
 check("it wears a portrait window", (ns.report["saved bank panel"] or "") ~= "", ns.report["saved bank panel"])
 check("the report calls it a replica", ns.report["saved bank window"] == "ok, replica", ns.report["saved bank window"])
-check("the window is titled with the character's name: Vatik's Bank", vault.csTitle and vault.csTitle.text == "Vatik's Bank", vault.csTitle and vault.csTitle.text)
+check("the window is titled with the character's first name and surname: Vatik Voidpact's Bank", vault.csTitle
+  and vault.csTitle.text == "Vatik Voidpact's Bank", vault.csTitle and vault.csTitle.text)
 check("only the saved bank opened; the other two are not even built", ns.VaultUI.IsShown("bank") and not ns.VaultUI.IsShown("bags")
   and not ns.VaultUI.IsShown("guild") and BankTabsBags == nil and BankTabsGuild == nil)
 check("looking at this character", ns.VaultUI.Selected("bank") == me, ns.VaultUI.Selected("bank"))
@@ -1707,8 +1816,11 @@ else
   check("one main tab means no side column", #SideTabs() == 0, #SideTabs())
 end
 
+-- On WoW Forever every bank tab is one grid, the bag's 16 slots after the main tab's 48, as the real
+-- window lays them out; a classic client shows the one tab picked.
+local GRID_CELLS = NO_ENUM and 48 or 64
 local grid = Cells(37)
-check("the 48 slot tab is drawn as 48 cells", #grid == 48, #grid)
+check("the bank is drawn slot for slot: " .. GRID_CELLS .. " cells", #grid == GRID_CELLS, #grid)
 local placed = true
 for i = 1, 48 do
   local x, y = BankXY((i - 1) % 8, math.floor((i - 1) / 8))
@@ -1739,7 +1851,7 @@ for _, c in ipairs(grid) do
 end
 check("every empty slot hides its icon", emptyOK)
 check("every item cell shows its own icon", itemOK)
-check("the grid holds exactly the tab's items", itemCount == 4, itemCount)
+check("the grid holds exactly the saved items", itemCount == (NO_ENUM and 4 or 5), itemCount)
 check("a stack shows its count", first and first.count.text == 20, first and tostring(first.count.text))
 check("an empty cell shows no count", second and second.count.text == "", second and tostring(second.count.text))
 -- Only uncommon and better wear the quality glow, as in the real bank: the wool (quality 2) does,
@@ -1770,7 +1882,7 @@ do -- scope: the replica never draws a layout that is no grid
     for i = 1, 48 do
       if not CellAt(cells, 48 + ((i - 1) % 8) * pitchX, -(63 + math.floor((i - 1) / 8) * 47)) then return false end
     end
-    return #cells == 48
+    return #cells == GRID_CELLS
   end
   ns.vault.chars[me].bank.layout = ONE_COLUMN
   ns.VaultUI.Refresh()
@@ -1786,20 +1898,29 @@ end
 -- The Bag Slots row under the grid.
 local bagRow = BagRow()
 check("the Bag Slots row has this client's eight cells", #bagRow == 8, #bagRow)
-check("it sits where the real bank's Bag Slots sit", bagRow[1] and near(bagRow[1].points[1][4], 145) and near(bagRow[1].points[1][5], -359),
+-- The real bank grows a row's height for every row past six and keeps its Bag Slots as far from its
+-- bottom edge: the one grid's eight rows put them two rows lower than the six measured.
+local BAG_ROW_Y = NO_ENUM and -359 or -(359 + 2 * 47)
+check("it sits where the real bank's Bag Slots sit", bagRow[1] and near(bagRow[1].points[1][4], 145) and near(bagRow[1].points[1][5], BAG_ROW_Y),
   bagRow[1] and bagRow[1].points[1][5])
 check("the cells are the measured size, on the measured pitch, at the measured place", bagRow[1] and bagRow[1].w == 24
-  and bagRow[1].points[1][4] == 145 and bagRow[1].points[1][5] == -359 and bagRow[8].points[1][4] == 145 + 7 * 38)
+  and bagRow[1].points[1][4] == 145 and near(bagRow[1].points[1][5], BAG_ROW_Y) and bagRow[8].points[1][4] == 145 + 7 * 38)
+if not NO_ENUM then
+  check("the window grew two rows with the grid, as the real one does", near(vault.h, 500 + 2 * 47), vault.h)
+end
 check("the label says Bag Slots", TextOn(vault, "Bag Slots:") ~= nil)
 check("the first bag slot shows the bank bag's icon", bagRow[1] and bagRow[1].icon.shown == true
-  and bagRow[1].icon.texture == INVENTORY[68].icon and bagRow[1]:GetAlpha() == 1)
+  and bagRow[1].icon.texture == BAG1_ICON and bagRow[1]:GetAlpha() == 1 and not (bagRow[1].lock and bagRow[1].lock.shown))
 local dimmed = true
 for i = 2, 7 do
-  if not bagRow[i] or bagRow[i]:GetAlpha() ~= 0.45 or bagRow[i].icon.shown or not bagRow[i].shown then dimmed = false end
+  if not bagRow[i] or not Locked(bagRow[i]) or bagRow[i].icon.shown or not bagRow[i].shown then dimmed = false end
+  -- With the art on hand it is the padlock itself, not the dimmed stand in.
+  if not BARE and not (bagRow[i] and bagRow[i].lock and bagRow[i].lock.atlas == "bankslot-icon-lock") then dimmed = false end
 end
-check("the unbought slots are dimmed, not hidden", dimmed)
+check(BARE and "the unbought slots are dimmed, not hidden" or "the unbought slots wear the real bank's padlock", dimmed)
 check("the bag slot tooltips run", pcall(bagRow[1].scripts.OnEnter, bagRow[1]) and pcall(bagRow[8].scripts.OnEnter, bagRow[8]))
 
+if NO_ENUM then
 bagRow[1].scripts.OnClick(bagRow[1])
 grid = Cells(37)
 check("clicking the bag shows its 48 slots", #grid == 48, #grid)
@@ -1811,11 +1932,84 @@ bagRow[8].scripts.OnClick(bagRow[8])
 check("clicking an empty slot changes nothing", CellWith(Cells(37), 13446) ~= nil)
 bagRow[1].scripts.OnClick(bagRow[1])
 grid = Cells(37)
--- Back to the tab that was showing before the bag was opened, not to the first tab: under the
--- classic fallback the side tab "Bank bag 2" (48 slots) had been clicked, under the enum there
--- is only the one 48 slot tab.
+-- Back to the tab that was showing before the bag was opened, not to the first tab: the side tab
+-- "Bank bag 2" (48 slots) had been clicked.
 check("clicking the bag again goes back to the tab that was showing", CellWith(grid, 13446) == nil and #grid == 48, #grid)
 check("and the outline goes", bagRow[1].border.shown == false)
+else
+-- One grid: the bag's slots are drawn after the main tab's already, its potion (its second slot) the
+-- 50th cell, on the seventh row. Pointing at the bag lights its sixteen slots up, as the real bank
+-- does, and clicking it changes nothing.
+local potion = CellAt(grid, BankXY(1, 6))
+check("the bag's slots follow the main tab's: its second slot is the 50th cell", potion and potion.csItem and potion.csItem.id == 13446)
+local function LitCells(tab)
+  local n = 0
+  for _, c in ipairs(Cells(37)) do if c.csTab == tab and c.border.shown then n = n + 1 end end
+  return n
+end
+bagRow[1].scripts.OnEnter(bagRow[1])
+check("pointing at the bag lights up its sixteen slots", LitCells(7) == 16, LitCells(7))
+check("and none of the main tab's but its quality glows", LitCells(6) == 1, LitCells(6))
+local said = false
+for _, l in ipairs(GameTooltip.csLines) do if l[1] == "Its 16 slots are lit up in the grid" then said = true end end
+check("and its tooltip says so", said)
+bagRow[1].scripts.OnLeave(bagRow[1])
+check("leaving it puts them back", LitCells(7) == 0, LitCells(7))
+bagRow[1].scripts.OnClick(bagRow[1])
+check("clicking the bag leaves the grid as it is", #Cells(37) == 64 and CellWith(Cells(37), 2589) ~= nil and bagRow[1].border.shown == false)
+bagRow[2].scripts.OnEnter(bagRow[2])
+check("pointing at an unbought slot lights nothing", LitCells(7) == 0 and LitCells(6) == 1)
+bagRow[2].scripts.OnLeave(bagRow[2])
+end
+if not NO_ENUM then
+  -- More slots than a page holds: the real bank pages, 88 to a page, with a tab per page down the
+  -- side. With a page of 24 the 64 slots make three pages: 24, 24 and the bag's 16.
+  local layout = ns.vault.chars[me].bank.layout
+  local keepPerPage = layout.perPage
+  layout.perPage = 24
+  ns.VaultUI.Refresh()
+  local pageTabs = SideTabs()
+  check("a bank larger than a page gets a tab per page down the side", #pageTabs == 3, #pageTabs)
+  check("each named by its page, with the slots it holds", pageTabs[2] and pageTabs[2].csLabel == "Page 2"
+    and pageTabs[2].csDetail == "Slots 25 to 48", pageTabs[2] and pageTabs[2].csDetail)
+  check("wearing the real bank's page tab icons", pageTabs[1] and pageTabs[1].icon.texture == "Interface/ICONS/INV_SideTab_Bank_c60",
+    pageTabs[1] and pageTabs[1].icon.texture)
+  check("the first page shows its 24 slots, the first page's tab outlined", #Cells(37) == 24 and pageTabs[1].border.shown
+    and not pageTabs[3].border.shown, #Cells(37))
+  pageTabs[3].scripts.OnClick(pageTabs[3])
+  local cells = Cells(37)
+  local second = CellAt(cells, BankXY(1, 0))
+  check("the last page shows the last 16 slots, the bag's", #cells == 16, #cells)
+  check("its second slot first in line but one", second and second.csItem and second.csItem.id == 13446)
+  check("and the last page's tab is the one outlined", pageTabs[3].border.shown and not pageTabs[1].border.shown)
+  layout.perPage = keepPerPage
+  ns.VaultUI.Refresh()
+  check("back to one page, the side column goes and the grid is whole", #SideTabs() == 0 and #Cells(37) == 64, #Cells(37))
+
+  -- A bank saved by 2.0.1 on this client: nothing said about its shape, and its Bag Slots read as
+  -- inventory slots, every one unbought. It is drawn the way the client draws its bank now, as one
+  -- grid, and its saved tab 2 shows the first Bag Slot was bought.
+  local saved = ns.vault.chars[me].bank
+  local old = ns.DeepCopy(saved)
+  old.oneGrid = nil
+  old.bagSlots = { purchased = 0 }
+  for i = 1, 8 do old.bagSlots[i] = { inv = 67 + i, purchased = false, slots = 0 } end
+  ns.vault.chars[me].bank = old
+  ns.VaultUI.Refresh()
+  local row = BagRow()
+  check("a bank saved before 2.0.2 is drawn as one grid all the same", #Cells(37) == 64, #Cells(37))
+  check("its first Bag Slot shows as bought, from the saved tab 2, the rest not", row[1] and not Locked(row[1]) and Locked(row[2]))
+  row[1].scripts.OnEnter(row[1])
+  local told = false
+  for _, l in ipairs(GameTooltip.csLines) do if l[1] == "Purchased, 16 slots" then told = true end end
+  check("its tooltip says how many slots its bag gave", told)
+  local lit = 0
+  for _, c in ipairs(Cells(37)) do if c.csTab == 7 and c.border.shown then lit = lit + 1 end end
+  check("and pointing at it lights up those slots", lit == 16, lit)
+  row[1].scripts.OnLeave(row[1])
+  ns.vault.chars[me].bank = saved
+  ns.VaultUI.Refresh()
+end
 if NO_ENUM then
   local want
   for _, t in ipairs(SideTabs()) do if t.csLabel == "Bank bag 2" then want = t end end
@@ -1844,14 +2038,14 @@ end
 BankTabsBankSearch:SetText("wool")
 BankTabsBankSearch.scripts.OnTextChanged(BankTabsBankSearch)
 grid = Cells(37)
-check("searching keeps every cell on screen", #grid == 48, #grid)
+check("searching keeps every cell on screen", #grid == GRID_CELLS, #grid)
 local wool = CellWith(grid, 2592)
 check("the match stays bright", wool and wool:GetAlpha() == 1)
 local linen = CellWith(grid, 2589)
 check("a non-match is dimmed to a quarter, not hidden", linen and linen.shown and linen:GetAlpha() == 0.25, linen and linen:GetAlpha())
 local dimCount = 0
 for _, c in ipairs(grid) do if c.csItem and c:GetAlpha() == 0.25 then dimCount = dimCount + 1 end end
-check("every other item is dimmed", dimCount == 3, dimCount)
+check("every other item is dimmed", dimCount == (NO_ENUM and 3 or 4), dimCount)
 BankTabsBankSearch:SetText("WOOL")
 BankTabsBankSearch.scripts.OnTextChanged(BankTabsBankSearch)
 check("the search ignores case", CellWith(Cells(37), 2592):GetAlpha() == 1 and CellWith(Cells(37), 2589):GetAlpha() == 0.25)
@@ -1914,7 +2108,7 @@ check("and no Bag Slots row", #BagRow() == 0 and TextOn(vault, "Bag Slots:") == 
 check("the guild money is shown", TextOn(vault, ns.Money(9876543)) ~= nil)
 
 -- ------------------------------------------------------------------
--- 11b. The bags replica: the combined backpack, filled from the bottom right
+-- 11b. The bags replica: the combined backpack, read like a page with the short row on top
 -- ------------------------------------------------------------------
 ns.VaultUI.Show("bags")
 vault = BankTabsBags
@@ -1942,23 +2136,26 @@ local EXPECT_CELLS = ORDINARY + (NO_ENUM and 0 or 12)
 check("every carried slot is drawn", #grid == EXPECT_CELLS, #grid)
 check("that is the sum of the bag sizes", #grid == ns.vault.chars[OLDTOON].bags.slots)
 local hearth = CellWith(grid, 6948)
-check("backpack slot 1 is the bottom right cell of the grid", hearth ~= nil and hearth == CellAt(grid, GridXY(9, 7)),
+-- 74 slots, ten across: a short top row of four against the right edge, then seven full rows. The
+-- real combined backpack starts on that short row: the user's Hearthstone, in backpack slot 1, sat
+-- first in it. 2.0.1 and before drew the whole thing the other way round.
+check("backpack slot 1 starts the short top row, against the right edge", hearth ~= nil and hearth == CellAt(grid, GridXY(6, 0)),
   hearth and (hearth.points[1][4] .. "," .. hearth.points[1][5]))
--- Nothing in the ordinary grid sits further right or further down than it.
+-- Nothing in the ordinary grid comes before it, reading like a page.
 local cornerOK = true
 local hx, hy = hearth and hearth.points[1][4], hearth and hearth.points[1][5]
 for _, c in ipairs(grid) do
   local p = c.points[1]
-  if hx and p[5] >= -(62 + 7 * 42) - 0.01 and (p[4] > hx + 0.01 or p[5] < hy - 0.01) then cornerOK = false end
+  if hx and p[5] >= -(62 + 7 * 42) - 0.01 and (p[5] > hy + 0.01 or (near(p[5], hy, 0.01) and p[4] < hx - 0.01)) then cornerOK = false end
 end
-check("no ordinary cell is further right or lower than the backpack's first slot", cornerOK)
+check("no ordinary cell comes before the backpack's first slot", cornerOK)
 local water = CellWith(grid, 159)
-check("backpack slot 16 is one row up, six from the right", water ~= nil and water == CellAt(grid, GridXY(4, 6)),
-  water and (water.points[1][4] .. "," .. water.points[1][5]))
+check("backpack slot 16 is the second cell of the third row (four on the short row, ten on the next)", water ~= nil
+  and water == CellAt(grid, GridXY(1, 2)), water and (water.points[1][4] .. "," .. water.points[1][5]))
 local shard = CellWith(grid, 6265)
-check("bag 4's last slot is the top left most cell", shard ~= nil and shard == CellAt(grid, GridXY(6, 0)),
+check("bag 4's last slot is the bottom right cell, the last of all", shard ~= nil and shard == CellAt(grid, GridXY(9, 7)),
   shard and (shard.points[1][4] .. "," .. shard.points[1][5]))
-check("nothing sits left of it on the top row", CellAt(grid, GridXY(5, 0)) == nil and CellAt(grid, GridXY(7, 0)) ~= nil)
+check("nothing sits left of the short top row", CellAt(grid, GridXY(5, 0)) == nil and CellAt(grid, GridXY(7, 0)) ~= nil)
 check("the items picked up in play are drawn", CellWith(grid, 2589) ~= nil and CellWith(grid, 2592) ~= nil)
 check("bags hold exactly the saved items", ItemCount(grid) == 6, ItemCount(grid))
 
@@ -2054,7 +2251,12 @@ local c0, c4 = CellAt(grid, BankXY(0, 0)), CellAt(grid, BankXY(4, 0))
 check("with their items where they sat", c0 and c0.csItem and c0.csItem.id == 2770 and c4 and c4.csItem and c4.csItem.id == 818)
 check("the chosen tab moved", ctabs[2].icon:GetAlpha() == 1 and ctabs[1].icon:GetAlpha() == 0.85)
 check("a page turned", #PLAYED == played + 1, #PLAYED - played)
-check("the bag slots row follows the character", BagRow()[2]:GetAlpha() == 1 and BagRow()[3]:GetAlpha() == 0.45)
+check("the bag slots row follows the character", not Locked(BagRow()[2]) and BagRow()[2]:GetAlpha() == 1 and Locked(BagRow()[3]))
+if not NO_ENUM then
+  -- Six rows, as many as the bank was measured with: its Bag Slots and its height as measured.
+  check("a six row grid keeps the Bag Slots and the height the bank was measured with", near(BagRow()[1].points[1][5], -359)
+    and near(vault.h, 500), BagRow()[1].points[1][5] .. " / " .. tostring(vault.h))
+end
 check("the bottom edge still carries only the money", TextOn(vault, CHOHAM .. ", checked", true) == nil)
 check("and shows their money", TextOn(vault, ns.Money(5500)) ~= nil)
 if not BARE then
@@ -2071,8 +2273,8 @@ vault = BankTabsGuild
 check("the guild bank still has no character tabs", #CharTabs() == 0)
 vault = BankTabsBank
 ns.VaultUI.Show("bank", me)
-check("Show can name the character to look at", ns.VaultUI.Selected("bank") == me and vault.csTitle.text == "Vatik's Bank")
-check("and the grid is ours again", ItemCount(Cells(37)) == (NO_ENUM and 1 or 4))
+check("Show can name the character to look at", ns.VaultUI.Selected("bank") == me and vault.csTitle.text == "Vatik Voidpact's Bank")
+check("and the grid is ours again", ItemCount(Cells(37)) == (NO_ENUM and 1 or 5))
 if not BARE then
   local portrait = vault.PortraitContainer and vault.PortraitContainer.portrait
   check("our own face is back in the portrait", portrait and portrait.portraitOf == "player")
@@ -2082,7 +2284,7 @@ ctabs[3].scripts.OnClick(ctabs[3])
 check("the old style record can be looked at", ns.VaultUI.Selected("bank") == "Oldtoon - Voidpact" and ItemCount(Cells(37)) == 1)
 check("titled with the name kept in its key: Oldtoon's Bank", vault.csTitle.text == "Oldtoon's Bank", vault.csTitle.text)
 check("with its item in its slot", CellAt(Cells(37), BankXY(5, 0)) and CellAt(Cells(37), BankXY(5, 0)).csItem ~= nil)
-check("a record with no bag slots dims the whole row", BagRow()[1]:GetAlpha() == 0.45)
+check("a record with no bag slots shows the whole row unbought", Locked(BagRow()[1]) and Locked(BagRow()[8]))
 
 -- Forgetting the character being looked at falls back to this one.
 local choham = ns.vault.chars[CHOHAM]
@@ -2289,12 +2491,12 @@ check("the saved bank lists this character first before its bank is saved", Char
   and #CharTabs() == 3, #CharTabs())
 check("and shows a short line for it instead of an empty grid", TextOn(vault, "Visit a banker once and your bank is saved here.") ~= nil
   and #Cells(37) == 0 and #BagRow() == 0)
-check("under this character's name", vault.csTitle.text == "Vatik's Bank", vault.csTitle.text)
+check("under this character's name", vault.csTitle.text == "Vatik Voidpact's Bank", vault.csTitle.text)
 ns.vault.chars[me] = nil
 ns.VaultUI.Refresh()
 check("a character with nothing saved at all still gets its tab, its class read live", CharTabs()[1] and CharTabs()[1].csWho == me
   and CharTabs()[1].icon.texture == CLASS_SHEET and near(CharTabs()[1].icon.texCoord[2], 0.75 - 0.0175, 0.0001))
-check("and its name read live for the title", vault.csTitle.text == "Vatik's Bank", vault.csTitle.text)
+check("and its name read live for the title", vault.csTitle.text == "Vatik Voidpact's Bank", vault.csTitle.text)
 ns.vault.chars[me] = myEntry
 myEntry.bank = myBank
 ns.Vault.Changed()
@@ -2691,10 +2893,10 @@ ns.vault.guilds["Night Owls - Voidpact"] = { time = time(), money = 100, tabs = 
 ns.Vault.Changed()
 LIVE_COUNTS[2589] = 7
 local lines = Hover(2589, "Linen Cloth")
-local mine = LineFor(lines, "Vatik")
+local mine = LineFor(lines, "Vatik Voidpact")
 check("this character's line names them without the realm", mine ~= nil, lines[1] and (lines[1][1] .. " / " .. tostring(lines[1][2])))
 check("with the saved bank count and the live bag count", mine and mine[2] == "bank 20, bags 7", mine and mine[2])
-check("this character comes first", lines[1] and lines[1][1] == "Vatik")
+check("this character comes first, by first name and surname", lines[1] and lines[1][1] == "Vatik Voidpact")
 local guildLine = LineFor(lines, "Night Owls")
 check("the guild bank has its own line", guildLine and guildLine[2] == "guild bank 40", guildLine and guildLine[2])
 -- The total is the sum of every other line (another saved character may hold some too).
@@ -2719,12 +2921,12 @@ check("clearing the tooltip lets the next hover write again", GameTooltip.csTool
 
 -- Only the name is known: the index falls back to it.
 lines = Hover(nil, "Linen Cloth")
-check("an item known only by name is still found", LineFor(lines, "Vatik") ~= nil)
+check("an item known only by name is still found", LineFor(lines, "Vatik Voidpact") ~= nil)
 
 -- The switches.
 ns.db.tooltips.guild = false
 lines = Hover(2589, "Linen Cloth")
-check("the guild bank can be left out", LineFor(lines, "Night Owls") == nil and LineFor(lines, "Vatik") ~= nil)
+check("the guild bank can be left out", LineFor(lines, "Night Owls") == nil and LineFor(lines, "Vatik Voidpact") ~= nil)
 ns.db.tooltips.guild = true
 ns.db.tooltips.total = false
 lines = Hover(2589, "Linen Cloth")
@@ -2736,7 +2938,7 @@ lines = Hover(2589, "Linen Cloth")
 check("with a key chosen, nothing shows until it is held", #lines == 0, #lines)
 SHIFT = true
 lines = Hover(2589, "Linen Cloth")
-check("and everything shows while it is", LineFor(lines, "Vatik") ~= nil)
+check("and everything shows while it is", LineFor(lines, "Vatik Voidpact") ~= nil)
 SHIFT = false
 ns.db.tooltips.modifier = "none"
 ns.db.tooltips.enabled = false
@@ -2809,7 +3011,7 @@ local money = ContainerFrame1.MoneyFrame
 check("the backpack's money readout was hooked", money.scripts.OnEnter ~= nil and money.mouse == true)
 GameTooltip:SetOwner(nil)
 money.scripts.OnEnter(money)
-check("hovering it lists this character's gold, marked as now", LineFor(GameTooltip.csLines, "Vatik (now)") ~= nil)
+check("hovering it lists this character's gold, marked as now", LineFor(GameTooltip.csLines, "Vatik Voidpact (now)") ~= nil)
 check("and the other characters'", LineFor(GameTooltip.csLines, "Choham") ~= nil)
 check("and the total", LineFor(GameTooltip.csLines, "Total") ~= nil)
 check("the coin button inside takes the hover too", money.gold.scripts.OnEnter ~= nil)
@@ -3876,7 +4078,7 @@ const parts = [];
   check('the TOC is BankTabs.toc', toc !== null);
   check('titled Bank Tabs', field(toc, 'Title') === 'Bank Tabs', field(toc, 'Title'));
   const version = (sources['Core.lua'].match(/ns\.version = "([^"]+)"/) || [])[1];
-  check('its version is the addon\'s own, 2.0.1', field(toc, 'Version') === '2.0.1' && version === '2.0.1', field(toc, 'Version') + ' / ' + version);
+  check('its version is the addon\'s own, 2.0.2', field(toc, 'Version') === '2.0.2' && version === '2.0.2', field(toc, 'Version') + ' / ' + version);
   check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
     && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
   check('its icon is the treasure chest from the game\'s icons (not Stockpile\'s bag), the path intact', /^Interface\\Icons\\Racial_Dwarf_FindTreasure$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
@@ -3924,7 +4126,7 @@ const parts = [];
     const changelog = (read('CHANGELOG.md') || '').replace(/\r\n/g, '\n');
     const notes = (read('RELEASE-NOTES.md') || '').replace(/\r\n/g, '\n');
     const top = changelog.split(/\r?\n(?=## )/).find(s => s.startsWith('## ')) || '';
-    check('the changelog opens on 2.0.1', /^## 2\.0\.1 - /.test(top), top.slice(0, 30));
+    check('the changelog opens on 2.0.2', /^## 2\.0\.2 - /.test(top), top.slice(0, 30));
     check('the release notes are that section and nothing else', notes.replace(/\s+$/, '') === top.replace(/\s+$/, ''));
 
     // Every text file, docs and code: no em or en dashes, as the author asked.

@@ -211,11 +211,9 @@ local function StampCharacter(entry)
 		local ok, level = pcall(UnitLevel, "player")
 		if ok and type(level) == "number" then entry.level = level end
 	end
-	-- The display name and realm travel with the entry; the key is the GUID.
-	if UnitName then
-		local ok, name = pcall(UnitName, "player")
-		if ok and type(name) == "string" and name ~= "" then entry.name = name end
-	end
+	-- The display name (first name and surname) and realm travel with the entry; the key is the GUID.
+	local name = ns.PlayerName()
+	if name then entry.name = name end
 	if GetRealmName then
 		local ok, realm = pcall(GetRealmName)
 		if ok and type(realm) == "string" then entry.realm = realm end
@@ -425,6 +423,10 @@ local function MeasureBankLayout()
 		pitchY = grid[2][1].y - first[1].y,
 		originX = first[1].x, originY = first[1].y,
 	}
+	-- How many slots the bank shows a page at a time, where it pages (88 on this client).
+	local panel = frame.BankPanel
+	local perPage = type(panel) == "table" and panel.maximumTotalSlotsPerPage
+	if type(perPage) == "number" and perPage >= cols then layout.perPage = perPage end
 
 	-- The Bag Slots: one row of smaller buttons under the grid.
 	local gridBottom = grid[#grid][1].y + cell
@@ -524,7 +526,10 @@ function Vault.BankContainers()
 
 	if type(Enum) == "table" and type(Enum.BagIndex) == "table" then
 		for name, id in pairs(Enum.BagIndex) do
-			if type(name) == "string" and type(id) == "number" and name:lower():find("bank") then
+			-- Characterbanktab and Accountbanktab hold the bags put in the Bag Slots, not the bank's
+			-- contents (see TabBagSlots).
+			if type(name) == "string" and type(id) == "number" and name:lower():find("bank")
+				and name ~= "Characterbanktab" and name ~= "Accountbanktab" then
 				local current = byID[id]
 				if not current or NamePriority(name) > current.priority then
 					byID[id] = { id = id, label = PrettyBagName(name, id), priority = NamePriority(name), raw = name }
@@ -564,9 +569,85 @@ function Vault.BankContainers()
 	return out
 end
 
--- The seven Bag Slots along the bottom of the bank window: which are purchased, which hold a bag,
--- and which container each bag opens as.
+-- Whether this client's bank window lays every bank tab out as one grid, the main tab's slots
+-- first and each further tab's after them, a page of 88 at a time (C_Bank.ShouldUsePlayerBagsInBank,
+-- as WoW Forever's own bank asks it).
+function Vault.OneGrid()
+	if not (C_Bank and C_Bank.ShouldUsePlayerBagsInBank) then return false end
+	local ok, yes = pcall(C_Bank.ShouldUsePlayerBagsInBank)
+	return ok and yes == true
+end
+
+-- The bag in a Bag Slot: read as a container slot, the way the game's own tooltip reads it, or
+-- through its item location where that read has nothing.
+local function BagInSlot(container, slot)
+	local bag = ContainerItem(container, slot)
+	if bag and bag.icon then return bag.icon, bag.link end
+	if not (ItemLocation and ItemLocation.CreateFromBagAndSlot and C_Item and C_Item.DoesItemExist and C_Item.GetItemIcon) then
+		return nil, nil
+	end
+	local okLocation, location = pcall(ItemLocation.CreateFromBagAndSlot, ItemLocation, container, slot)
+	if not (okLocation and location) then return nil, nil end
+	local okHas, has = pcall(C_Item.DoesItemExist, location)
+	if not (okHas and has) then return nil, nil end
+	local okIcon, icon = pcall(C_Item.GetItemIcon, location)
+	local link
+	if C_Item.GetItemLink then
+		local okLink, value = pcall(C_Item.GetItemLink, location)
+		if okLink then link = value end
+	end
+	return okIcon and icon or nil, link
+end
+
+-- On this client a Bag Slot is a bank tab: buying the first Bag Slot buys tab 2, and the bag put in
+-- it gives that tab its slots. The bag itself sits in a container of its own,
+-- Enum.BagIndex.Characterbanktab, at the slot numbered like its tab: 2 for the first Bag Slot. That
+-- is how the game's own Bag Slot buttons read it (BankItemButtonBagMixin). Nil on a client that
+-- keeps its bank bags the classic way, as inventory slots.
+local function TabBagSlots()
+	local BagIndex = type(Enum) == "table" and Enum.BagIndex
+	if not (type(BagIndex) == "table" and type(BagIndex.Characterbanktab) == "number"
+		and type(BagIndex.CharacterBankTab_1) == "number") then
+		return nil
+	end
+	if not (C_Bank and C_Bank.FetchMaxNumBankTabs and C_Bank.FetchPurchasedBankTabData) then return nil end
+	local bankType = (type(Enum.BankType) == "table" and Enum.BankType.Character) or 0
+	local okMax, max = pcall(C_Bank.FetchMaxNumBankTabs, bankType)
+	local okData, data = pcall(C_Bank.FetchPurchasedBankTabData, bankType)
+	if not (okMax and type(max) == "number" and max > 1 and okData and type(data) == "table") then return nil end
+	local bought = {}
+	for _, tab in ipairs(data) do
+		if type(tab) == "table" and type(tab.ID) == "number" then bought[tab.ID] = true end
+	end
+	local slots, purchased = {}, 0
+	for tabNumber = 2, max do
+		local id = BagIndex.CharacterBankTab_1 + tabNumber - 1
+		-- A tab with slots was bought, whatever the tab list says once the client has let it go.
+		local size = NumSlots(id)
+		local isBought = bought[id] or size > 0
+		local icon, link = BagInSlot(BagIndex.Characterbanktab, tabNumber)
+		if isBought then purchased = purchased + 1 end
+		slots[#slots + 1] = {
+			tab = tabNumber,
+			id = isBought and id or nil,
+			icon = icon,
+			link = link,
+			slots = isBought and size or 0,
+			purchased = isBought,
+		}
+	end
+	slots.purchased = purchased
+	slots.tabs = true
+	return slots
+end
+Vault.TabBagSlots = TabBagSlots
+
+-- The Bag Slots along the bottom of the bank window: which are purchased, which hold a bag, and
+-- which container each bag opens as. Read as bank tabs where the client has them (TabBagSlots),
+-- as inventory slots the classic way otherwise.
 local function BankBagSlots(measured)
+	local tabs = TabBagSlots()
+	if tabs then return tabs end
 	local slots = {}
 	-- This client's bank has more Bag Slots than the classic seven, so the count comes from the
 	-- measured window when there is one, the game's own constant otherwise.
@@ -661,6 +742,18 @@ function Vault.SnapshotBank(reason)
 	record.layout = layout or prior or account
 	if layout then ns.vault.bankLayout = layout end
 	record.bagSlots = BankBagSlots(record.layout and record.layout.bagCount)
+	-- A bag's icon cannot always be read (by "bank closed" the client may have let it go), so a
+	-- bought Bag Slot of the same size keeps the bag it had.
+	local before = previous and previous.bagSlots
+	if record.bagSlots.tabs and type(before) == "table" and before.tabs then
+		for i, slot in ipairs(record.bagSlots) do
+			local old = before[i]
+			if slot.purchased and not slot.icon and type(old) == "table" and old.icon and old.slots == slot.slots then
+				slot.icon, slot.link = old.icon, old.link
+			end
+		end
+	end
+	record.oneGrid = Vault.OneGrid()
 	Totals(record)
 
 	-- Once the bank has closed the client can let go of its contents; an empty read then must not
@@ -1033,5 +1126,7 @@ function Vault.Init()
 	report["container api"] = (C_Container and C_Container.GetContainerItemInfo) and "C_Container"
 		or (GetContainerItemInfo and "classic globals" or "none found")
 	report["guild bank api"] = GetGuildBankItemInfo and "ok" or "not on this client"
-	report["bank bag slots api"] = BankButtonIDToInvSlotID and "BankButtonIDToInvSlotID" or "not on this client"
+	report["bank bag slots api"] = (C_Bank and C_Bank.FetchPurchasedBankTabData and "bank tabs (C_Bank)")
+		or (BankButtonIDToInvSlotID and "BankButtonIDToInvSlotID") or "not on this client"
+	report["bank shape"] = Vault.OneGrid() and "one grid of every bank tab" or "one tab at a time"
 end

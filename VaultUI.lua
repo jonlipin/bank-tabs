@@ -76,10 +76,25 @@ local function BankGeometry(record)
 			width = layout.width, height = layout.height,
 			bagCell = layout.bagCell or CLASSIC_BANK.bagCell, bagPitch = layout.bagPitch or CLASSIC_BANK.bagPitch,
 			bagOriginX = layout.bagOriginX or CLASSIC_BANK.bagOriginX, bagOriginY = layout.bagOriginY,
-			bagCount = layout.bagCount,
+			bagCount = layout.bagCount, rows = layout.rows, perPage = layout.perPage,
 		}
 	end
 	return CLASSIC_BANK
+end
+
+-- The real bank keeps the height of six rows and grows a row's height for every row beyond, its
+-- Bag Slots keeping their distance from its bottom edge (BankPanelMixin's slot layout). A layout
+-- measured with one number of rows is moved to fit another.
+local BANK_BASE_ROWS = 6
+local function FitRows(geo, rows)
+	if not (geo.rows and geo.height) then return geo end
+	local delta = (math.max(rows, BANK_BASE_ROWS) - math.max(geo.rows, BANK_BASE_ROWS)) * geo.pitchY
+	if delta == 0 then return geo end
+	local fitted = {}
+	for key, value in pairs(geo) do fitted[key] = value end
+	fitted.rows, fitted.height = rows, geo.height + delta
+	if geo.bagOriginY then fitted.bagOriginY = geo.bagOriginY + delta end
+	return fitted
 end
 
 local CLASS_SHEET = "Interface\\Glues\\CharacterCreate\\UI-CharacterCreate-Classes"
@@ -190,6 +205,73 @@ local function BankParts(record)
 		end
 	end
 	return mains, bags
+end
+
+-- Whether a saved bank is drawn the way this client draws its bank, every bank tab in one grid
+-- (see Vault.OneGrid). A bank saved before the snapshot said so is drawn the way the client draws
+-- it now.
+local function OneGrid(record)
+	if record and record.oneGrid ~= nil then return record.oneGrid end
+	return ns.Vault.OneGrid and ns.Vault.OneGrid() or false
+end
+
+-- The character bank's own tabs by container id, from the client's list of containers; nil when
+-- the client has no such list.
+local function CharacterTabIDs()
+	local ids, any = {}, false
+	if type(Enum) == "table" and type(Enum.BagIndex) == "table" then
+		for name, id in pairs(Enum.BagIndex) do
+			if type(name) == "string" and type(id) == "number" and name:find("^CharacterBankTab_%d+$") then
+				ids[id], any = true, true
+			end
+		end
+	end
+	return any and ids or nil
+end
+
+-- Every slot of a saved bank in the order the real window lays them out: the main tab's slots, then
+-- each further tab's. Each comes with its item, if any, and the tab it belongs to.
+local function TabSequence(record)
+	local ids = CharacterTabIDs()
+	local buckets = {}
+	for _, bucket in ipairs(record.containers or {}) do
+		if not ids or ids[bucket.id] then buckets[#buckets + 1] = bucket end
+	end
+	table.sort(buckets, function(a, b) return a.id < b.id end)
+	local sequence = {}
+	for _, bucket in ipairs(buckets) do
+		local bySlot = {}
+		for _, item in ipairs(bucket.items or {}) do bySlot[item.slot] = item end
+		for slot = 1, bucket.slots or 0 do sequence[#sequence + 1] = { item = bySlot[slot], tab = bucket.id } end
+	end
+	return sequence
+end
+
+-- The Bag Slots of a saved bank as bank tabs. Banks saved before 2.0.2 on this client read them as
+-- inventory slots, which this client does not have, so every one came out unbought; which were
+-- bought shows in the saved tabs instead, Bag Slot n opening tab n + 1. Whatever such a record
+-- did get right (a slot marked bought, a bag's icon) is kept; the rest waits for the next visit.
+local function BagSlotsAsTabs(record, count)
+	local saved = record.bagSlots
+	if type(saved) == "table" and saved.tabs then return saved end
+	local first = type(Enum) == "table" and type(Enum.BagIndex) == "table" and Enum.BagIndex.CharacterBankTab_1
+	if type(first) ~= "number" then return saved end
+	local byID = {}
+	for _, bucket in ipairs(record.containers or {}) do byID[bucket.id] = bucket end
+	local out = { tabs = true }
+	for i = 1, count do
+		local bucket = byID[first + i]
+		local old = type(saved) == "table" and type(saved[i]) == "table" and saved[i] or nil
+		out[i] = {
+			tab = i + 1,
+			id = bucket and bucket.id or nil,
+			slots = bucket and bucket.slots or 0,
+			purchased = bucket ~= nil or (old and old.purchased) or false,
+			icon = old and old.icon or nil,
+			link = old and old.link or nil,
+		}
+	end
+	return out
 end
 
 -- A character's last seen gold (this one's live), from the snapshot store.
@@ -535,7 +617,18 @@ local function PlaceCell(W, index, col, row, item, geo)
 	cell:ClearAllPoints()
 	cell:SetPoint("TOPLEFT", W.frame, "TOPLEFT", geo.originX + col * geo.pitchX, -(geo.originY + row * geo.pitchY))
 	SetCellItem(W, cell, item)
+	cell.csTab = nil
 	cell:Show()
+end
+
+-- Lights up the slots of one bank tab, as the real bank does while the bag in a Bag Slot is
+-- pointed at, and puts their quality borders back after.
+local function LightTab(W, tab, on)
+	for _, cell in ipairs(W.cells) do
+		if cell.csTab ~= nil and cell.csTab == tab and cell:IsShown() then
+			if on then SetOutline(cell, true) else SetQualityBorder(cell, cell.csItem and cell.csItem.quality) end
+		end
+	end
 end
 
 -- One container's slots from the top left, one per slot in the slot's own position. The guild
@@ -572,10 +665,14 @@ local function BagTooltip(self)
 		if not pcall(GameTooltip.SetHyperlink, GameTooltip, slot.link) then
 			GameTooltip:SetText("Bank bag", 1, 1, 1)
 		end
-		if (slot.slots or 0) > 0 then GameTooltip:AddLine("Click to look inside", 0.6, 0.85, 1) end
+		if (slot.slots or 0) > 0 then
+			-- In one grid the bag's slots are already on show, and pointing at it lights them up.
+			GameTooltip:AddLine(self.csOneGrid and ("Its " .. slot.slots .. " slots are lit up in the grid") or "Click to look inside",
+				0.6, 0.85, 1)
+		end
 	elseif slot and slot.purchased then
 		GameTooltip:SetText("Bag slot", 1, 1, 1)
-		GameTooltip:AddLine("Purchased, nothing in it", 0.7, 0.7, 0.7)
+		GameTooltip:AddLine((slot.slots or 0) > 0 and ("Purchased, " .. slot.slots .. " slots") or "Purchased, nothing in it", 0.7, 0.7, 0.7)
 	else
 		GameTooltip:SetText("Bag slot", 1, 1, 1)
 		GameTooltip:AddLine("Not purchased", 0.7, 0.7, 0.7)
@@ -583,15 +680,36 @@ local function BagTooltip(self)
 	GameTooltip:Show()
 end
 
+-- The padlock the real bank draws on a Bag Slot not yet bought.
+local LOCK_ATLAS = "bankslot-icon-lock"
+
 local function GetBagCell(W, index)
 	local cell = W.bagCells[index]
 	if not cell then
 		cell = NewCell(W, BAG_CELL)
-		cell:SetScript("OnEnter", BagTooltip)
+		local lock = cell:CreateTexture(nil, "ARTWORK", nil, 1)
+		lock:SetAllPoints()
+		lock:Hide()
+		if ns.HasAtlas(LOCK_ATLAS) and pcall(lock.SetAtlas, lock, LOCK_ATLAS) then cell.lock = lock end
+		cell:SetScript("OnEnter", function(self)
+			BagTooltip(self)
+			local slot = self.csSlot
+			if self.csOneGrid and slot and slot.id then
+				self.csLit = slot.id
+				LightTab(W, slot.id, true)
+			end
+		end)
+		cell:SetScript("OnLeave", function(self)
+			GameTooltip:Hide()
+			if self.csLit then
+				LightTab(W, self.csLit, false)
+				self.csLit = nil
+			end
+		end)
 		cell:SetScript("OnClick", function(self)
 			Front(W)
 			local slot = self.csSlot
-			if slot and (slot.slots or 0) > 0 then
+			if not self.csOneGrid and slot and (slot.slots or 0) > 0 then
 				-- Clicking the bag being looked at goes back to the tab that was showing before.
 				W.viewingBag = (W.viewingBag ~= index) and index or nil
 				Refresh(W)
@@ -602,13 +720,19 @@ local function GetBagCell(W, index)
 	return cell
 end
 
--- The Bag Slots row, at the measured place when there is one, else just under the grid. Returns
--- the bottom edge of the row.
-local function LayoutBagRow(W, record, y, geo)
+-- How many Bag Slots a saved bank has: as many as were saved, else as the window was measured with.
+local function BagSlotCount(record, geo)
+	return (record and record.bagSlots and #record.bagSlots > 0 and #record.bagSlots)
+		or geo.bagCount or tonumber(_G.NUM_BANKBAGSLOTS) or NUM_BAG_SLOTS
+end
+
+-- The Bag Slots row, at the measured place when there is one, else just under the grid. `slots`
+-- is the saved row; `oneGrid` says the bags' slots are in the grid already. Returns the bottom edge
+-- of the row.
+local function LayoutBagRow(W, record, slots, y, geo, oneGrid)
 	geo = geo or CLASSIC_BANK
 	local frame = W.frame
-	local count = (record and record.bagSlots and #record.bagSlots > 0 and #record.bagSlots)
-		or geo.bagCount or tonumber(_G.NUM_BANKBAGSLOTS) or NUM_BAG_SLOTS
+	local count = BagSlotCount(record, geo)
 	local size, pitch = geo.bagCell or BAG_CELL, geo.bagPitch or BAG_PITCH
 	local x0 = geo.bagOriginX or (MARGIN_X + 82)
 	local top = geo.bagOriginY or (y + 4)
@@ -625,21 +749,24 @@ local function LayoutBagRow(W, record, y, geo)
 
 	for i = 1, count do
 		local cell = GetBagCell(W, i)
-		local slot = record and record.bagSlots and record.bagSlots[i]
-		cell.csSlot = slot
+		local slot = slots and slots[i]
+		cell.csSlot, cell.csOneGrid = slot, oneGrid and true or false
 		cell:SetSize(size, size)
 		cell:ClearAllPoints()
 		cell:SetPoint("TOPLEFT", frame, "TOPLEFT", x0 + (i - 1) * pitch, -top)
+		-- A slot not bought wears the real bank's padlock, or is dimmed where the client lacks it.
+		local locked = not (slot and (slot.purchased or slot.icon))
+		if cell.lock then cell.lock:SetShown(locked) end
 		if slot and slot.icon then
 			cell.icon:SetTexture(slot.icon)
 			cell.icon:Show()
 			cell:SetAlpha(1)
 		else
 			cell.icon:Hide()
-			cell:SetAlpha((slot and slot.purchased) and 1 or 0.45)
+			cell:SetAlpha((locked and not cell.lock) and 0.45 or 1)
 		end
 		cell.count:SetText("")
-		SetOutline(cell, W.viewingBag == i)
+		SetOutline(cell, not oneGrid and W.viewingBag == i)
 		cell:Show()
 	end
 	for i = count + 1, #W.bagCells do W.bagCells[i]:Hide() end
@@ -862,6 +989,52 @@ local function Portrait(W)
 	SetClassIcon(portrait, entry and entry.class)
 end
 
+-- The icons the real bank's page tabs wear (BankPageTabTemplate), a different one per page.
+local PAGE_ICONS = {
+	"Interface/ICONS/INV_SideTab_Bank_c60",
+	"Interface/ICONS/ACHIEVEMENT_GUILDPERK_MOBILEBANKING",
+	"Interface/ICONS/TRADE_ARCHAEOLOGY_CHESTOFTINYGLASSANIMALS",
+	"Interface/ICONS/Ability_Racial_PackHobgoblin",
+}
+
+-- The bank as this client draws it: every bank tab in one grid, the main tab's slots first and each
+-- bag's after them, a page of 88 slots at a time with a tab per page down the side
+-- (BankPanelMixin:GenerateItemSlotsForSelectedTab). A Bag Slot is a bank tab here, so the row under
+-- the grid shows the bag in each bought slot and a padlock on the rest, and pointing at a bag
+-- lights up its slots in the grid.
+local function LayoutOneGrid(W, record, geo, cols)
+	local sequence = TabSequence(record)
+	local perPage = geo.perPage or 88
+	local pages = math.max(1, math.ceil(#sequence / perPage))
+	if type(W.viewing) ~= "number" or W.viewing > pages then W.viewing = 1 end
+	W.viewingBag = nil
+	local from = (W.viewing - 1) * perPage
+	local count = math.max(0, math.min(perPage, #sequence - from))
+	local rows = math.max(1, math.ceil(count / cols))
+	geo = FitRows(geo, rows)
+	for k = 1, count do
+		local slot = sequence[from + k]
+		PlaceCell(W, k, (k - 1) % cols, math.floor((k - 1) / cols), slot.item, geo)
+		W.cells[k].csTab = slot.tab
+	end
+	HideCellsFrom(W, count + 1)
+
+	local tabs = {}
+	if pages > 1 then
+		for page = 1, pages do
+			local first, last = (page - 1) * perPage + 1, math.min(page * perPage, #sequence)
+			tabs[page] = { label = "Page " .. page, icon = PAGE_ICONS[page] or PAGE_ICONS[1], detail = "Slots " .. first .. " to " .. last }
+		end
+	end
+	local tabColumn = LayoutTabs(W, tabs, geo.originX + cols * geo.pitchX + 4, geo.originY)
+
+	local gridBottom = geo.originY + (rows - 1) * geo.pitchY + geo.cell
+	local bagSlots = BagSlotsAsTabs(record, BagSlotCount(record, geo))
+	local rowBottom = LayoutBagRow(W, record, bagSlots, gridBottom + 14, geo, true)
+	W.divider:Hide()
+	SizeWindow(W, cols, rows, tabColumn, true, nil, geo, rowBottom)
+end
+
 local function LayoutBank(W)
 	local entry = CharEntry(W)
 	local record = entry and entry.bank
@@ -878,6 +1051,11 @@ local function LayoutBank(W)
 		return
 	end
 	W.noteText:Hide()
+	if OneGrid(record) then
+		LayoutOneGrid(W, record, geo, cols)
+		Footer(W, record)
+		return
+	end
 	local mains, bags = BankParts(record)
 
 	-- What the grid is showing: a bag that was clicked, or one of the main tabs. The two are kept
@@ -905,15 +1083,17 @@ local function LayoutBank(W)
 	local gridBottom = geo.originY + (rows - 1) * geo.pitchY + geo.cell
 	-- Without a measured place for the Bag Slots they sit a clear gap under the grid, the rule
 	-- between the two.
-	local rowBottom = LayoutBagRow(W, record, gridBottom + 14, geo)
+	local rowBottom = LayoutBagRow(W, record, record.bagSlots, gridBottom + 14, geo, false)
 	W.divider:Hide()
 	SizeWindow(W, cols, rows, tabColumn, true, nil, geo, rowBottom)
 	Footer(W, record)
 end
 
--- The bags as the combined backpack shows them: one grid, filled from the bottom right corner
--- upwards and leftwards, the backpack's first slot in the bottom right, each further bag stacked
--- above. A reagent bag gets its own small grid underneath, the same way round.
+-- The bags as the combined backpack shows them: one grid read like a page, left to right and top to
+-- bottom, the backpack's slots first and each further bag's after them. When the slots do not fill
+-- the last row, the short row is the top one, against the right edge, so the backpack's first slot
+-- starts it (the user's screenshots of the real combined backpack: a Hearthstone in the first slot
+-- sits first in the short top row). A reagent bag gets its own small grid underneath, the same way.
 local function LayoutBags(W)
 	if not W.current then
 		W.frame.csTitle:SetText("Saved Bags")
@@ -942,12 +1122,12 @@ local function LayoutBags(W)
 		end
 		local total = #sequence
 		local rows = math.max(1, math.ceil(total / BAGS_COLS))
+		-- The slots start as many cells into the top row as the short row leaves empty.
+		local lead = (BAGS_COLS - total % BAGS_COLS) % BAGS_COLS
 		for k = 0, total - 1 do
-			local col = BAGS_COLS - 1 - (k % BAGS_COLS)
-			local rowFromBottom = math.floor(k / BAGS_COLS)
-			local row = topRow + (rows - 1 - rowFromBottom)
+			local at = lead + k
 			cellIndex = cellIndex + 1
-			PlaceCell(W, cellIndex, col, row, sequence[k + 1] or nil, PLAIN)
+			PlaceCell(W, cellIndex, at % BAGS_COLS, topRow + math.floor(at / BAGS_COLS), sequence[k + 1] or nil, PLAIN)
 		end
 		return rows, cellIndex
 	end

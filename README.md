@@ -19,17 +19,20 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
 - **Open your bank once and it is saved**, and again every time you open it. The saved bank is
   drawn as the bank window: the same portrait and title frame, the search box top right, the
   eight wide grid with every empty slot drawn, the Bag Slots row underneath, the money bottom
-  right. Every item is in the slot it was actually in. Click a bank bag in the Bag Slots row to
-  look inside it. The layout is measured off the real bank window while it is open, so the slots
-  sit exactly where the real ones do on this client.
+  right. Every item is in the slot it was actually in. As in the real bank, each bag you have put
+  in a Bag Slot adds its slots to the bottom of the grid, a page of 88 at a time with a tab per
+  page; the Bag Slots show each bag and a padlock on the slots not bought, and pointing at a bag
+  lights up its slots. The layout is measured off the real bank window while it is open, so the
+  slots sit exactly where the real ones do on this client.
 - **Your bags** are saved a few seconds after you log in and whenever they settle. The saved bags
-  show your *other* characters' bags as the combined backpack shows them; the character you are
-  playing already has its real backpack in front of it.
+  show your *other* characters' bags as the combined backpack shows them, read left to right from
+  the top with the backpack's first slot first; the character you are playing already has its real
+  backpack in front of it.
 - **The guild bank** is saved when you open it, one tab at a time, and shown in its own shape with
   its tabs down the side.
 - **A tab per character.** A row of tabs in the spellbook's style, one per character with their
   class icon, hangs off the top of the saved bank and the saved bags. Each window is titled for
-  the character on show: "Vatik's Bank", "Choham's Backpack". The saved bank's first tab is the
+  the character on show, by first name and surname: "Vatik Voidpact's Bank". The saved bank's first tab is the
   character you are playing, so your own bank can be looked at from anywhere too. Hover a tab for
   when that character was last saved and their gold.
 - **Three separate windows.** The saved bank, the saved bags and the saved guild bank can be open
@@ -194,9 +197,9 @@ addon still running, nothing present, already imported, and the ways those go wr
 the package files.
 
 ```
-node tests/banktabstest.js              # the normal client: 867 checks
-node tests/banktabstest.js --bare       # every UI template missing: 858
-node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 863
+node tests/banktabstest.js              # the normal client: 895 checks
+node tests/banktabstest.js --bare       # every UI template missing: 886
+node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 870
 ```
 
 Run it from the repo root. It needs `fengari` on the module path (for example through
