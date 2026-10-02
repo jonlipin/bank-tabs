@@ -62,9 +62,14 @@ local CLASSIC_BANK = { cell = 37, pitchX = 49, pitchY = 47, originX = 48, origin
 	bagCell = 24, bagPitch = 38, bagOriginX = 145 }
 
 local function BankGeometry(record)
-	-- A record's own measurement, else the account's latest (the same client, the same window).
-	local layout = (record and record.layout) or (ns.vault and ns.vault.bankLayout)
-	if layout and layout.cell and layout.pitchX and layout.pitchY and layout.originX and layout.originY then
+	-- A record's own measurement, else the account's latest (the same client, the same window). One
+	-- that is no grid is passed over: before 2.0.1 a measurement could come out one column wide,
+	-- which drew the bank as a single column of items.
+	local Plausible = ns.Vault and ns.Vault.PlausibleLayout
+	if not Plausible then return CLASSIC_BANK end
+	local layout = record and record.layout
+	if not Plausible(layout) then layout = ns.vault and ns.vault.bankLayout end
+	if Plausible(layout) then
 		return {
 			cell = layout.cell, pitchX = layout.pitchX, pitchY = layout.pitchY,
 			originX = layout.originX, originY = layout.originY, cols = layout.cols or BANK_COLS,

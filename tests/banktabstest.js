@@ -85,7 +85,16 @@ local function obj(kind, template, name)
     if k == "Show" then return function(s) local was = s.shown s.shown = true if not was and s.scripts.OnShow then s.scripts.OnShow(s) end end end
     if k == "Hide" then return function(s) local was = s.shown s.shown = false if was and s.scripts.OnHide then s.scripts.OnHide(s) end end end
     if k == "SetShown" then return function(s, v) if v then s:Show() else s:Hide() end end end
-    if k == "IsShown" or k == "IsVisible" then return function(s) return s.shown end end
+    if k == "IsShown" then return function(s) return s.shown end end
+    -- Shown with every parent shown: a frame inside a hidden one still says it is shown.
+    if k == "IsVisible" then return function(s)
+      local f, guard = s, 0
+      while f and guard < 30 do
+        if not f.shown then return false end
+        f, guard = f.parent, guard + 1
+      end
+      return true
+    end end
     if k == "GetObjectType" then return function(s) return s.kind end end
     if k == "GetName" then return function(s) return s.name end end
     if k == "GetParent" then return function(s) return s.parent end end
@@ -847,7 +856,7 @@ check("with no old Casement installed the window engine does not wait for login"
 check("the old commands are not taken before login", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil)
 
 do -- scope: 1b. This is Bank Tabs, and only its half of Casement
-check("the version is 2.0.0", ns.version == "2.0.0", ns.version)
+check("the version is 2.0.1", ns.version == "2.0.1", ns.version)
 check("the saved variables are Bank Tabs' own", ns.db == BankTabsDB and ns.vault == BankTabsAccountDB.vault
   and CasementDB == nil and CasementAccountDB == nil)
 check("the event frame is Bank Tabs' own", BankTabsFrame ~= nil and CasementFrame == nil)
@@ -1159,6 +1168,116 @@ check("the window's own size", layout and layout.width == 400 and layout.height 
 check("eight bag slots of 24 on a 38 pitch", layout and layout.bagCount == 8 and layout.bagCell == 24 and layout.bagPitch == 38, layout and layout.bagCount)
 check("at their measured place", layout and layout.bagOriginX == 145 and layout.bagOriginY == 359)
 check("the close and purchase buttons were not mistaken for slots", layout and layout.slots == 48, layout and layout.slots)
+
+-- 2.0.0 took the topmost row of slot sized buttons for the grid's first row, so a single stray
+-- button of a slot's size above the grid measured the bank one column wide, and every character's
+-- saved bank was drawn as one column of items (a user saw exactly that). The grid is now the run of
+-- full rows, and whatever else is that size is left out.
+do -- scope: the measurement finds the grid whatever else is in the window
+  local Measure = ns.Vault.MeasureBankLayout
+  local function OnGrid(l)
+    return l ~= nil and l.cols == 8 and l.cell == 37 and l.pitchX == 50 and l.pitchY == 47
+      and l.originX == 48 and l.originY == 63 and l.slots == 48
+  end
+  local function Say(l)
+    if not l then return tostring(ns.report["bank layout"]) end
+    return l.cols .. " columns of " .. l.cell .. ", pitch " .. l.pitchX .. " by " .. l.pitchY .. " at " .. l.originX .. "," .. l.originY .. ", " .. l.slots .. " slots"
+  end
+
+  local stray = CreateFrame("Button", nil, BankFrame)
+  stray:SetSize(37, 37)
+  stray:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", 300, -16)
+  local l = Measure()
+  check("a button of a slot's size above the grid no longer makes the bank one column wide", OnGrid(l), Say(l))
+  check("the report says it was left out", (ns.report["bank layout"] or ""):find("1 other button of that size left out", 1, true) ~= nil,
+    ns.report["bank layout"])
+  stray:ClearAllPoints()
+  stray:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", 48 + 8 * 50, -63)
+  l = Measure()
+  check("nor does one in line with the first row", OnGrid(l), Say(l))
+  stray:ClearAllPoints()
+  stray:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", 48, -(63 + 6 * 47 + 70))
+  l = Measure()
+  check("nor one below the grid, off its spacing", OnGrid(l), Say(l))
+  stray:Hide()
+
+  -- A hidden part of the window (an icon picker, say) holding more buttons of nearly a slot's size
+  -- than the bank has slots: each says it is shown, but none of them is on screen.
+  local picker = CreateFrame("Frame", nil, BankFrame)
+  picker:SetSize(320, 320)
+  picker:SetPoint("TOPLEFT", BankFrame, "TOPRIGHT", 40, 5)
+  for i = 1, 64 do
+    local b = CreateFrame("Button", nil, picker)
+    b:SetSize(36, 36)
+    b:SetPoint("TOPLEFT", picker, "TOPLEFT", ((i - 1) % 8) * 40, -math.floor((i - 1) / 8) * 40)
+  end
+  picker:Hide()
+  l = Measure()
+  check("buttons in a hidden part of the window are not measured", OnGrid(l), Say(l))
+
+  -- WoW Forever makes the bank's slots only once the bank's contents have arrived, so the window
+  -- can be caught with nothing in it of a slot's size but its Bag Slots (item buttons drawn at
+  -- three quarters) and the sort button by the search box. 2.0.0 read those as a bank one column
+  -- wide; now nothing is measured and the earlier measurement stands.
+  for i = 1, 48 do BANK_SLOT_BUTTONS[i]:Hide() end
+  for i = 1, 8 do _G["BankFrameBag" .. i]:Hide() end
+  local small = {}
+  for i = 1, 8 do
+    local b = CreateFrame("ItemButton", nil, BankFrame)
+    b:SetSize(37, 37)
+    b:SetScale(0.75)
+    b:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", (145 + (i - 1) * 37.5) / 0.75, -400 / 0.75)
+    small[i] = b
+  end
+  local sort = CreateFrame("Button", nil, BankFrame)
+  sort:SetSize(28, 26)
+  sort:SetPoint("TOPRIGHT", BankFrame, "TOPRIGHT", -30, -30)
+  l = Measure()
+  check("a bank whose slots are not made yet is not measured", l == nil, Say(l))
+  check("and the report says so", (ns.report["bank layout"] or ""):find("^not measured") ~= nil, ns.report["bank layout"])
+  ns.Vault.SnapshotBank("bank opened")
+  local kept = ns.vault.chars[me].bank.layout
+  check("a snapshot taken then keeps the earlier measurement", OnGrid(kept), Say(kept))
+  check("for the account too", OnGrid(ns.vault.bankLayout), Say(ns.vault.bankLayout))
+  -- With nothing good saved either, the snapshot saves no layout rather than a bad one.
+  local goodAccount = ns.vault.bankLayout
+  ns.vault.chars[me].bank.layout = nil
+  ns.vault.bankLayout = { cell = 37, cols = 1, rows = 7, slots = 49, pitchX = 49, pitchY = 47, originX = 300, originY = 16 }
+  ns.Vault.SnapshotBank("bank opened")
+  check("with nothing good saved, a snapshot then saves no layout rather than a bad one", ns.vault.chars[me].bank.layout == nil,
+    Say(ns.vault.chars[me].bank.layout))
+  ns.vault.bankLayout = goodAccount
+  -- A page of a few slots beside the Bag Slots is no grid either, nor a block of slot sized buttons
+  -- three across.
+  for i = 1, 4 do BANK_SLOT_BUTTONS[i]:Show() end
+  l = Measure()
+  check("nor is a page of four slots", l == nil, Say(l))
+  for i = 1, 4 do BANK_SLOT_BUTTONS[i]:Hide() end
+  local block = {}
+  for i = 1, 9 do
+    local b = CreateFrame("Button", nil, BankFrame)
+    b:SetSize(37, 37)
+    b:SetPoint("TOPLEFT", BankFrame, "TOPLEFT", 60 + ((i - 1) % 3) * 45, -(80 + math.floor((i - 1) / 3) * 45))
+    block[i] = b
+  end
+  l = Measure()
+  check("nor three across", l == nil, Say(l))
+  for i = 1, 9 do block[i]:Hide() end
+
+  -- A layout saved one column wide by 2.0.0 claims more slots than the real grid (the stray counted
+  -- as one); it must not keep a real measurement out.
+  for i = 1, 8 do small[i]:Hide() end
+  sort:Hide()
+  for i = 1, 48 do BANK_SLOT_BUTTONS[i]:Show() end
+  for i = 1, 8 do _G["BankFrameBag" .. i]:Show() end
+  ns.vault.chars[me].bank.layout = { cell = 37, cols = 1, rows = 7, slots = 49, pitchX = 49, pitchY = 47, originX = 300, originY = 16,
+    width = 400, height = 500 }
+  ns.Vault.SnapshotBank("bank opened")
+  kept = ns.vault.chars[me].bank.layout
+  check("a layout saved one column wide does not keep a real measurement out", OnGrid(kept), Say(kept))
+  check("which is the bank as first measured, Bag Slots and all", kept and kept.bagCount == 8 and kept.bagOriginY == 359
+    and kept.width == 400 and kept.height == 500)
+end
 local entry = ns.vault.chars[me]
 check("a character entry was made", entry ~= nil)
 local record = entry and entry.bank
@@ -1638,6 +1757,30 @@ else
   check("empty slots wear the game's slot art", backing and backing.atlas == "bags-item-slot64" and backing.color == nil, backing and backing.atlas)
   check("the quality border is the game's own glow", first and first.borderIsGlow == true and first.ring == nil
     and first.border.atlas == "bags-glow-white")
+end
+
+-- A saved layout that is no grid (2.0.0 could measure a bank one column wide) is passed over for
+-- the account's layout, and with that one bad too the classic bank's numbers stand in: either way
+-- the bank is drawn eight across, never as one column of items.
+do -- scope: the replica never draws a layout that is no grid
+  local own, account = ns.vault.chars[me].bank.layout, ns.vault.bankLayout
+  local ONE_COLUMN = { cell = 37, cols = 1, rows = 7, slots = 49, pitchX = 49, pitchY = 47, originX = 300, originY = 16, width = 400, height = 500 }
+  local function EightAcross(pitchX)
+    local cells = Cells(37)
+    for i = 1, 48 do
+      if not CellAt(cells, 48 + ((i - 1) % 8) * pitchX, -(63 + math.floor((i - 1) / 8) * 47)) then return false end
+    end
+    return #cells == 48
+  end
+  ns.vault.chars[me].bank.layout = ONE_COLUMN
+  ns.VaultUI.Refresh()
+  check("a saved layout one column wide is passed over for the account's", EightAcross(50))
+  ns.vault.bankLayout = ONE_COLUMN
+  ns.VaultUI.Refresh()
+  check("with the account's no grid either, the classic bank's numbers stand in", EightAcross(49))
+  ns.vault.chars[me].bank.layout, ns.vault.bankLayout = own, account
+  ns.VaultUI.Refresh()
+  check("and the measured layout is drawn again once it is back", EightAcross(50))
 end
 
 -- The Bag Slots row under the grid.
@@ -3584,6 +3727,79 @@ check("the character's flag is put back from the account file", BankTabsDB.impor
 check("and the report says so", (ns.report["casement import"] or ""):find("flag put back", 1, true) ~= nil, ns.report["casement import"])
 check("nothing is said", ChatWith("Casement") == 0, ChatLine("Casement"))
 `},
+{ name: 'L: bank layouts saved one column wide by 2.0.0', code: String.raw`
+-- Bank Tabs 2.0.0 could measure a bank one column wide (a stray button of a slot's size above the
+-- grid read as a first row of one, or the window measured before its slots were made), and every
+-- character's saved bank was then drawn as a single column of items; a user saw exactly that.
+-- Those layouts are dropped at load, so the saved banks are drawn from a good layout, or the
+-- classic bank's numbers, until the bank is opened and measured again.
+local function OneColumn()
+  return { cell = 37, cols = 1, rows = 7, slots = 49, pitchX = 49, pitchY = 47, originX = 300, originY = 16, width = 400, height = 500,
+    bagCount = 8, bagCell = 24, bagPitch = 38, bagOriginX = 145, bagOriginY = 359 }
+end
+local NOT_MADE_YET = { cell = 28, cols = 1, rows = 2, slots = 9, pitchX = 40, pitchY = 370, originX = 342, originY = 30, width = 400, height = 500 }
+local GOOD = { cell = 37, cols = 8, rows = 6, slots = 48, pitchX = 50, pitchY = 47, originX = 48, originY = 63, width = 400, height = 500 }
+local OLDTOON = "Player-70-0C0C0C0C"
+local function Bank(layout)
+  return { time = 1000, reason = "bank opened", money = 50, items = 1, slots = 48, free = 47, layout = layout,
+    containers = { { id = 6, label = "Bank tab 1", slots = 48, items = { { slot = 3, id = 2589, name = "Linen Cloth", count = 7, icon = 1 } } } } }
+end
+BankTabsAccountDB = { importedCasement = true, version = "2.0.0", vault = { guilds = {}, bankLayout = OneColumn(), chars = {
+  [VATIK] = { class = "WARLOCK", level = 60, name = "Vatik", realm = "Voidpact", guid = VATIK, bank = Bank(OneColumn()) },
+  [CHOHAM_GUID] = { class = "WARRIOR", level = 42, name = "Choham", realm = "Voidpact", guid = CHOHAM_GUID, bank = Bank(NOT_MADE_YET) },
+  [OLDTOON] = { class = "MAGE", level = 30, name = "Oldtoon", realm = "Voidpact", guid = OLDTOON, bank = Bank(GOOD) },
+} } }
+BankTabsDB = { importedCasement = true }
+local ns = LoadBankTabs()
+fire("ADDON_LOADED", "BankTabs")
+fire("PLAYER_LOGIN")
+local chars = ns.vault.chars
+check("a layout one column wide is dropped", chars[VATIK].bank.layout == nil)
+check("so is one measured before the bank's slots were made", chars[CHOHAM_GUID].bank.layout == nil)
+check("and the account's own", ns.vault.bankLayout == nil)
+check("a good layout is kept", chars[OLDTOON].bank.layout ~= nil and chars[OLDTOON].bank.layout.cols == 8)
+check("the saved banks themselves are kept", chars[VATIK].bank.items == 1 and chars[CHOHAM_GUID].bank.items == 1
+  and #chars[VATIK].bank.containers == 1)
+check("the report counts what was dropped", ns.report["bank layouts dropped"] == "3 that were not a grid", ns.report["bank layouts dropped"])
+check("the check passes the classic bank and the measured one, and nothing one column wide", ns.Vault.PlausibleLayout(GOOD)
+  and ns.Vault.PlausibleLayout({ cell = 37, pitchX = 49, pitchY = 47, originX = 48, originY = 63, cols = 8 })
+  and not ns.Vault.PlausibleLayout(OneColumn()) and not ns.Vault.PlausibleLayout(NOT_MADE_YET) and not ns.Vault.PlausibleLayout(nil)
+  and not ns.Vault.PlausibleLayout({ cell = 37, pitchX = 0 / 0, pitchY = 47, originX = 48, originY = 63, cols = 8 }))
+check("nor slots that overlap or lie absurdly far apart", not ns.Vault.PlausibleLayout({ cell = 37, pitchX = 20, pitchY = 47, originX = 48, originY = 63, cols = 8 })
+  and not ns.Vault.PlausibleLayout({ cell = 37, pitchX = 50, pitchY = 370, originX = 48, originY = 63, cols = 8 }))
+
+-- The saved bank is drawn eight across: on the classic bank's numbers for Vatik, whose layout went,
+-- and on the measured one for Oldtoon, whose layout stood.
+local function EightAcross(pitchX)
+  local vault, cells = BankTabsBank, {}
+  for _, f in ipairs(FRAMES) do
+    if f.kind == "Button" and f.parent == vault and f.icon and f.count and f.w == 37 and f.shown then cells[#cells + 1] = f end
+  end
+  for i = 1, 48 do
+    local x, y, found = 48 + ((i - 1) % 8) * pitchX, -(63 + math.floor((i - 1) / 8) * 47), false
+    for _, c in ipairs(cells) do
+      local p = c.points[1]
+      if p and p[2] == vault and near(p[4], x, 0.01) and near(p[5], y, 0.01) then found = true break end
+    end
+    if not found then return false end
+  end
+  return #cells == 48
+end
+ns.VaultUI.Show("bank", VATIK)
+check("Vatik's saved bank is eight across, on the classic bank's numbers", EightAcross(49))
+ns.VaultUI.Show("bank", OLDTOON)
+check("Oldtoon's on the layout it kept", EightAcross(50))
+
+-- The bank opened: the window is measured again, and the measurement stands for the account.
+BankFrame:Show()
+fire("BANKFRAME_OPENED")
+RunTimers(1)
+local layout = chars[VATIK].bank.layout
+check("opening the bank measures it again", layout ~= nil and layout.cols == 8 and layout.pitchX == 50 and layout.slots == 48,
+  ns.report["bank layout"])
+check("for the account too", ns.vault.bankLayout ~= nil and ns.vault.bankLayout.cols == 8)
+check("no timer raised an error", #TIMER_ERRORS == 0, TIMER_ERRORS[1])
+`},
 ];
 
 // ------------------------------------------------------------------
@@ -3660,7 +3876,7 @@ const parts = [];
   check('the TOC is BankTabs.toc', toc !== null);
   check('titled Bank Tabs', field(toc, 'Title') === 'Bank Tabs', field(toc, 'Title'));
   const version = (sources['Core.lua'].match(/ns\.version = "([^"]+)"/) || [])[1];
-  check('its version is the addon\'s own, 2.0.0', field(toc, 'Version') === '2.0.0' && version === '2.0.0', field(toc, 'Version') + ' / ' + version);
+  check('its version is the addon\'s own, 2.0.1', field(toc, 'Version') === '2.0.1' && version === '2.0.1', field(toc, 'Version') + ' / ' + version);
   check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
     && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
   check('its icon is the treasure chest from the game\'s icons (not Stockpile\'s bag), the path intact', /^Interface\\Icons\\Racial_Dwarf_FindTreasure$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
@@ -3708,7 +3924,7 @@ const parts = [];
     const changelog = (read('CHANGELOG.md') || '').replace(/\r\n/g, '\n');
     const notes = (read('RELEASE-NOTES.md') || '').replace(/\r\n/g, '\n');
     const top = changelog.split(/\r?\n(?=## )/).find(s => s.startsWith('## ')) || '';
-    check('the changelog opens on 2.0.0', /^## 2\.0\.0 - /.test(top), top.slice(0, 30));
+    check('the changelog opens on 2.0.1', /^## 2\.0\.1 - /.test(top), top.slice(0, 30));
     check('the release notes are that section and nothing else', notes.replace(/\s+$/, '') === top.replace(/\s+$/, ''));
 
     // Every text file, docs and code: no em or en dashes, as the author asked.

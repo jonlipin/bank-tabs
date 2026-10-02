@@ -258,10 +258,117 @@ local function AdoptLegacy(who, entry)
 	return adopted
 end
 
+-- Whether a bank layout, measured now or saved by any version, describes a real grid of slots: four
+-- or more columns of slots of a sensible size, each at least a slot from the next and not absurdly
+-- far. Before 2.0.1 the measurement could come out one column wide (a stray button of a slot's size
+-- above the grid was read as a first row of one), and the saved banks were then drawn as a single
+-- column of items for every character; a layout like that is never drawn, kept or let stand in the
+-- way of a real one.
+local function Number(value)
+	return type(value) == "number" and value == value
+end
+
+local function PlausibleLayout(layout)
+	if type(layout) ~= "table" then return false end
+	local cell, pitchX, pitchY, cols = layout.cell, layout.pitchX, layout.pitchY, layout.cols
+	if not (Number(cell) and Number(pitchX) and Number(pitchY) and Number(layout.originX) and Number(layout.originY)) then
+		return false
+	end
+	if cell < 16 or cell > 64 then return false end
+	if pitchX < cell or pitchX > cell * 3 or pitchY < cell or pitchY > cell * 3 then return false end
+	if cols ~= nil and not (Number(cols) and cols >= 4 and cols <= 24) then return false end
+	return true
+end
+Vault.PlausibleLayout = PlausibleLayout
+
+-- Sorted positions within two units of each other count as one, the first of each run standing for
+-- the run.
+local function Runs(values)
+	table.sort(values)
+	local runs, i = {}, 1
+	while i <= #values do
+		local j = i
+		while values[j + 1] and values[j + 1] - values[i] <= 2 do j = j + 1 end
+		runs[#runs + 1] = values[i]
+		i = j + 1
+	end
+	return runs
+end
+
+-- The grid of slots among the buttons of one size: the longest run of rows lying one under another
+-- at a single spacing from the same left edge, each holding as many slots as most rows do, the last
+-- allowed fewer. Anything else that size is left out rather than read as a row of its own: another
+-- addon's button above the grid, say, or the sort button while the bank is still filling in.
+-- Returns the grid's rows (each left to right), the number of columns and how many buttons were
+-- that size; nil when they make no grid of two rows or more.
+local function FindGrid(buttons, size)
+	local members, ys = {}, {}
+	for _, b in ipairs(buttons) do
+		if math.abs(b.w - size) <= 1 then
+			members[#members + 1] = b
+			ys[#ys + 1] = b.y
+		end
+	end
+	local rows = {}
+	for index, y in ipairs(Runs(ys)) do rows[index] = { y = y } end
+	for _, b in ipairs(members) do
+		for _, row in ipairs(rows) do
+			if math.abs(b.y - row.y) <= 2 then row[#row + 1] = b break end
+		end
+	end
+
+	-- A full row holds as many slots as most rows do, the longer on a tie.
+	local counts, cols, best = {}, 0, 0
+	for _, row in ipairs(rows) do
+		table.sort(row, function(a, b) return a.x < b.x end)
+		counts[#row] = (counts[#row] or 0) + 1
+	end
+	for length, n in pairs(counts) do
+		if n > best or (n == best and length > cols) then cols, best = length, n end
+	end
+	if cols < 2 then return nil end
+
+	-- A row holding more than that has a stray in it too, and keeps the slots that line up with a
+	-- full row.
+	local reference
+	for _, row in ipairs(rows) do
+		if #row == cols then reference = row break end
+	end
+	for index, row in ipairs(rows) do
+		if #row > cols then
+			local kept = { y = row.y }
+			for _, b in ipairs(row) do
+				for _, slot in ipairs(reference) do
+					if math.abs(b.x - slot.x) <= 2 then kept[#kept + 1] = b break end
+				end
+			end
+			rows[index] = kept
+		end
+	end
+
+	local grid
+	for start, row in ipairs(rows) do
+		if #row == cols and rows[start + 1] then
+			local pitch = rows[start + 1].y - row.y
+			local run = { row }
+			for index = start + 1, #rows do
+				local nextRow, above = rows[index], run[#run]
+				if #above ~= cols or #nextRow == 0 or #nextRow > cols then break end
+				if math.abs(nextRow.y - above.y - pitch) > 2 or math.abs(nextRow[1].x - row[1].x) > 2 then break end
+				run[#run + 1] = nextRow
+			end
+			if #run >= 2 and (not grid or #run > #grid) then grid = run end
+		end
+	end
+	if not grid then return nil end
+	return grid, cols, #members
+end
+
 -- The real bank's geometry, read off the live window while it is open: where its slot grid sits,
 -- how far apart the slots are, the window's size, and the Bag Slots row. The replica lays itself
 -- out from these numbers, so it matches this client's bank exactly rather than a guess. Every
--- number is in the bank window's own units, relative to its top left corner.
+-- number is in the bank window's own units, relative to its top left corner. Nil when the window
+-- holds no grid of slots to measure, as in the moment before this client makes the bank's slots.
 local function MeasureBankLayout()
 	local frame = _G.BankFrame
 	if not (frame and frame.IsShown and frame:IsShown()) then return nil end
@@ -270,63 +377,60 @@ local function MeasureBankLayout()
 	local ratio = ns.Windows.Ratio(frame)
 	local ftop = fb + fh
 
-	-- Every square, shown button of a slot's size anywhere inside the window.
+	-- Every square button of a slot's size on screen inside the window. On screen, not just shown:
+	-- a button in a hidden part of the window still says it is shown.
 	local buttons = {}
 	ns.WalkChildren(frame, function(child)
 		local okType, kind = pcall(child.GetObjectType, child)
 		if not okType or not (kind == "Button" or kind == "ItemButton" or kind == "CheckButton") then return end
-		local okShown, shown = pcall(child.IsShown, child)
+		local okShown, shown = pcall(child.IsVisible or child.IsShown, child)
 		if okShown and not shown then return end
 		local l, b, w, h = ns.Windows.Measure(child)
 		if not l or not w or not h or w < 16 or w > 64 or math.abs(w - h) > 4 then return end
 		buttons[#buttons + 1] = { x = (l - fl) * ratio, y = (ftop - (b + h)) * ratio, w = w * ratio, h = h * ratio }
-	end, 6, 800)
+	end, 6, 2000)
 	if #buttons < 8 then
 		report["bank layout"] = "not measured: " .. #buttons .. " slot sized buttons found"
 		return nil
 	end
 
-	-- The most common size is the slot size; everything that size is a slot.
-	local sizes = {}
+	-- The sizes from the commonest down, the larger first on a tie (the slots are bigger than the
+	-- Bag Slots); the first whose buttons make a grid is the slot size.
+	local counts, order = {}, {}
 	for _, b in ipairs(buttons) do
 		local size = math.floor(b.w + 0.5)
-		sizes[size] = (sizes[size] or 0) + 1
+		if not counts[size] then counts[size], order[#order + 1] = 0, size end
+		counts[size] = counts[size] + 1
 	end
-	local cell, most = nil, 0
-	for size, n in pairs(sizes) do
-		if n > most then cell, most = size, n end
+	table.sort(order, function(a, b)
+		if counts[a] ~= counts[b] then return counts[a] > counts[b] end
+		return a > b
+	end)
+	local grid, cols, members, cell
+	for _, size in ipairs(order) do
+		if counts[size] < 8 then break end
+		grid, cols, members = FindGrid(buttons, size)
+		if grid then cell = size break end
 	end
-	if most < 8 then
-		report["bank layout"] = "not measured: no run of same sized slots"
+	if not grid then
+		report["bank layout"] = "not measured: no grid of slots among " .. #buttons .. " slot sized buttons"
 		return nil
 	end
-	local slots, others = {}, {}
-	for _, b in ipairs(buttons) do
-		if math.abs(b.w - cell) <= 1 then slots[#slots + 1] = b else others[#others + 1] = b end
-	end
-	table.sort(slots, function(a, b)
-		if math.abs(a.y - b.y) > 2 then return a.y < b.y end
-		return a.x < b.x
-	end)
-	local rows = {}
-	for _, b in ipairs(slots) do
-		local row = rows[#rows]
-		if row and math.abs(row[1].y - b.y) <= 2 then row[#row + 1] = b else rows[#rows + 1] = { b } end
-	end
-	local first = rows[1]
+	local first, slots = grid[1], 0
+	for _, row in ipairs(grid) do slots = slots + #row end
 	local layout = {
 		width = fw * ratio, height = fh * ratio,
-		cell = cell, cols = #first, rows = #rows, slots = #slots,
-		pitchX = (first[2] and (first[2].x - first[1].x)) or (cell + 12),
-		pitchY = (rows[2] and (rows[2][1].y - first[1].y)) or (cell + 10),
+		cell = cell, cols = cols, rows = #grid, slots = slots,
+		pitchX = (first[cols].x - first[1].x) / (cols - 1),
+		pitchY = grid[2][1].y - first[1].y,
 		originX = first[1].x, originY = first[1].y,
 	}
 
 	-- The Bag Slots: one row of smaller buttons under the grid.
-	local gridBottom = rows[#rows][1].y + cell
+	local gridBottom = grid[#grid][1].y + cell
 	local below = {}
-	for _, b in ipairs(others) do
-		if b.y > gridBottom and b.w < cell then below[#below + 1] = b end
+	for _, b in ipairs(buttons) do
+		if b.y > gridBottom and b.w < cell - 1 then below[#below + 1] = b end
 	end
 	table.sort(below, function(a, b)
 		if math.abs(a.y - b.y) > 2 then return a.y < b.y end
@@ -345,9 +449,16 @@ local function MeasureBankLayout()
 	end
 
 	for key, value in pairs(layout) do layout[key] = math.floor(value * 10 + 0.5) / 10 end
+	if not PlausibleLayout(layout) then
+		report["bank layout"] = "not measured: the slots found make no bank grid (" .. layout.cols .. " columns of "
+			.. cell .. ", pitch " .. layout.pitchX .. " by " .. layout.pitchY .. ")"
+		return nil
+	end
+	local strays = members - slots
 	report["bank layout"] = layout.cols .. " columns of " .. cell .. ", pitch " .. layout.pitchX .. " by " .. layout.pitchY
 		.. ", grid at " .. layout.originX .. "," .. layout.originY .. ", window " .. layout.width .. " by " .. layout.height
 		.. (layout.bagCount and (", " .. layout.bagCount .. " bag slots of " .. layout.bagCell) or ", bag slots not found")
+		.. (strays > 0 and (", " .. strays .. " other button" .. (strays == 1 and "" or "s") .. " of that size left out") or "")
 	return layout
 end
 Vault.MeasureBankLayout = MeasureBankLayout
@@ -541,10 +652,13 @@ function Vault.SnapshotBank(reason)
 	-- The window can only be measured while it is up. By "bank closed" the game has already hidden
 	-- it, so the last good measurement is carried forward rather than dropped, and a partial one
 	-- (fewer slots than before) never replaces a full one. The freshest measurement is also kept
-	-- for the account, for characters whose bank was saved before the window was ever measured.
+	-- for the account, for characters whose bank was saved before the window was ever measured. A
+	-- saved layout that is no grid (see PlausibleLayout) counts for nothing here.
 	local layout = MeasureBankLayout()
-	if layout and previous and previous.layout and (layout.slots or 0) < (previous.layout.slots or 0) then layout = nil end
-	record.layout = layout or (previous and previous.layout) or ns.vault.bankLayout
+	local prior = previous and PlausibleLayout(previous.layout) and previous.layout or nil
+	local account = PlausibleLayout(ns.vault.bankLayout) and ns.vault.bankLayout or nil
+	if layout and prior and (layout.slots or 0) < (prior.slots or 0) then layout = nil end
+	record.layout = layout or prior or account
 	if layout then ns.vault.bankLayout = layout end
 	record.bagSlots = BankBagSlots(record.layout and record.layout.bagCount)
 	Totals(record)
@@ -896,6 +1010,22 @@ function Vault.Init()
 		end
 	end
 	if dropped > 0 then report["empty bag snapshots dropped"] = dropped end
+	-- Bank layouts that are no grid, measured before 2.0.1 (see PlausibleLayout). Without them the
+	-- saved banks are drawn from the account's layout or the classic bank's until the bank is next
+	-- opened and measured again.
+	local badLayouts = 0
+	for _, entry in pairs(ns.vault.chars) do
+		local bank = type(entry) == "table" and entry.bank
+		if type(bank) == "table" and bank.layout ~= nil and not PlausibleLayout(bank.layout) then
+			bank.layout = nil
+			badLayouts = badLayouts + 1
+		end
+	end
+	if ns.vault.bankLayout ~= nil and not PlausibleLayout(ns.vault.bankLayout) then
+		ns.vault.bankLayout = nil
+		badLayouts = badLayouts + 1
+	end
+	if badLayouts > 0 then report["bank layouts dropped"] = badLayouts .. " that were not a grid" end
 	local chars, guilds = 0, 0
 	for _ in pairs(ns.vault.chars) do chars = chars + 1 end
 	for _ in pairs(ns.vault.guilds) do guilds = guilds + 1 end

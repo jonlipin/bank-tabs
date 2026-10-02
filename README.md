@@ -194,9 +194,9 @@ addon still running, nothing present, already imported, and the ways those go wr
 the package files.
 
 ```
-node tests/banktabstest.js              # the normal client: 813 checks
-node tests/banktabstest.js --bare       # every UI template missing: 805
-node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 809
+node tests/banktabstest.js              # the normal client: 867 checks
+node tests/banktabstest.js --bare       # every UI template missing: 858
+node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 863
 ```
 
 Run it from the repo root. It needs `fengari` on the module path (for example through
