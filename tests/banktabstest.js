@@ -900,7 +900,7 @@ check("with no old Casement installed the window engine does not wait for login"
 check("the old commands are not taken before login", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil)
 
 do -- scope: 1b. This is Bank Tabs, and only its half of Casement
-check("the version is 2.1.0", ns.version == "2.1.0", ns.version)
+check("the version is 2.1.1", ns.version == "2.1.1", ns.version)
 check("the saved variables are Bank Tabs' own", ns.db == BankTabsDB and ns.vault == BankTabsAccountDB.vault
   and CasementDB == nil and CasementAccountDB == nil)
 check("the event frame is Bank Tabs' own", BankTabsFrame ~= nil and CasementFrame == nil)
@@ -2844,8 +2844,10 @@ ns.Refresh()
 check("switched back on, the tabs bring it back down far enough to show them", near(TabTop(htabs), SCREEN_H) and bankTab.shown,
   TabTop(htabs))
 
--- A backpack too narrow for the row (a separate backpack can be about 180 wide): the tabs wrap
--- into a second row, by the rule the character tabs wrap by, rather than hang past its right edge.
+-- The separate backpack (bags not combined) is 178 wide, too narrow for the three in a row beside
+-- its portrait at full size. The user saw them stacked in two rows there; they now keep to one
+-- row, drawn as much smaller as it takes to end 6 short of the right edge: 108 of the 133 they
+-- need, so about four fifths.
 backpack:SetSize(178, 260)
 backpack.scripts.OnSizeChanged(backpack)
 RunTimers(0.1)
@@ -2860,17 +2862,23 @@ local function At(tab) local l, b = ns.Windows.Measure(tab) return l - nl, b - (
 local bx, by = At(bankTab)
 local sx, sy = At(bagsTab)
 local gx, gy = At(guildTab)
-check("Bank and Bags share the first row, still clear of the portrait", near(bx, 64) and near(by, -8) and near(sx, 64 + 45) and near(sy, -8),
-  bx .. "," .. by .. " " .. sx .. "," .. sy)
-check("and Guild wraps into the row above, over the Bank tab", near(gx, 64) and near(gy, -8 + 31), gx .. "," .. gy)
-check("the clamp takes in both rows", backpack.clampInsets[3] == 60 and near(ns.BagHeader.Room(backpack), 60), backpack.clampInsets[3])
-check("the report says the window is narrow", (ns.report["backpack tabs"] or ""):find("in 2 rows", 1, true) ~= nil, ns.report["backpack tabs"])
+local fit = 108 / 133
+check("the separate backpack keeps the three in one row, clear of the portrait", near(bx, 64) and near(sx, 64 + 45 * fit)
+  and near(gx, 64 + 90 * fit) and near(by, -8 * fit) and near(sy, -8 * fit) and near(gy, -8 * fit),
+  bx .. "," .. by .. " " .. sx .. "," .. sy .. " " .. gx .. "," .. gy)
+local _, _, gw = ns.Windows.Measure(guildTab)
+check("drawn about four fifths size, the row ending 6 short of the right edge", near(bankTab.scale, fit) and near(gw, 43 * fit)
+  and near(gx + gw, 178 - 6), tostring(bankTab.scale) .. " / " .. (gx + gw))
+check("the clamp takes in the smaller row", near(backpack.clampInsets[3], 29 * fit) and near(ns.BagHeader.Room(backpack), 29 * fit),
+  backpack.clampInsets[3])
+check("the report says so", (ns.report["backpack tabs"] or ""):find("in one row, drawn at 81% to fit (bags separate)", 1, true) ~= nil,
+  ns.report["backpack tabs"])
 DragTo(backpack, bagGrip, 500, 5000)
-check("dragged to the top, both rows stay on screen", near(TabTop(htabs), SCREEN_H), TabTop(htabs))
+check("dragged to the top, the row stays on screen", near(TabTop(htabs), SCREEN_H), TabTop(htabs))
 backpack:SetSize(340, 400)
 backpack.scripts.OnSizeChanged(backpack)
 DragTo(backpack, bagGrip, 500, 300)
-check("back at its width they are one row again", Hung(backpack, htabs) and backpack.clampInsets[3] == 29
+check("back at its width they are full size again", Hung(backpack, htabs) and backpack.clampInsets[3] == 29 and bankTab.scale == 1
   and (ns.report["backpack tabs"] or ""):find("in one row", 1, true) ~= nil, ns.report["backpack tabs"])
 
 -- Bright while there is something to open, dimmed while there is not.
@@ -2976,6 +2984,22 @@ end
 DragTo(ContainerFrameCombinedBags, combinedGrip, 500, 5000)
 check("dragged to the top of the screen, the combined bag keeps its tabs on screen too", near(TabTop(combined), SCREEN_H)
   and Hung(ContainerFrameCombinedBags, combined), TabTop(combined))
+-- The combined backpack keeps its own rule, which the user likes: full size, and on a window too
+-- narrow for the row, the Guild tab wrapping into a row above.
+do
+  local cw, ch = ContainerFrameCombinedBags:GetSize()
+  ContainerFrameCombinedBags:SetSize(178, ch)
+  if ContainerFrameCombinedBags.scripts.OnSizeChanged then ContainerFrameCombinedBags.scripts.OnSizeChanged(ContainerFrameCombinedBags) end
+  RunTimers(0.1)
+  local fl, fb, _, fh = ns.Windows.Measure(ContainerFrameCombinedBags)
+  local gl, gb = ns.Windows.Measure(combined[3])
+  check("the combined backpack, narrowed, keeps its tabs full size and wraps the Guild tab above", combined[1].scale == 1
+    and near(gl - fl, 64) and near(gb - (fb + fh), -8 + 31), (gl - fl) .. "," .. (gb - (fb + fh)))
+  ContainerFrameCombinedBags:SetSize(cw, ch)
+  if ContainerFrameCombinedBags.scripts.OnSizeChanged then ContainerFrameCombinedBags.scripts.OnSizeChanged(ContainerFrameCombinedBags) end
+  RunTimers(0.1)
+  check("and one full size row again at its own width", Hung(ContainerFrameCombinedBags, combined))
+end
 ns.Windows.ResetGroup("combined")
 ContainerFrameCombinedBags:Hide()
 ContainerFrame2:Show()
@@ -4195,7 +4219,7 @@ const parts = [];
   check('the TOC is BankTabs.toc', toc !== null);
   check('titled Bank Tabs', field(toc, 'Title') === 'Bank Tabs', field(toc, 'Title'));
   const version = (sources['Core.lua'].match(/ns\.version = "([^"]+)"/) || [])[1];
-  check('its version is the addon\'s own, 2.1.0', field(toc, 'Version') === '2.1.0' && version === '2.1.0', field(toc, 'Version') + ' / ' + version);
+  check('its version is the addon\'s own, 2.1.1', field(toc, 'Version') === '2.1.1' && version === '2.1.1', field(toc, 'Version') + ' / ' + version);
   check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
     && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
   check('its icon is the treasure chest from the game\'s icons (not Stockpile\'s bag), the path intact', /^Interface\\Icons\\Racial_Dwarf_FindTreasure$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
@@ -4243,7 +4267,7 @@ const parts = [];
     const changelog = (read('CHANGELOG.md') || '').replace(/\r\n/g, '\n');
     const notes = (read('RELEASE-NOTES.md') || '').replace(/\r\n/g, '\n');
     const top = changelog.split(/\r?\n(?=## )/).find(s => s.startsWith('## ')) || '';
-    check('the changelog opens on 2.1.0', /^## 2\.1\.0 - /.test(top), top.slice(0, 30));
+    check('the changelog opens on 2.1.1', /^## 2\.1\.1 - /.test(top), top.slice(0, 30));
     check('the release notes are that section and nothing else', notes.replace(/\s+$/, '') === top.replace(/\s+$/, ''));
 
     // Every text file, docs and code: no em or en dashes, as the author asked.

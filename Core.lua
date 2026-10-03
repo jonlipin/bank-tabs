@@ -16,7 +16,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "2.1.0"
+ns.version = "2.1.1"
 ns.report = {}
 
 local report = ns.report
@@ -576,11 +576,12 @@ function ns.TabsPerRow(host)
 	return math.max(1, math.floor((width - T.start - T.right) / (T.w + T.gap)))
 end
 
--- How far the top of the highest of `rows` rows of tabs stands above the window's top edge.
-function ns.TabRowsHeight(rows)
+-- How far the top of the highest of `rows` rows of tabs stands above the window's top edge, for
+-- tabs drawn at `scale` (1 when left out).
+function ns.TabRowsHeight(rows, scale)
 	local T = ns.TAB
 	if not rows or rows <= 0 then return 0 end
-	return (rows - 1) * T.rowStep + T.h - T.tuck
+	return ((rows - 1) * T.rowStep + T.h - T.tuck) * (scale or 1)
 end
 
 local TAB_ART = {
@@ -633,11 +634,16 @@ end
 
 -- Hangs a tab off the top edge of `host`, in column `col` of row `row` (a second row sits above
 -- the first): clear of the portrait, its feet tucked behind the window's border, and one level
--- under the window so that border covers them.
-function ns.HangTab(tab, host, col, row)
+-- under the window so that border covers them. `scale` draws it smaller (1 when left out); a
+-- scaled frame's anchor offsets count in its own units, so its place is divided through by it.
+function ns.HangTab(tab, host, col, row, scale)
 	local T = ns.TAB
+	scale = scale or 1
+	if tab.SetScale then tab:SetScale(scale) end
+	local x = T.start + (col or 0) * (T.w + T.gap) * scale
+	local y = (-T.tuck + (row or 0) * T.rowStep) * scale
 	tab:ClearAllPoints()
-	tab:SetPoint("BOTTOMLEFT", host, "TOPLEFT", T.start + (col or 0) * (T.w + T.gap), -T.tuck + (row or 0) * T.rowStep)
+	tab:SetPoint("BOTTOMLEFT", host, "TOPLEFT", x / scale, y / scale)
 	tab:SetFrameLevel(math.max(0, (host:GetFrameLevel() or 1) - 1))
 end
 

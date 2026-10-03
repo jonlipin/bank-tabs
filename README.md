@@ -45,8 +45,8 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
 - **Bank, Bags and Guild tabs above your backpack** open the saved windows. They are the same tabs
   as the character tabs, glow while their window is open, and are dimmed while there is nothing
   saved for them. They hang off the top of the backpack, clear of its title, close button and
-  portrait, and move with it. On a backpack too narrow for all three in a row, the Guild tab sits
-  in a second row above.
+  portrait, and move with it. With your bags separate the backpack is narrower, and the three are
+  drawn a little smaller to stay in one row.
 
 ### Who has it, and your gold
 
@@ -199,9 +199,9 @@ addon still running, nothing present, already imported, and the ways those go wr
 the package files.
 
 ```
-node tests/banktabstest.js              # the normal client: 923 checks
-node tests/banktabstest.js --bare       # every UI template missing: 914
-node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 898
+node tests/banktabstest.js              # the normal client: 925 checks
+node tests/banktabstest.js --bare       # every UI template missing: 916
+node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 900
 ```
 
 Run it from the repo root. It needs `fengari` on the module path (for example through

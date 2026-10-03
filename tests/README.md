@@ -11,14 +11,14 @@ node tests/banktabstest.js [addon dir] [--bare] [--verbose] [--noenum]
 
 Run it from the repo root; the addon dir defaults to the folder above `tests`.
 
-- no flags: 923 checks against the normal client, WoW Forever as its own interface code describes
+- no flags: 925 checks against the normal client, WoW Forever as its own interface code describes
   it: its real `Enum.BagIndex`, its bank tabs through `C_Bank` (a Bag Slot is a bank tab, its bag
   in the `Characterbanktab` container), the bank drawn as one grid of every tab, and `UnitName`
   giving a first name and a surname
-- `--bare`: 914; every UI template and atlas is missing, so every fallback path runs. As on the
+- `--bare`: 916; every UI template and atlas is missing, so every fallback path runs. As on the
   client, `SetAtlas` raises nothing for a missing atlas, so only a real check of the atlas table
   lets a fallback step in.
-- `--noenum`: 898; a classic client: no `Enum.BagIndex` and no bank tabs, so the bank scan falls back
+- `--noenum`: 900; a classic client: no `Enum.BagIndex` and no bank tabs, so the bank scan falls back
   to the classic container ids, the bank bags hang off inventory slots and the saved bank shows one
   tab or bag at a time
 - `--verbose`: prints everything the addon puts in the chat frame
@@ -41,7 +41,8 @@ The result line adds up three parts, printed just above it:
   character tabs by the backpack tabs' rule, the saved bags leaving out the character
   being played, the saved bank's unsaved line), the tabs above the backpack (the shared tab
   builder, where they hang, following the backpack, kept on screen with it when it is dragged to
-  the top, wrapping into two rows on a narrow backpack, chosen while their window is open, dimmed
+  the top, one row drawn smaller on the separate backpack and two rows on a narrow combined one,
+  chosen while their window is open, dimmed
   with nothing saved), tooltips, gold, the minimap button, the
   options, the slash commands and the saved variables. It also checks that the world map is never
   touched (Map Tab owns it) and that every global the addon makes is named for it. The stub's

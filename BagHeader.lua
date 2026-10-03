@@ -10,8 +10,9 @@
 -- portrait, and never meet the drag strip, which lies inside the top bar. Being the backpack's
 -- children, anchored to it, they go wherever it goes, in the same frame, and hide with it.
 --
--- A backpack too narrow for the three in a row (a separate backpack can be under 200 wide) gets
--- them in two rows, by the rule the character tabs wrap by, so none hangs past its right edge.
+-- The separate backpack (bags not combined) is too narrow for the three in a row at full size, so
+-- there they are drawn smaller to keep to one row; on the combined backpack a window too narrow
+-- gets them in two rows, by the rule the character tabs wrap by. None hangs past the right edge.
 -- While they are up, the backpack is kept on screen with them: the move engine clamps it with
 -- their height added (Room), and the game's own clamp is told about them too.
 --
@@ -165,6 +166,19 @@ local function Paint(set)
 	end
 end
 
+-- How much smaller `count` tabs have to be drawn to fit in one row along the top of a separate
+-- backpack, between the portrait and EDGE short of its right edge: 1 where they fit as they are.
+local EDGE, MIN_SCALE = 6, 0.6
+local function FitScale(frame, count)
+	local T = ns.TAB
+	local width = frame.GetWidth and frame:GetWidth() or 0
+	if type(width) ~= "number" or width <= 0 then return 1 end
+	local need = count * T.w + (count - 1) * T.gap
+	local room = width - T.start - EDGE
+	if need <= room then return 1 end
+	return math.max(MIN_SCALE, room / need)
+end
+
 -- The height the tabs stand above the backpack's top edge (0 while they are down). The game's
 -- clamp is widened to take them in, the insets the frame had kept to put back, and a window the
 -- user has placed is put back through the move engine, which now clamps it with them.
@@ -202,18 +216,25 @@ function BagHeader.Update(frame)
 	end
 	if not set then set = BuildSet(frame) end
 
-	-- Hung again every time, so they stay one level under the window whatever level the game
-	-- has raised it to, and wrap to the window's width as it is now.
-	local perRow = ns.TabsPerRow(frame)
+	-- Hung again every time, so they stay one level under the window whatever level the game has
+	-- raised it to. On the combined backpack they wrap to the window's width as it is now. With the
+	-- bags separate (the combinedBags setting off), the backpack is a window of its own 178 wide, too
+	-- narrow for the three in a row beside its portrait: there they keep to one row, drawn as much
+	-- smaller as it takes to fit (the user saw them stacked in two rows).
+	local separate = frame ~= _G.ContainerFrameCombinedBags
+	local perRow, scale = ns.TabsPerRow(frame), 1
+	if separate then perRow, scale = #set.list, FitScale(frame, #set.list) end
 	for index, tab in ipairs(set.list) do
-		ns.HangTab(tab, frame, (index - 1) % perRow, math.floor((index - 1) / perRow))
+		ns.HangTab(tab, frame, (index - 1) % perRow, math.floor((index - 1) / perRow), scale)
 		tab:Show()
 	end
 	local rows = math.ceil(#set.list / perRow)
-	SetRoom(frame, set, ns.TabRowsHeight(rows))
+	SetRoom(frame, set, ns.TabRowsHeight(rows, scale))
 	Paint(set)
 	report["backpack tabs"] = "above the top edge of " .. tostring(frame.GetName and frame:GetName() or "the backpack")
 		.. ", " .. (rows == 1 and "in one row" or ("in " .. rows .. " rows (the window is narrow)"))
+		.. (scale < 1 and (", drawn at " .. math.floor(scale * 100 + 0.5) .. "% to fit") or "")
+		.. (separate and " (bags separate)" or " (bags combined)")
 end
 
 -- How far the tabs stand above `frame`'s top edge, in its own units, while they are up; 0 for a
