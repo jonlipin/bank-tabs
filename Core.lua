@@ -16,7 +16,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "2.1.1"
+ns.version = "2.2.0"
 ns.report = {}
 
 local report = ns.report
@@ -74,6 +74,11 @@ ns.defaults = {
 
 	-- Where each window was left, in UIParent units, keyed by window or by bag id.
 	positions = {},
+
+	-- The window style of Bank Tabs' own windows (Styles.lua): "auto" (EllesmereUI's look while
+	-- it runs, the game's otherwise), "blizzard" or "dark", and how opaque Dark's backgrounds are.
+	style = "auto",
+	darkAlpha = 0.92,
 }
 
 -- ------------------------------------------------------------------
@@ -241,6 +246,11 @@ function ns.ResetToDefaults()
 	ns.vault = vault
 	MirrorToAccount()
 	if ns.Windows and ns.Windows.ResetAll then pcall(ns.Windows.ResetAll) end
+	-- Back to the default window style, which takes a reload when another one is drawn.
+	if ns.Styles then
+		pcall(ns.Styles.SetDarkAlpha, ns.db.darkAlpha)
+		pcall(ns.Styles.Changed)
+	end
 	ns.Refresh()
 	if ns.SyncOptions then pcall(ns.SyncOptions) end
 	Print("Settings reset to defaults. Saved banks and bags were kept.")
@@ -318,6 +328,14 @@ local PANEL_TEMPLATES = {
 	{ "ButtonFrameTemplate", function(f) return f.NineSlice ~= nil or f.Inset ~= nil end },
 	{ "BasicFrameTemplate" },
 }
+
+-- The X on one of Bank Tabs' own windows hides the window itself, as its tab does. The template's
+-- own click (UIPanelCloseButton_OnClick) goes through HideUIPanel, which the game refuses to addon
+-- code in combat ("Interface action blocked") although hiding a window of our own is allowed then.
+function ns.CloseByHiding(panel, button)
+	if type(button) ~= "table" or not button.SetScript then return end
+	button:SetScript("OnClick", function() panel:Hide() end)
+end
 
 -- A frame wearing the game's own panel art: the border and the background, nothing else. Used for
 -- the options window and as the fallback for the saved bank's portrait window.
@@ -406,8 +424,12 @@ function ns.CreatePortraitPanel(name, key)
 
 	if not panel.CloseButton then
 		local ok, button = pcall(CreateFrame, "Button", nil, panel, "UIPanelCloseButton")
-		if ok and button then button:SetPoint("TOPRIGHT", 1, 1) end
+		if ok and button then
+			button:SetPoint("TOPRIGHT", 1, 1)
+			panel.csClose = button
+		end
 	end
+	ns.CloseByHiding(panel, panel.CloseButton or panel.csClose)
 
 	panel:SetMovable(true)
 	panel:SetClampedToScreen(true)
@@ -449,8 +471,12 @@ function ns.CreatePanel(name)
 
 	if not panel.CloseButton then
 		local ok, button = pcall(CreateFrame, "Button", nil, panel, "UIPanelCloseButton")
-		if ok and button then button:SetPoint("TOPRIGHT", 1, 1) end
+		if ok and button then
+			button:SetPoint("TOPRIGHT", 1, 1)
+			panel.csClose = button
+		end
 	end
+	ns.CloseByHiding(panel, panel.CloseButton or panel.csClose)
 
 	panel:SetMovable(true)
 	panel:SetClampedToScreen(true)
@@ -566,6 +592,19 @@ end
 -- runs under the window's border, where the tab's foot is tucked.
 ns.TAB = { w = 43, h = 37, gap = 2, start = 64, right = 20, tuck = 8, rowStep = 31, icon = 36, iconTop = 4 }
 
+-- One of those numbers for tabs on `host`. A host can carry its own in `host.csTabLook`: flat tabs
+-- (ns.FlatTab, and the window styles' tab look) stand on the window's edge rather than tuck
+-- behind it, as tall as one row, and a window without a portrait starts them further left. A
+-- window that is not Bank Tabs' own (the game's backpack, EllesmereUI's bags) is not written on:
+-- its look is kept here instead, by window.
+ns.tabLooks = setmetatable({}, { __mode = "k" })
+
+function ns.TabLook(host, key)
+	local look = host and (ns.tabLooks[host] or host.csTabLook)
+	if type(look) == "table" and look[key] ~= nil then return look[key] end
+	return ns.TAB[key]
+end
+
 -- How many tabs fit in one row along the top of `host`. The rest wrap into a row above rather
 -- than march past the right hand edge, where they would hang off the window (and off the screen,
 -- for a window pushed into a corner). Both kinds of tab wrap by this one rule.
@@ -573,15 +612,15 @@ function ns.TabsPerRow(host)
 	local T = ns.TAB
 	local width = host and host.GetWidth and host:GetWidth() or 0
 	if type(width) ~= "number" or width <= 0 then width = 380 end
-	return math.max(1, math.floor((width - T.start - T.right) / (T.w + T.gap)))
+	return math.max(1, math.floor((width - ns.TabLook(host, "start") - T.right) / (T.w + T.gap)))
 end
 
--- How far the top of the highest of `rows` rows of tabs stands above the window's top edge, for
--- tabs drawn at `scale` (1 when left out).
-function ns.TabRowsHeight(rows, scale)
+-- How far the top of the highest of `rows` rows of tabs stands above `host`'s top edge, for tabs
+-- drawn at `scale` (1 when left out).
+function ns.TabRowsHeight(rows, scale, host)
 	local T = ns.TAB
 	if not rows or rows <= 0 then return 0 end
-	return ((rows - 1) * T.rowStep + T.h - T.tuck) * (scale or 1)
+	return ((rows - 1) * T.rowStep + ns.TabLook(host, "h") - ns.TabLook(host, "tuck")) * (scale or 1)
 end
 
 local TAB_ART = {
@@ -640,15 +679,15 @@ function ns.HangTab(tab, host, col, row, scale)
 	local T = ns.TAB
 	scale = scale or 1
 	if tab.SetScale then tab:SetScale(scale) end
-	local x = T.start + (col or 0) * (T.w + T.gap) * scale
-	local y = (-T.tuck + (row or 0) * T.rowStep) * scale
+	local x = ns.TabLook(host, "start") + (col or 0) * (T.w + T.gap) * scale
+	local y = (-ns.TabLook(host, "tuck") + (row or 0) * T.rowStep) * scale
 	tab:ClearAllPoints()
 	tab:SetPoint("BOTTOMLEFT", host, "TOPLEFT", x / scale, y / scale)
 	tab:SetFrameLevel(math.max(0, (host:GetFrameLevel() or 1) - 1))
 end
 
 -- A tab on `host`, with an `icon` texture for the caller to paint and the scripts left to the
--- caller. tab:SetChosen(on) wears the chosen state (the glowing frame); tab:SetDimmed(on) greys the
+-- caller. tab:SetChosen(on) wears the chosen state (the glowing frame); tab:SetDimmed(on) grays the
 -- icon for a tab with nothing behind it.
 function ns.CreateTab(host)
 	local T = ns.TAB
@@ -674,6 +713,15 @@ function ns.CreateTab(host)
 	icon:SetPoint("TOP", 0, -T.iconTop)
 	icon:SetSize(T.icon, T.icon)
 	tab.icon = icon
+	-- Where the icon's art is cut from is kept, so a window style can cut it again to the tab's
+	-- shape (icon.csAspect, width over height) rather than stretch it. Without one it is as given.
+	local setTexCoord = icon.SetTexCoord
+	icon.SetTexCoord = function(self, l, r, t, b, ...)
+		if select("#", ...) > 0 or type(b) ~= "number" then return setTexCoord(self, l, r, t, b, ...) end
+		self.csCoords = { l, r, t, b }
+		if self.csAspect then l, r, t, b = ns.CropToAspect(l, r, t, b, self.csAspect) end
+		return setTexCoord(self, l, r, t, b)
+	end
 
 	local masked = MaskTabTexture(tab, icon, T.icon)
 	MaskTabTexture(tab, back, T.icon)
@@ -715,6 +763,7 @@ function ns.CreateTab(host)
 
 	local hover = tab:CreateTexture(nil, "HIGHLIGHT")
 	hover:SetAllPoints(icon)
+	tab.hover = hover
 	hover:SetColorTexture(1, 1, 1, 0.15)
 
 	tab.SetChosen = function(self, on)
@@ -727,7 +776,7 @@ function ns.CreateTab(host)
 		if self.glow then self.glow:SetShown(on) end
 		if self.sel then self.sel:SetShown(on) end
 		if self.bevel then self.bevel:SetShown(not on) end
-		self.icon:SetAlpha((self.csDimmed and 0.4) or (on and 1) or 0.85)
+		self.icon:SetAlpha((self.csDimmed and 0.4) or (on and 1) or self.csRestAlpha or 0.85)
 	end
 	tab.SetDimmed = function(self, on)
 		self.csDimmed = on and true or false
@@ -735,6 +784,89 @@ function ns.CreateTab(host)
 	end
 	tab:SetChosen(false)
 	return tab
+end
+
+-- The tab look for flat, dark windows (EllesmereUI's bags, and the saved windows in a drawn window
+-- style): the spellbook frame, its glow and the tab shaped mask go, the icon is drawn square, and
+-- the tab is one row tall, to stand on the window's top edge (the host's csTabLook says so).
+-- Idempotent. The frame art is faded rather than cleared, as every SetChosen puts it back.
+function ns.StandTab(tab)
+	if tab.csStood then return end
+	tab.csStood = true
+	for _, texture in ipairs({ tab.icon, tab.plate }) do
+		if texture and texture.csMask and texture.RemoveMaskTexture then
+			pcall(texture.RemoveMaskTexture, texture, texture.csMask)
+		end
+	end
+	-- The hover wash over the icon alone gives way to one over the whole flat tab.
+	for _, part in ipairs({ tab.plate, tab.frameTex, tab.glow, tab.bevel, tab.sel, tab.hover }) do
+		if part and part.SetAlpha then part:SetAlpha(0) end
+	end
+	local h = ns.TAB.rowStep
+	tab:SetHeight(h)
+	tab.icon:ClearAllPoints()
+	tab.icon:SetPoint("TOP", tab, "TOP", 0, -3)
+	tab.icon:SetSize(h - 6, h - 6)
+	-- The name the window styles' tab look keeps its icon under.
+	tab.Icon = tab.icon
+end
+
+-- The middle of the art between l, r, t and b (assumed square, as icons are) that has the shape
+-- `aspect` (width over height): a tab wider than tall loses some of the top and bottom.
+function ns.CropToAspect(l, r, t, b, aspect)
+	if type(aspect) ~= "number" or aspect <= 0 then return l, r, t, b end
+	if aspect >= 1 then
+		local mid, half = (t + b) / 2, (b - t) / aspect / 2
+		return l, r, mid - half, mid + half
+	end
+	local mid, half = (l + r) / 2, (r - l) * aspect / 2
+	return mid - half, mid + half, t, b
+end
+
+-- EllesmereUI's accent color where it is running, its default teal otherwise.
+function ns.AccentColor()
+	local c = type(EllesmereUI) == "table" and EllesmereUI.ELLESMERE_GREEN
+	if type(c) == "table" and type(c.r) == "number" then return c.r, c.g, c.b end
+	return 0.05, 0.82, 0.62
+end
+
+-- A flat tab of Bank Tabs' own for a flat, dark window, while no window style is drawn to give it
+-- one: a dark plate with a thin edge, a light wash on hover and the accent line along the foot of
+-- the chosen tab.
+function ns.FlatTab(tab)
+	ns.StandTab(tab)
+	if tab.csFlat then return end
+	tab.csFlat = true
+	local fill = tab:CreateTexture(nil, "BACKGROUND", nil, -1)
+	fill:SetAllPoints(tab)
+	fill:SetColorTexture(0.06, 0.06, 0.06, 0.95)
+	local edges = {}
+	for i = 1, 4 do
+		edges[i] = tab:CreateTexture(nil, "BORDER")
+		edges[i]:SetColorTexture(0, 0, 0, 1)
+	end
+	edges[1]:SetPoint("TOPLEFT") edges[1]:SetPoint("TOPRIGHT") edges[1]:SetHeight(1)
+	edges[2]:SetPoint("BOTTOMLEFT") edges[2]:SetPoint("BOTTOMRIGHT") edges[2]:SetHeight(1)
+	edges[3]:SetPoint("TOPLEFT") edges[3]:SetPoint("BOTTOMLEFT") edges[3]:SetWidth(1)
+	edges[4]:SetPoint("TOPRIGHT") edges[4]:SetPoint("BOTTOMRIGHT") edges[4]:SetWidth(1)
+	local hover = tab:CreateTexture(nil, "HIGHLIGHT")
+	hover:SetAllPoints(tab)
+	hover:SetColorTexture(1, 1, 1, 0.1)
+	local line = tab:CreateTexture(nil, "OVERLAY", nil, 6)
+	line:SetPoint("BOTTOMLEFT", tab, "BOTTOMLEFT", 1, 1)
+	line:SetPoint("BOTTOMRIGHT", tab, "BOTTOMRIGHT", -1, 1)
+	line:SetHeight(2)
+	line:SetColorTexture(ns.AccentColor())
+	line:Hide()
+	tab.flatFill, tab.flatLine = fill, line
+	-- What a window style drawn later fades, to put its own tab look in their place.
+	tab.flatParts = { fill, edges[1], edges[2], edges[3], edges[4], hover, line }
+	local chosen = tab.SetChosen
+	tab.SetChosen = function(self, on)
+		chosen(self, on)
+		if self.flatLine then self.flatLine:SetShown(on and true or false) end
+	end
+	tab:SetChosen(tab.csChosen)
 end
 
 function ns.Tooltip(widget, title, body)
@@ -952,6 +1084,7 @@ local function PrintHelp()
 		"|cffffff00/banktabs lock|r or |cffffff00unlock|r turns every window switch off or on",
 		"|cffffff00/banktabs grips|r outlines the part of each window you can drag",
 		"|cffffff00/banktabs minimap|r shows or hides the minimap button",
+		"|cffffff00/banktabs style|r |cffffff00auto|r, |cffffff00blizzard|r or |cffffff00dark|r picks the window style",
 		"|cffffff00/banktabs debug|r prints what resolved on this client",
 	}
 	for _, line in ipairs(lines) do DEFAULT_CHAT_FRAME:AddMessage("   " .. line) end
@@ -1015,6 +1148,16 @@ SlashCmdList["BANKTABS"] = function(msg)
 		ns.Refresh()
 		if ns.SyncOptions then pcall(ns.SyncOptions) end
 		Print("minimap button " .. (want and "shown" or "hidden") .. ".")
+
+	elseif cmd == "style" then
+		local Styles = ns.Styles
+		if not Styles then Print("The window styles are not loaded on this client.") return end
+		if rest == "auto" or rest == "automatic" then Styles.Try("style switch", Styles.Set, "auto")
+		elseif rest == "blizzard" or rest == "dark" then Styles.Try("style switch", Styles.Set, rest)
+		elseif rest == "" then Styles.Try("style switch", Styles.Cycle, 1)
+		else Print("styles: auto, blizzard, dark.") return end
+		if ns.SyncOptions then pcall(ns.SyncOptions) end
+		Print("window style: " .. Styles.Name(ns.db.style) .. ". " .. Styles.Note())
 
 	elseif cmd == "grips" then
 		ns.db.showGrips = not ns.db.showGrips

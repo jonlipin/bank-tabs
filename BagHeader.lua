@@ -18,6 +18,19 @@
 --
 -- A tab wears its chosen state while its saved window is open, and is dimmed while there is
 -- nothing saved for it to show.
+--
+-- While a window style is drawn (Dark, or EllesmereUI's), the tabs on the game's backpack wear the
+-- style's tab look, as the saved windows' tabs do: flat, the icon square, the accent line under the
+-- chosen one, one row tall and standing on the window's top edge rather than tucked behind it. The
+-- backpack itself is left as the game draws it.
+--
+-- EllesmereUI's Bags module replaces the game's bag windows with one window of its own
+-- (EUI_MainBagFrame; the game's are kept under a hidden frame). While it runs, the same three tabs
+-- hang above that window's top edge, starting from its left corner (it has no portrait), and go
+-- wherever it goes, being its children too. They are flat and dark there, standing on its edge
+-- rather than tucked behind it: the window style's own tab look while a style is drawn (Dark, or
+-- EllesmereUI's; BankTabs_Skins.lua), a flat look of Bank Tabs' own (ns.FlatTab) while none is. Its
+-- bank window gets nothing, as the game's bank gets nothing: the tabs live on the backpack.
 
 local ADDON, ns = ...
 
@@ -28,7 +41,7 @@ ns.BagHeader = BagHeader
 local sets = {}   -- frame -> { list = { tab, tab, tab }, byKey = { bank = tab, ... } }
 local hooked = {}
 
--- Left to right. Full colour item icons that every client carries, so the three tabs read alike:
+-- Left to right. Full color item icons that every client carries, so the three tabs read alike:
 -- the game's "Banker" and "GuildBanker" map symbols have see-through parts, and the dark plate
 -- behind showed through them, which made the Bank tab look darker than the others (the user's
 -- screenshot). The bag icon is the one the game's own bag button uses. The lists never share a
@@ -42,8 +55,21 @@ local TABS = {
 		icons = { "Interface\\Icons\\INV_Box_01", "Interface\\Icons\\INV_Crate_01" } },
 }
 
+-- EllesmereUI's bag window, where its Bags module is installed; nil otherwise.
+function BagHeader.EllesmereBags()
+	local frame = _G.EUI_MainBagFrame
+	if type(frame) == "table" and frame.HookScript and frame.GetWidth then return frame end
+	return nil
+end
+
+-- How the tabs stand on EllesmereUI's bag window: on its top edge, one row tall, from 6 in.
+local FLAT_LOOK = { tuck = 0, h = ns.TAB.rowStep, start = 6 }
+-- And on the game's backpack in a window style: on its top edge, one row tall, clear of the portrait.
+local STOOD_LOOK = { tuck = 0, h = ns.TAB.rowStep }
+
 local function IsBackpack(frame)
 	if frame == _G.ContainerFrameCombinedBags then return true end
+	if frame ~= nil and frame == BagHeader.EllesmereBags() then return true end
 	local id = frame.GetID and frame:GetID() or nil
 	return id == 0
 end
@@ -132,7 +158,7 @@ local function PaintIcon(texture, spec)
 end
 
 local function BuildSet(frame)
-	local set = { list = {}, byKey = {} }
+	local set = { list = {}, byKey = {}, flat = frame == BagHeader.EllesmereBags() }
 	for index, spec in ipairs(TABS) do
 		local tab = ns.CreateTab(frame)
 		tab.csHeaderKind = spec.key
@@ -198,8 +224,10 @@ end
 
 function BagHeader.Update(frame)
 	if not frame or not ns.db then return end
-	-- The money readout on a bag window shows every character's gold on hover.
-	if IsBackpack(frame) then ns.HookMoneyFrame(frame, "bags") end
+	local ellesmere = frame == BagHeader.EllesmereBags()
+	-- The money readout on a bag window shows every character's gold on hover. EllesmereUI's window
+	-- keeps track of the account's gold itself.
+	if IsBackpack(frame) and not ellesmere then ns.HookMoneyFrame(frame, "bags") end
 
 	-- The game hands its bag frames out as it needs them, so the frame that was the backpack last
 	-- time can be bag 1 this time; the tabs built on it then have to go away. An old Casement
@@ -216,12 +244,25 @@ function BagHeader.Update(frame)
 	end
 	if not set then set = BuildSet(frame) end
 
+	-- While a window style is drawn (Dark, or EllesmereUI's), the tabs wear its tab look, on the
+	-- game's backpack as on the saved windows, and stand on the window's edge. A style drawn after
+	-- they were built reaches them here too. Without one, the game's backpack keeps the spellbook's
+	-- tabs and EllesmereUI's window gets flat ones. Only the tabs are restyled, never the backpack.
+	local styled = true
+	for _, tab in ipairs(set.list) do
+		if not (ns.SkinCharTab and ns.SkinCharTab(tab)) then
+			styled = false
+			if set.flat then ns.FlatTab(tab) end
+		end
+	end
+	ns.tabLooks[frame] = (set.flat and FLAT_LOOK) or (styled and STOOD_LOOK) or nil
+
 	-- Hung again every time, so they stay one level under the window whatever level the game has
 	-- raised it to. On the combined backpack they wrap to the window's width as it is now. With the
 	-- bags separate (the combinedBags setting off), the backpack is a window of its own 178 wide, too
 	-- narrow for the three in a row beside its portrait: there they keep to one row, drawn as much
 	-- smaller as it takes to fit (the user saw them stacked in two rows).
-	local separate = frame ~= _G.ContainerFrameCombinedBags
+	local separate = frame ~= _G.ContainerFrameCombinedBags and not ellesmere
 	local perRow, scale = ns.TabsPerRow(frame), 1
 	if separate then perRow, scale = #set.list, FitScale(frame, #set.list) end
 	for index, tab in ipairs(set.list) do
@@ -229,12 +270,15 @@ function BagHeader.Update(frame)
 		tab:Show()
 	end
 	local rows = math.ceil(#set.list / perRow)
-	SetRoom(frame, set, ns.TabRowsHeight(rows, scale))
+	SetRoom(frame, set, ns.TabRowsHeight(rows, scale, frame))
 	Paint(set)
 	report["backpack tabs"] = "above the top edge of " .. tostring(frame.GetName and frame:GetName() or "the backpack")
 		.. ", " .. (rows == 1 and "in one row" or ("in " .. rows .. " rows (the window is narrow)"))
 		.. (scale < 1 and (", drawn at " .. math.floor(scale * 100 + 0.5) .. "% to fit") or "")
-		.. (separate and " (bags separate)" or " (bags combined)")
+		.. (ellesmere and (" (EllesmereUI's bags, " .. ((set.list[1] and set.list[1].csStyled)
+			and (ns.Styles.Name(ns.Styles.Applied()) .. " tabs)") or "flat tabs)"))
+			or separate and " (bags separate)" or " (bags combined)")
+		.. ((styled and not ellesmere) and (", " .. ns.Styles.Name(ns.Styles.Applied()) .. " tabs") or "")
 end
 
 -- How far the tabs stand above `frame`'s top edge, in its own units, while they are up; 0 for a
@@ -265,8 +309,12 @@ end
 function BagHeader.Sweep()
 	-- The bank's money readout too, once the bank window exists.
 	if _G.BankFrame then ns.HookMoneyFrame(_G.BankFrame, "bank") end
+	local frames = {}
 	for _, name in ipairs(ns.Windows.CONTAINER_NAMES or {}) do
-		local frame = _G[name]
+		if _G[name] then frames[#frames + 1] = _G[name] end
+	end
+	if BagHeader.EllesmereBags() then frames[#frames + 1] = BagHeader.EllesmereBags() end
+	for _, frame in ipairs(frames) do
 		if type(frame) == "table" and frame.HookScript and not hooked[frame] then
 			hooked[frame] = true
 			frame:HookScript("OnShow", function()

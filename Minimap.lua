@@ -35,6 +35,9 @@ local function Place()
 	if not button then return end
 	local angle = math.rad(ns.db.minimap.angle or 205)
 	local radius = ((Minimap:GetWidth() or 140) / 2) + 6
+	-- Only while it sits on the minimap. A button collector (EllesmereUI's, for one) that
+	-- has taken the button keeps it where it put it.
+	if button:GetParent() ~= Minimap then return end
 	button:ClearAllPoints()
 	button:SetPoint("CENTER", Minimap, "CENTER", math.cos(angle) * radius, math.sin(angle) * radius)
 end

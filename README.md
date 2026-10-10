@@ -46,7 +46,9 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
   as the character tabs, glow while their window is open, and are dimmed while there is nothing
   saved for them. They hang off the top of the backpack, clear of its title, close button and
   portrait, and move with it. With your bags separate the backpack is narrower, and the three are
-  drawn a little smaller to stay in one row.
+  drawn a little smaller to stay in one row. With EllesmereUI's Bags module, which replaces the
+  game's bag windows with one of its own, the three tabs hang above that window instead and go
+  wherever it goes.
 
 ### Who has it, and your gold
 
@@ -72,11 +74,24 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
   saved, and again if you change your resolution or UI scale. The backpack is kept far enough
   below the top of the screen for its tabs to stay in reach.
 
+### A look of your choice
+
+The Look page in the options picks how Bank Tabs' own windows are drawn (the saved bank, bags and
+guild bank with their slots and tabs, and the options window): **Automatic** matches
+EllesmereUI when it is installed and keeps the
+game's look otherwise, **Blizzard** keeps the game's window art, and **Dark** is a flat dark style
+built in that needs no other addon, with a slider for how opaque its backgrounds are. The Bank,
+Bags and Guild tabs above the backpack take the style's tab look too. The game's own windows keep
+their look. Leaving a drawn style takes a reload, which Bank Tabs offers. EllesmereUI is optional;
+its look can be switched off for Bank Tabs under Blizzard Skins+ > Window Skins > Third-Party
+Addons in its own options.
+
 ### A minimap button
 
 Left-click for the saved bank, right-click for the options, shift and left-click to switch Bank
 Tabs' window moving and the backpack tabs off or on, drag it around the rim. `/banktabs minimap`
-hides or shows it (`on` and `off` work too, for macros).
+hides or shows it (`on` and `off` work too, for macros). A minimap button collector, such as
+EllesmereUI's, can take it off the minimap.
 
 ## Install
 
@@ -96,16 +111,17 @@ hides or shows it (`on` and `off` work too, for macros).
 3. Hover any item to see who has it.
 
 The options are in **Esc > Options > AddOns > Bank Tabs**, on `/banktabs`, or on a right-click of
-the minimap button, in three pages:
+the minimap button, in four pages:
 
 - **Windows**: the master switch, one switch per window with its own Reset, the drag anywhere key,
   the drag strip outlines, the minimap button.
 - **Bank snapshots**: saving the bank and the guild bank, the tabs above the backpack, the account
   gold in the corner, the money hover, and the item tooltip lines (guild bank, total, only while
   holding a key).
+- **Look**: the window style (Automatic, Blizzard or Dark) and the Dark background opacity.
 - **About**: the commands, and buttons for the debug report and for resetting every setting.
 
-Everything is on by default except the drag strip outlines.
+Everything is on by default except the drag strip outlines, and the window style is Automatic.
 
 ## Commands
 
@@ -122,6 +138,7 @@ Everything is on by default except the drag strip outlines.
 | `/banktabs reset` | Puts every bag and bank window back where the game had it, and forgets where you left the saved windows |
 | `/banktabs grips` | Outlines the part of each window you can drag |
 | `/banktabs minimap` | Shows or hides the minimap button |
+| `/banktabs style` | `auto`, `blizzard` or `dark` picks the window style; on its own it steps to the next one |
 | `/banktabs debug` | Prints what resolved on this client |
 
 `/btabs` works as a short form of all of these. `/casement` and `/cst` still work too, for macros
@@ -193,15 +210,19 @@ layout engine for points, anchors and scales, and walks the addon's main paths: 
 dragging the bag and bank windows, putting them back after the game re-anchors them, the bag
 switches, all three snapshots, the saved bank, bags and guild bank replicas slot by slot, the three
 saved windows open together (their own characters and searches, Escape order, where they open and
-are left), the tabs above the backpack, the tooltips, the gold, and the options. It also loads the
+are left), the tabs above the backpack, the tooltips, the gold, the options, the window styles, and
+each window's close button in combat. It also loads the
 addon afresh for each way the Casement import can meet a login (the data holder present, the old
 addon still running, nothing present, already imported, and the ways those go wrong), and checks
 the package files.
 
 ```
-node tests/banktabstest.js              # the normal client: 925 checks
-node tests/banktabstest.js --bare       # every UI template missing: 916
-node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 900
+node tests/banktabstest.js              # the normal client: 975 checks
+node tests/banktabstest.js --bare       # every UI template missing: 962
+node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 950
+node tests/banktabstest.js --dark       # the Dark window style chosen: 1002
+node tests/banktabstest.js --eui        # a stand-in EllesmereUI and its bag window: 1007
+node tests/banktabstest.js --euibags    # EllesmereUI's bag window, its skins off: 989
 ```
 
 Run it from the repo root. It needs `fengari` on the module path (for example through

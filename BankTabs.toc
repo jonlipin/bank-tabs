@@ -2,7 +2,8 @@
 ## Title: Bank Tabs
 ## Notes: Every character's bank, bags and guild bank, saved and shown like the real windows from anywhere, with movable bag, bank and guild bank windows.
 ## Author: jonlipin
-## Version: 2.1.1
+## Version: 2.2.0
+## OptionalDeps: EllesmereUI, EllesmereUIBags
 ## SavedVariables: BankTabsAccountDB
 ## SavedVariablesPerCharacter: BankTabsDB
 ## IconTexture: Interface\Icons\Racial_Dwarf_FindTreasure
@@ -19,3 +20,5 @@ VaultUI.lua
 BagHeader.lua
 Tooltips.lua
 Options.lua
+Styles.lua
+BankTabs_Skins.lua

@@ -1,9 +1,12 @@
 // Offline harness for Bank Tabs: stubs the WoW API in fengari and walks the main paths.
 //
-//   node tests/banktabstest.js [addon dir] [--bare] [--verbose] [--noenum]
+//   node tests/banktabstest.js [addon dir] [--bare] [--verbose] [--noenum] [--eui | --euibags] [--dark]
 //
 //   --bare    every UI template and atlas is missing, the way an unexpected client build would look
 //   --noenum  no Enum.BagIndex, so the bank container list has to fall back to fixed ids
+//   --eui     a stand-in EllesmereUI whose skinning facade writes down every call
+//   --euibags EllesmereUI's Bags window, with its Blizzard Skins+ module off
+//   --dark    the player has chosen the Dark window style
 //
 // The stub carries a small layout engine (points, anchors, scales) because much of what this addon
 // does is geometry: clamping a window to the screen, putting a window back after the game has
@@ -21,7 +24,7 @@ const { lua, lauxlib, lualib, to_luastring } = require('fengari');
 let DIR = process.argv.slice(2).find(a => !a.startsWith('--')) || path.resolve(__dirname, '..');
 DIR = DIR.replace(/\\/g, '/');
 if (!DIR.endsWith('/')) DIR += '/';
-const files = ['Core.lua', 'Import.lua', 'Windows.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Tooltips.lua', 'Options.lua'];
+const files = ['Core.lua', 'Import.lua', 'Windows.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Tooltips.lua', 'Options.lua', 'Styles.lua', 'BankTabs_Skins.lua'];
 
 const stub = String.raw`
 local VERBS = { "Set", "Get", "Is", "Create", "Register", "Enable", "Clear", "Hook", "Start", "Stop", "Has", "Num", "Add", "Unregister", "Disable", "Raise", "Lower", "Lock", "Unlock", "Show", "Hide", "Insert", "Toggle" }
@@ -192,6 +195,7 @@ local function obj(kind, template, name)
     -- atlas table (C_Texture.GetAtlasInfo) can say whether one is there.
     if k == "SetAtlas" then return function(s, x) if BAD_ATLAS then s.atlas = nil return end s.atlas = x end end
     if k == "SetColorTexture" then return function(s, r, g, b, a) s.color = { r, g, b, a } s.texture = nil end end
+    if k == "SetGradient" then return function(s, orientation, from, to) s.gradient = { from, to } end end
     if k == "SetVertexColor" then return function(s, r, g, b) s.vertex = { r, g, b } end end
     if k == "SetTexCoord" then return function(s, a, b, c, d) s.texCoord = { a, b, c, d } end end
     if k == "GetTexCoord" then return function(s) return unpack(s.texCoord or { 0, 1, 0, 1 }) end end
@@ -215,6 +219,21 @@ local function obj(kind, template, name)
     if k == "CreateFontString" then return function(s, n, layer, font)
       local r = obj("fontstring") r.parent = s r.font = font FONTSTRINGS[#FONTSTRINGS + 1] = r return r
     end end
+    -- The object types, regions, events and masks the optional EllesmereUI look works with.
+    if k == "IsObjectType" then return function(s, t) return type(t) == "string" and tostring(s.kind):lower() == t:lower() end end
+    if k == "GetRegions" then return function(s)
+      local out = {}
+      for _, r in ipairs(TEXTURES) do if r.parent == s then out[#out + 1] = r end end
+      for _, r in ipairs(FONTSTRINGS) do if r.parent == s then out[#out + 1] = r end end
+      return unpack(out)
+    end end
+    if k == "RegisterEvent" then return function(s, e) s.events = s.events or {} s.events[e] = true end end
+    if k == "UnregisterEvent" then return function(s, e) if s.events then s.events[e] = nil end end end
+    if k == "UnregisterAllEvents" then return function(s) s.events = {} end end
+    if k == "AddMaskTexture" then return function(s, m) s.masks = s.masks or {} s.masks[#s.masks + 1] = m end end
+    if k == "RemoveMaskTexture" then return function(s, m)
+      for i, mask in ipairs(s.masks or {}) do if mask == m then table.remove(s.masks, i) break end end
+    end end
     if k:sub(1, 6) == "Create" then return function() return obj("region") end end
     if isMethod(k) then return function() end end
     return nil
@@ -236,10 +255,13 @@ function CreateFrame(kind, name, parent, template)
     -- The portrait the bank window has in its top left corner.
     f.PortraitContainer = { portrait = obj("texture") }
     f.PortraitContainer.portrait.parent = f
+    -- Its own close button (PortraitFrameTemplate's), whose click is the template's.
+    f.CloseButton = CreateFrame("Button", nil, f, "UIPanelCloseButton")
   end
   if template == "SearchBoxTemplate" then f.Instructions = obj("fontstring") end
   if template == "TooltipBackdropTemplate" or template == "BackdropTemplate" then f.SetBackdrop = function(s, b) s.backdrop = b end end
   if template == "UIPanelButtonTemplate" then f.fontString = obj("fontstring") end
+  if template == "UIPanelCloseButton" then f.scripts.OnClick = function(...) return UIPanelCloseButton_OnClick(...) end end
   FRAMES[#FRAMES + 1] = f
   if name then _G[name] = f end
   return f
@@ -288,14 +310,27 @@ function RunTimers(seconds)
 end
 TIMER_ERRORS = {}
 
-function hooksecurefunc(name, fn)
-  if type(name) == "table" then error("table form not stubbed") end
+function hooksecurefunc(name, fn, after)
+  -- The method form: hooksecurefunc(frame, "Method", fn).
+  if type(name) == "table" then
+    local old = name[fn]
+    if type(old) ~= "function" then error("no such method " .. tostring(fn)) end
+    rawset(name, fn, function(...) local r = old(...) after(...) return r end)
+    return
+  end
   local old = _G[name]
   if type(old) ~= "function" then error("no such function " .. tostring(name)) end
   _G[name] = function(...) local r = old(...) fn(...) return r end
   HOOKED[#HOOKED + 1] = name
 end
 HOOKED = {}
+
+function CreateColor(r, g, b, a) return { r = r, g = g, b = b, a = a } end
+-- The reload the window styles offer.
+RELOADED = false
+C_UI = { Reload = function() RELOADED = true end }
+-- --dark: the main suite's first login has the Dark style chosen (DARK_LOGIN, set by the driver).
+DARK_LOGIN, DARK_SET = false, false
 
 CURSOR = { 900, 600 }
 function GetCursorPosition() return CURSOR[1], CURSOR[2] end
@@ -329,8 +364,30 @@ function ChatEdit_InsertLink(link) INSERTED = link end
 ITEM_QUALITY_COLORS = { [1] = { r = 1, g = 1, b = 1 }, [2] = { r = 0.1, g = 1, b = 0.1 }, [3] = { r = 0.3, g = 0.4, b = 1 } }
 
 UIPanelWindows = { BankFrame = { area = "left" }, GuildBankFrame = { area = "left" }, WorldMapFrame = { area = "full" } }
-function ShowUIPanel(f) if f then f:Show() end end
-function HideUIPanel(f) if f then f:Hide() end end
+-- In combat the game refuses ShowUIPanel and HideUIPanel to addon code (CheckProtectedFunctionsAllowed:
+-- InCombatLockdown and not issecure, which addon code never is), with the "Interface action
+-- blocked" message and nothing else; BLOCKED counts them.
+IN_COMBAT, BLOCKED = false, 0
+function InCombatLockdown() return IN_COMBAT end
+function ShowUIPanel(f)
+  if not f then return end
+  if IN_COMBAT then BLOCKED = BLOCKED + 1 return end
+  f:Show()
+end
+function HideUIPanel(f)
+  if not f or not f:IsShown() then return end
+  if IN_COMBAT then BLOCKED = BLOCKED + 1 return end
+  f:Hide()
+end
+-- The close button template's own click, as the client's SharedUIPanelTemplates.lua has it.
+function UIPanelCloseButton_OnClick(self)
+  local parent = self:GetParent()
+  if parent then
+    local continueHide = true
+    if parent.onCloseCallback then continueHide = parent.onCloseCallback(self) end
+    if continueHide then HideUIPanel(parent) end
+  end
+end
 
 -- Secret values: a widget takes them, arithmetic on them is an error, exactly like the client.
 SECRETS = setmetatable({}, { __mode = "k" })
@@ -726,6 +783,50 @@ Settings = {
   end,
 }
 if NO_SETTINGS then Settings = nil end
+
+-- ------------------------------------------------------------------
+-- EllesmereUI (--eui, --euibags)
+-- ------------------------------------------------------------------
+
+-- A stand-in for EllesmereUI with its Bags module: its bag window, and RegisterSkin. With --eui its
+-- Blizzard Skins+ module runs too, and calls the skin back at PLAYER_LOGIN with a facade that
+-- writes down every call per frame (EUI_CALLS[frame] = "Shell,Font,"); with --euibags that module
+-- is off, so the skin never runs. Every name is made here, before the addon loads.
+EUI_FN, EUI_REG, EUI_FIRED, EUI_ERROR = false, false, false, false
+EUI_CALLS, EUI_SEL = {}, {}
+if EUI_MODE then
+  local function rec(name) return function(f) if type(f) == "table" then EUI_CALLS[f] = (EUI_CALLS[f] or "") .. name .. "," end end end
+  EUI_S = { apiVersion = 3, GetStyle = function() return "eui" end }
+  for _, n in ipairs({ "Panel", "Inset", "Button", "WhiteButtonLabel", "StateButtonLabel", "EditBox", "Checkbox", "ScrollBar",
+    "Tab", "CloseButton", "SquareIcon", "Font" }) do EUI_S[n] = rec(n) end
+  -- The border lies over the whole window on a frame of its own, six levels up.
+  EUI_S.Shell = function(f)
+    rec("Shell")(f)
+    local border = CreateFrame("Frame", nil, f)
+    border:SetAllPoints(f)
+    border:SetFrameLevel((f:GetFrameLevel() or 1) + 6)
+    border.euiBorder = true
+  end
+  EUI_S.SetTabSelection = function(tab, on) rec("SetTabSelection")(tab) EUI_SEL[tab] = on end
+  EllesmereUI = { RegisterSkin = function(name, fn) EUI_REG, EUI_FN = name, fn end, ELLESMERE_GREEN = { r = 0.1, g = 0.8, b = 0.6 } }
+  if EUI_MODE == "skin" then EllesmereUI._DispatchSkinRegistration = function() end end
+  -- The Bags module's window, which stands in for the game's bag windows, hidden until opened.
+  EUI_MainBagFrame = CreateFrame("Frame", "EUI_MainBagFrame", UIParent)
+  EUI_MainBagFrame:SetSize(620, 480)
+  EUI_MainBagFrame:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -50, 50)
+  EUI_MainBagFrame:SetClampedToScreen(true)
+  EUI_MainBagFrame:Hide()
+end
+-- A window style is drawn: EllesmereUI's (--eui) or Dark (--dark).
+STYLED = (EUI_MODE == "skin" or DARK_MODE) and true or false
+-- How bright a tab not chosen is: a little dimmer in a window style, where its icon fills it.
+REST_ALPHA = STYLED and 0.7 or 0.85
+-- Every frame that listens for an event hears it, the way the game sends one.
+function FireAll(event, ...)
+  for _, f in ipairs(FRAMES) do
+    if f.events and f.events[event] and f.scripts.OnEvent then f.scripts.OnEvent(f, event, ...) end
+  end
+end
 `;
 
 // Loaded into every Lua state after the stub: the counters, the loader and what the Casement
@@ -751,7 +852,23 @@ function LoadBankTabs()
   return ns
 end
 
-function fire(...) BankTabsFrame.scripts.OnEvent(BankTabsFrame, ...) end
+function fire(event, ...)
+  -- --dark: the player chose Dark, so it is in the settings when the world comes up.
+  if event == "PLAYER_LOGIN" and DARK_LOGIN and not DARK_SET and NS and NS.db then
+    DARK_SET = true
+    NS.db.style = "dark"
+  end
+  -- EllesmereUI loads first (an optional dependency), so its Blizzard Skins+ module hears
+  -- PLAYER_LOGIN first and calls the skin back once, inside a pcall, as it does.
+  if event == "PLAYER_LOGIN" and EUI_MODE == "skin" and EUI_FN and not EUI_FIRED then
+    EUI_FIRED = true
+    local ok, err = pcall(EUI_FN, EUI_S)
+    if not ok then EUI_ERROR = tostring(err) end
+  end
+  BankTabsFrame.scripts.OnEvent(BankTabsFrame, event, ...)
+  -- Dark needs nothing from anyone and is drawn as the world comes up, right after login.
+  if event == "PLAYER_LOGIN" and DARK_SET and NS and NS.Styles and not NS.Styles.Applied() then NS.Styles.Changed() end
+end
 -- An addon loaded on demand is announced to every addon, Bank Tabs included.
 ON_ADDON_LOADED = function(name) if BankTabsFrame then fire("ADDON_LOADED", name) end end
 
@@ -833,7 +950,20 @@ const driver = String.raw`
 local GLOBALS_BEFORE = {}
 for k in pairs(_G) do GLOBALS_BEFORE[k] = true end
 
+DARK_LOGIN = DARK_MODE and true or false
 local ns = LoadBankTabs()
+
+-- Dark's drawing calls write down what they were called on, the same way the stand-in EllesmereUI
+-- facade does (EUI_CALLS[frame] = "Shell,Font,"), and still draw.
+for name, fn in pairs(ns.Styles.Dark) do
+  if type(fn) == "function" then
+    ns.Styles.Dark[name] = function(f, ...)
+      if type(f) == "table" then EUI_CALLS[f] = (EUI_CALLS[f] or "") .. name .. "," end
+      if name == "SetTabSelection" then EUI_SEL[f] = (...) end
+      return fn(f, ...)
+    end
+  end
+end
 
 -- Drags a window the way a player would: the game moves the frame, then the drag stop script runs.
 local function DragTo(frame, region, x, y)
@@ -900,7 +1030,7 @@ check("with no old Casement installed the window engine does not wait for login"
 check("the old commands are not taken before login", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil)
 
 do -- scope: 1b. This is Bank Tabs, and only its half of Casement
-check("the version is 2.1.1", ns.version == "2.1.1", ns.version)
+check("the version is 2.2.0", ns.version == "2.2.0", ns.version)
 check("the saved variables are Bank Tabs' own", ns.db == BankTabsDB and ns.vault == BankTabsAccountDB.vault
   and CasementDB == nil and CasementAccountDB == nil)
 check("the event frame is Bank Tabs' own", BankTabsFrame ~= nil and CasementFrame == nil)
@@ -1876,7 +2006,15 @@ local backing
 for _, t in ipairs(TEXTURES) do if t.parent == first and t.layer == "BACKGROUND" then backing = t end end
 -- SetAtlas raises nothing for an atlas the client lacks, so only the atlas table can tell the
 -- fallbacks to step in: a probe by pcall would leave a blank slot and no border at all.
-if BARE then
+if STYLED then
+  -- A window style: a dark square, and a square edge 1 pixel wide in place of the glow.
+  check("in a window style an empty slot is a dark square", backing and backing.color ~= nil and backing.color[4] == 0.45
+    and backing.color[1] == 0, backing and backing.color and backing.color[4])
+  check("and the quality border is a square edge 1 pixel wide over everything", first and first.ring ~= nil and #first.ring == 4
+    and first.ring[1].h == 1 and first.ring[3].w == 1 and first.ring[1].sub == 7 and not first.borderIsGlow and first.border.alpha == 0)
+  check("which the uncommon item wears in its color", fourth and fourth.ring and fourth.ring[1].shown == true
+    and fourth.ring[1].color and near(fourth.ring[1].color[2], 1, 0.01))
+elseif BARE then
   check("with no atlas the empty slot is painted", backing and backing.color ~= nil and backing.atlas == nil)
   check("and the quality border is the ring of bars", first and first.ring ~= nil and not first.borderIsGlow)
 else
@@ -2266,7 +2404,10 @@ check("the items picked up in play are drawn", CellWith(grid, 2589) ~= nil and C
 check("bags hold exactly the saved items", ItemCount(grid) == 6, ItemCount(grid))
 
 local divider
-for _, t in ipairs(TEXTURES) do if t.parent == vault and t.h == 1 and t.w and t.w > 100 then divider = t end end
+-- On the window, or on the frame of lines a window style moves it to.
+for _, t in ipairs(TEXTURES) do
+  if (t.parent == vault or (t.parent and t.parent.parent == vault)) and t.h == 1 and t.w and t.w > 100 then divider = t end
+end
 if NO_ENUM then
   check("with no reagent bag there is no divider", divider == nil or divider.shown == false)
 else
@@ -2293,11 +2434,14 @@ ns.VaultUI.Show("bank")
 vault = BankTabsBank
 local ctabs = CharTabs()
 check("three characters have a bank saved, so three tabs", #ctabs == 3, #ctabs)
+-- In a window style they are one row tall and stand on the window's edge.
+local tabH, tabY = 37, -8
+if STYLED then tabH, tabY = 31, 0 end
 local sized, hung = true, true
 for i, t in ipairs(ctabs) do
-  if t.w ~= 43 or t.h ~= 37 then sized = false end
+  if t.w ~= 43 or t.h ~= tabH then sized = false end
   local p = t.points[1]
-  if not (p and p[1] == "BOTTOMLEFT" and p[2] == vault and p[3] == "TOPLEFT" and near(p[4], 64 + (i - 1) * 45) and near(p[5], -8)) then hung = false end
+  if not (p and p[1] == "BOTTOMLEFT" and p[2] == vault and p[3] == "TOPLEFT" and near(p[4], 64 + (i - 1) * 45) and near(p[5], tabY)) then hung = false end
 end
 check("the tabs are the spellbook's size", sized)
 local sharedKind = true
@@ -2305,12 +2449,19 @@ for _, t in ipairs(ctabs) do if not t.csTab then sharedKind = false end end
 check("and come from the shared tab builder", sharedKind)
 check("they hang off the top edge of the window, in a row", hung)
 check("the first is this character", ctabs[1] and ctabs[1].csWho == me, ctabs[1] and ctabs[1].csWho)
-check("and is the chosen one", ctabs[1] and ctabs[1].icon:GetAlpha() == 1 and ctabs[2].icon:GetAlpha() == 0.85)
+check("and is the chosen one", ctabs[1] and ctabs[1].icon:GetAlpha() == 1 and ctabs[2].icon:GetAlpha() == REST_ALPHA)
 check("the second is the other character, by name", ctabs[2] ~= nil and ctabs[2].csWho == CHOHAM and ctabs[3] ~= nil and ctabs[3].csWho == "Oldtoon - Voidpact")
 check("the tabs sit one level under the window", ctabs[1] and ctabs[1].level == math.max(0, vault.level - 1))
+-- In a window style the icon fills a tab 43 wide and 31 tall, so a little of the top and bottom
+-- of that cell goes too, rather than the art being stretched.
+local cl, cr, ct, cb = 0.5 + 0.0175, 0.75 - 0.0175, 0.25 + 0.0175, 0.5 - 0.0175
+if STYLED then
+  local mid, half = (ct + cb) / 2, (cb - ct) * 31 / 43 / 2
+  ct, cb = mid - half, mid + half
+end
 check("the class icon comes from the class sheet with that class's cell, cropped 7 percent in from each edge", ctabs[1] and ctabs[1].icon.texture == CLASS_SHEET
-  and ctabs[1].icon.texCoord and near(ctabs[1].icon.texCoord[1], 0.5 + 0.0175, 0.0001) and near(ctabs[1].icon.texCoord[2], 0.75 - 0.0175, 0.0001)
-  and near(ctabs[1].icon.texCoord[3], 0.25 + 0.0175, 0.0001) and near(ctabs[1].icon.texCoord[4], 0.5 - 0.0175, 0.0001),
+  and ctabs[1].icon.texCoord and near(ctabs[1].icon.texCoord[1], cl, 0.0001) and near(ctabs[1].icon.texCoord[2], cr, 0.0001)
+  and near(ctabs[1].icon.texCoord[3], ct, 0.0001) and near(ctabs[1].icon.texCoord[4], cb, 0.0001),
   ctabs[1] and ctabs[1].icon.texCoord and table.concat(ctabs[1].icon.texCoord, ","))
 -- The sheet draws a bevelled frame round each icon, which showed as a second border inside the
 -- tab's frame (the user saw two layers of border). The crop cuts it off; the portrait keeps it.
@@ -2318,6 +2469,30 @@ check("so the sheet's own frame round the icon is cut off", ctabs[1] and ctabs[1
 check("the warrior gets the warrior's corner of the sheet", ctabs[2] and ctabs[2].icon.texture == CLASS_SHEET and near(ctabs[2].icon.texCoord[2], 0.25 - 0.0175, 0.0001))
 check("a class the sheet does not know falls back to a plain icon", ctabs[3] ~= nil and ctabs[3].icon.texture ~= CLASS_SHEET
   and (ctabs[3].icon.texture or ""):find("Interface") ~= nil, ctabs[3] and ctabs[3].icon.texture)
+if STYLED then
+  -- The user asked for the icon to fill the whole tab, cut to its shape, with a thin edge.
+  local t = ctabs[2]
+  local c = t and t.icon.texCoord
+  check("in a window style the icon fills the whole tab", t and t.icon.allPoints == t and #t.icon.points == 0)
+  check("its art cut to the tab's shape, not stretched", c and near((c[2] - c[1]) / (c[4] - c[3]), 43 / 31, 0.0001)
+    and t.icon.csCoords and near(t.icon.csCoords[1], c[1], 0.0001), c and ((c[2] - c[1]) / (c[4] - c[3])))
+  local edge = 0
+  for _, x in ipairs(TEXTURES) do
+    if x.parent == t and x.layer == "OVERLAY" and x.sub == 7 and x.color and x.color[1] == 0 and x.color[4] == 1
+      and (x.h == 1 or x.w == 1) then edge = edge + 1 end
+  end
+  check("under a 1 pixel edge drawn over it", edge == 4, edge)
+  check("a tab not chosen is a little dimmer", t.icon:GetAlpha() == 0.7)
+  t.scripts.OnEnter(t)
+  check("and comes up to full brightness under the mouse", t.icon:GetAlpha() == 1)
+  t.scripts.OnLeave(t)
+  check("and back down when the mouse leaves", t.icon:GetAlpha() == 0.7)
+  -- The icon painted again (the next character in that place) is cut to the tab's shape too.
+  t.icon:SetTexCoord(0, 1, 0, 1)
+  check("an icon painted again is cut to the tab's shape too", near(t.icon.texCoord[3], (1 - 31 / 43) / 2, 0.0001)
+    and t.icon.texCoord[1] == 0 and t.icon.texCoord[2] == 1)
+  ns.VaultUI.Refresh()
+end
 if BARE then
   check("with no spellbook atlas the tabs use a plain bevel", ns.report["tab art"] == "plain bevel (no spellbook atlas on this client)",
     ns.report["tab art"])
@@ -2355,7 +2530,7 @@ grid = Cells(37)
 check("the grid now shows that character's bank", ItemCount(grid) == 2, ItemCount(grid))
 local c0, c4 = CellAt(grid, BankXY(0, 0)), CellAt(grid, BankXY(4, 0))
 check("with their items where they sat", c0 and c0.csItem and c0.csItem.id == 2770 and c4 and c4.csItem and c4.csItem.id == 818)
-check("the chosen tab moved", ctabs[2].icon:GetAlpha() == 1 and ctabs[1].icon:GetAlpha() == 0.85)
+check("the chosen tab moved", ctabs[2].icon:GetAlpha() == 1 and ctabs[1].icon:GetAlpha() == REST_ALPHA)
 check("a page turned", #PLAYED == played + 1, #PLAYED - played)
 check("the bag slots row follows the character", not Locked(BagRow()[2]) and BagRow()[2]:GetAlpha() == 1 and Locked(BagRow()[3]))
 if not NO_ENUM then
@@ -2569,8 +2744,8 @@ local tabTop = 0
 for _, tab in ipairs(CharTabs()) do tabTop = math.max(tabTop, tab:GetTop()) end
 check("dragged off the screen it is pulled back on, its character tabs included", near(l3 + w3, SCREEN_W) and near(tabTop, SCREEN_H),
   (l3 + w3) .. "," .. tabTop)
-check("the room kept for its tabs is the backpack tabs' own rule", near(b3 + h3 + ns.TabRowsHeight(1), SCREEN_H)
-  and near(select(3, BankTabsBags:GetClampRectInsets()), ns.TabRowsHeight(1)), select(3, BankTabsBags:GetClampRectInsets()))
+check("the room kept for its tabs is the backpack tabs' own rule", near(b3 + h3 + ns.TabRowsHeight(1, nil, BankTabsBags), SCREEN_H)
+  and near(select(3, BankTabsBags:GetClampRectInsets()), ns.TabRowsHeight(1, nil, BankTabsBags)), select(3, BankTabsBags:GetClampRectInsets()))
 DragWindow(BankTabsBags, 100, 900)
 
 -- Nobody else saved: the bags show a line instead of a grid.
@@ -2669,6 +2844,46 @@ check("dragging left puts it on the left of the rim", near(ns.db.minimap.angle, 
 mm.scripts.OnDragStop(mm)
 check("the angle is saved", near(BankTabsAccountDB.profile.minimap.angle, 180, 1))
 
+-- A minimap button collector (EllesmereUI's, for one) takes the button off the minimap. Neither a
+-- refresh nor a drag tick may put it back on the rim then; on the minimap a drag still moves it.
+do
+  local mm = BankTabsMinimapButton
+  local function Script(f, e) return f.scripts[e] end
+  local holder = CreateFrame("Frame", nil, UIParent)
+  local own, setPoint = rawget(mm, "SetPoint"), mm.SetPoint
+  local moves, rel = 0, nil
+  rawset(mm, "SetPoint", function(self, ...) moves = moves + 1 rel = select(2, ...) return setPoint(self, ...) end)
+  local center, escale, cursor = rawget(Minimap, "GetCenter"), rawget(Minimap, "GetEffectiveScale"), GetCursorPosition
+  rawset(Minimap, "GetCenter", function() return 500, 500 end)
+  rawset(Minimap, "GetEffectiveScale", function() return 1 end)
+  GetCursorPosition = function() return 600, 560 end
+  -- The game has both: a degree based global atan2 and the radian based math.atan2.
+  local atan2Was, mathAtan2Was = atan2, math.atan2
+  atan2 = atan2 or function(y, x) return math.deg(math.atan(y, x)) end
+  math.atan2 = math.atan2 or function(y, x) return math.atan(y, x) end
+  local function Drag()
+    local start, stop = Script(mm, "OnDragStart"), Script(mm, "OnDragStop")
+    if not start then return false end
+    start(mm)
+    local tick = Script(mm, "OnUpdate")
+    if tick then tick(mm, 0.02) end
+    if stop then stop(mm) end
+    return tick ~= nil
+  end
+  mm:SetParent(holder)
+  Drag()
+  ns.Minimap.Apply()
+  check("minimap: a button a collector (EllesmereUI's) has taken stays where the collector put it", moves == 0, moves)
+  mm:SetParent(Minimap)
+  local dragged = Drag()
+  check("minimap: on the minimap a drag still moves it round the rim", dragged and moves > 0 and rel == Minimap, moves)
+  rawset(mm, "SetPoint", own)
+  rawset(Minimap, "GetCenter", center)
+  rawset(Minimap, "GetEffectiveScale", escale)
+  GetCursorPosition = cursor
+  atan2, math.atan2 = atan2Was, mathAtan2Was
+end
+
 for _, kind in ipairs({ "bank", "bags", "guild" }) do ns.VaultUI.Hide(kind) end
 mm.scripts.OnClick(mm, "LeftButton")
 check("left-click opens the saved bank", BankTabsBank.shown == true and ns.VaultUI.IsShown("bank") and not ns.VaultUI.IsShown("bags"))
@@ -2718,6 +2933,11 @@ ns.Refresh()
 -- 11d. The Bank, Bags and Guild tabs above the backpack
 -- ------------------------------------------------------------------
 do -- scope: 11d
+-- With a window style drawn they wear its tab look, as the saved windows' tabs do: one row tall,
+-- standing on the window's top edge (TUCK 0), so they stand ROOM above it.
+local TH, TUCK = 37, 8
+if STYLED then TH, TUCK = 31, 0 end
+local ROOM = TH - TUCK
 for _, kind in ipairs({ "bank", "bags", "guild" }) do ns.VaultUI.Hide(kind) end
 backpack:Hide()
 backpack:Show()
@@ -2743,11 +2963,17 @@ check("all three are shown", bankTab.shown and bagsTab.shown and guildTab.shown)
 -- The character tabs' own kind, from the same builder.
 local same = true
 for _, t in ipairs(htabs) do
-  if not t.csTab or t.kind ~= "CheckButton" or t.w ~= 43 or t.h ~= 37 or type(t.SetChosen) ~= "function" then same = false end
+  if not t.csTab or t.kind ~= "CheckButton" or t.w ~= 43 or t.h ~= TH or type(t.SetChosen) ~= "function" then same = false end
 end
-check("they come from the character tabs' builder, at the spellbook's 43 by 37", same)
-check("with the icon in the same place, at the same size", bankTab.icon.w == 36 and bankTab.icon.h == 36
-  and bankTab.icon.points[1] and bankTab.icon.points[1][1] == "TOP" and bankTab.icon.points[1][5] == -4)
+check("they come from the character tabs' builder, at the spellbook's 43 by " .. TH, same)
+if STYLED then
+  local c = bankTab.icon.texCoord
+  check("with the icon filling the tab and cut to its shape, as the character tabs'", bankTab.icon.allPoints == bankTab
+    and c and near((c[2] - c[1]) / (c[4] - c[3]), 43 / 31, 0.0001), c and table.concat(c, ","))
+else
+  check("with the icon in the same place, at the same size", bankTab.icon.w == 36 and bankTab.icon.h == 36
+    and bankTab.icon.points[1] and bankTab.icon.points[1][1] == "TOP" and bankTab.icon.points[1][5] == -4)
+end
 -- The user saw the dark plate first stop short of the frame's window (inset 4 across, 3 down),
 -- then stick out past the frame art (1 pixel in; the art sits about 2.5 pixels inside the tab).
 -- The plate now has exactly the icon's size, place and mask, on both kinds of tab, so it can only
@@ -2758,11 +2984,29 @@ local function PlateMatchesIcon(t)
   return #p.points == 1 and p.w == i.w and p.h == i.h and p.points[1][1] == i.points[1][1]
     and p.points[1][4] == i.points[1][4] and p.points[1][5] == i.points[1][5]
 end
-check("the backpack tab's dark plate has exactly the icon's size and place", PlateMatchesIcon(bankTab))
-check("and so does a character tab's", ctabs and ctabs[1] and PlateMatchesIcon(ctabs[1]))
+if STYLED then
+  -- The style's tab look on the game's backpack too (the user saw the spellbook's shape there
+  -- under Dark): its tab drawn, the plate and the frame art gone, the icon unmasked.
+  check("the backpack tabs wear the style's tab look", bankTab.csStyled and guildTab.csStyled and EUI_CALLS[bankTab]
+    and EUI_CALLS[bankTab]:find("Tab,", 1, true) ~= nil and bankTab.plate.alpha == 0
+    and (bankTab.frameTex == nil or bankTab.frameTex.alpha == 0) and #(bankTab.icon.masks or {}) == 0)
+  check("and the backpack itself is left as the game draws it", EUI_CALLS[backpack] == nil)
+else
+  check("the backpack tab's dark plate has exactly the icon's size and place", PlateMatchesIcon(bankTab))
+end
+if STYLED then
+  -- In a window style the plate goes, and the icon is square, unmasked, in a tab one row tall.
+  check("a character tab in a window style has no plate and a square icon", ctabs and ctabs[1] and ctabs[1].plate.alpha == 0
+    and ctabs[1].icon.w == 25 and ctabs[1].icon.h == 25 and #(ctabs[1].icon.masks or {}) == 0)
+else
+  check("and so does a character tab's", ctabs and ctabs[1] and PlateMatchesIcon(ctabs[1]))
+end
+if not STYLED then
 check("the plate is no wider than the icon, so it stays inside the frame art", bankTab.plate.w <= bankTab.icon.w and bankTab.plate.w <= 43 - 5)
 check("the icon is wider than the old 33, so its edges run under the frame art", bankTab.icon.w > 43 - 8)
-if BARE then
+end
+if STYLED then
+elseif BARE then
   check("with no spellbook atlas they go without it, as the character tabs do", bankTab.frameTex == nil and bankTab.glow == nil)
 else
   check("they wear the same spellbook atlas", bankTab.frameTex and bankTab.frameTex.atlas == "spellbook-Tab-Frame-C60"
@@ -2771,8 +3015,8 @@ else
 end
 check("the icons found their art", (ns.report["backpack tab icon bank"] or ""):find("Interface") ~= nil, ns.report["backpack tab icon bank"])
 -- The map symbols ("Banker", "GuildBanker") have see-through parts, and the dark plate showed
--- through them, so the Bank tab looked darker than the others. All three are full colour item icons.
-check("all three backpack tabs use full colour item icons, not the see-through map symbols",
+-- through them, so the Bank tab looked darker than the others. All three are full color item icons.
+check("all three backpack tabs use full color item icons, not the see-through map symbols",
   (ns.report["backpack tab icon bank"] or ""):find("^Interface.Icons.") ~= nil
   and (ns.report["backpack tab icon bags"] or ""):find("^Interface.Icons.") ~= nil
   and (ns.report["backpack tab icon guild"] or ""):find("^Interface.Icons.") ~= nil,
@@ -2784,13 +3028,13 @@ local function Hung(frame, tabs)
   local top = fb + fh
   for i, t in ipairs(tabs) do
     local tl, tb, tw, th = ns.Windows.Measure(t)
-    if not (near(tl, fl + 64 + (i - 1) * 45) and near(tb, top - 8) and near(tb + th, top + 29)) then return false end
+    if not (near(tl, fl + 64 + (i - 1) * 45) and near(tb, top - TUCK) and near(tb + th, top + ROOM)) then return false end
   end
   return #tabs == 3
 end
 check("they hang off the backpack's top edge, clear of the portrait, only their feet behind the border", Hung(backpack, htabs))
 check("placed exactly as the character tabs are on a saved window", bankTab.points[1][1] == "BOTTOMLEFT" and bankTab.points[1][2] == backpack
-  and bankTab.points[1][3] == "TOPLEFT" and near(bagsTab.points[1][4], 64 + 45) and near(bagsTab.points[1][5], -8))
+  and bankTab.points[1][3] == "TOPLEFT" and near(bagsTab.points[1][4], 64 + 45) and near(bagsTab.points[1][5], -TUCK))
 local levels = true
 for _, t in ipairs(htabs) do if t.level ~= math.max(0, backpack.level - 1) then levels = false end end
 check("one level under the window, so its border covers their feet", levels)
@@ -2824,12 +3068,12 @@ local function TabTop(tabs)
   return top
 end
 check("while the tabs are up, the game's own clamp on the backpack takes them in", backpack.clampInsets ~= nil
-  and backpack.clampInsets[3] == 29 and backpack.clampInsets[1] == 0, backpack.clampInsets and backpack.clampInsets[3])
-check("and the move engine keeps that room above it", near(ns.BagHeader.Room(backpack), 29) and near(ns.Windows.TopRoom(backpack), 29))
+  and backpack.clampInsets[3] == ROOM and backpack.clampInsets[1] == 0, backpack.clampInsets and backpack.clampInsets[3])
+check("and the move engine keeps that room above it", near(ns.BagHeader.Room(backpack), ROOM) and near(ns.Windows.TopRoom(backpack), ROOM))
 DragTo(backpack, bagGrip, 500, 5000)
 check("dragged to the top of the screen, the backpack stops with its tabs still on screen", near(TabTop(htabs), SCREEN_H)
   and Hung(backpack, htabs), TabTop(htabs) .. " / " .. SCREEN_H)
-check("and that is the place it saves", near(ns.db.positions["bag0"].y, SCREEN_H - 400 - 29), ns.db.positions["bag0"].y)
+check("and that is the place it saves", near(ns.db.positions["bag0"].y, SCREEN_H - 400 - ROOM), ns.db.positions["bag0"].y)
 UpdateContainerFrameAnchors()
 RunTimers(0.1)
 check("the game re-stacking the bags puts it back there, tabs on screen", near(TabTop(htabs), SCREEN_H), TabTop(htabs))
@@ -2864,12 +3108,12 @@ local sx, sy = At(bagsTab)
 local gx, gy = At(guildTab)
 local fit = 108 / 133
 check("the separate backpack keeps the three in one row, clear of the portrait", near(bx, 64) and near(sx, 64 + 45 * fit)
-  and near(gx, 64 + 90 * fit) and near(by, -8 * fit) and near(sy, -8 * fit) and near(gy, -8 * fit),
+  and near(gx, 64 + 90 * fit) and near(by, -TUCK * fit) and near(sy, -TUCK * fit) and near(gy, -TUCK * fit),
   bx .. "," .. by .. " " .. sx .. "," .. sy .. " " .. gx .. "," .. gy)
 local _, _, gw = ns.Windows.Measure(guildTab)
 check("drawn about four fifths size, the row ending 6 short of the right edge", near(bankTab.scale, fit) and near(gw, 43 * fit)
   and near(gx + gw, 178 - 6), tostring(bankTab.scale) .. " / " .. (gx + gw))
-check("the clamp takes in the smaller row", near(backpack.clampInsets[3], 29 * fit) and near(ns.BagHeader.Room(backpack), 29 * fit),
+check("the clamp takes in the smaller row", near(backpack.clampInsets[3], ROOM * fit) and near(ns.BagHeader.Room(backpack), ROOM * fit),
   backpack.clampInsets[3])
 check("the report says so", (ns.report["backpack tabs"] or ""):find("in one row, drawn at 81% to fit (bags separate)", 1, true) ~= nil,
   ns.report["backpack tabs"])
@@ -2878,21 +3122,21 @@ check("dragged to the top, the row stays on screen", near(TabTop(htabs), SCREEN_
 backpack:SetSize(340, 400)
 backpack.scripts.OnSizeChanged(backpack)
 DragTo(backpack, bagGrip, 500, 300)
-check("back at its width they are full size again", Hung(backpack, htabs) and backpack.clampInsets[3] == 29 and bankTab.scale == 1
+check("back at its width they are full size again", Hung(backpack, htabs) and backpack.clampInsets[3] == ROOM and bankTab.scale == 1
   and (ns.report["backpack tabs"] or ""):find("in one row", 1, true) ~= nil, ns.report["backpack tabs"])
 
 -- Bright while there is something to open, dimmed while there is not.
-check("all three are bright: a bank, another character's bags and a guild bank are saved", Alpha(bankTab) == 0.85
-  and Alpha(bagsTab) == 0.85 and Alpha(guildTab) == 0.85, Alpha(bankTab) .. "/" .. Alpha(bagsTab) .. "/" .. Alpha(guildTab))
+check("all three are bright: a bank, another character's bags and a guild bank are saved", Alpha(bankTab) == REST_ALPHA
+  and Alpha(bagsTab) == REST_ALPHA and Alpha(guildTab) == REST_ALPHA, Alpha(bankTab) .. "/" .. Alpha(bagsTab) .. "/" .. Alpha(guildTab))
 local savedGuild = ns.vault.guilds[GUILD_KEY]
 ns.vault.guilds[GUILD_KEY] = nil
 ns.Vault.Changed()
 check("the guild tab dims with no guild bank saved", Alpha(guildTab) == 0.4, Alpha(guildTab))
 check("but stays on screen", guildTab.shown == true)
-check("the others stay bright", Alpha(bankTab) == 0.85 and Alpha(bagsTab) == 0.85)
+check("the others stay bright", Alpha(bankTab) == REST_ALPHA and Alpha(bagsTab) == REST_ALPHA)
 ns.vault.guilds[GUILD_KEY] = savedGuild
 ns.Vault.Changed()
-check("and brightens once one is saved", Alpha(guildTab) == 0.85)
+check("and brightens once one is saved", Alpha(guildTab) == REST_ALPHA)
 local chohamBags = ns.vault.chars[CHOHAM].bags
 ns.vault.chars[CHOHAM].bags = nil
 ns.Vault.Changed()
@@ -2900,7 +3144,7 @@ check("the bags tab dims when no other character has bags saved, this one's own 
   and ns.vault.chars[me].bags ~= nil, Alpha(bagsTab))
 ns.vault.chars[CHOHAM].bags = chohamBags
 ns.Vault.Changed()
-check("and brightens again", Alpha(bagsTab) == 0.85)
+check("and brightens again", Alpha(bagsTab) == REST_ALPHA)
 local banks = {}
 for who, entry in pairs(ns.vault.chars) do
   if type(entry) == "table" and entry.bank then banks[who] = entry.bank end
@@ -2910,7 +3154,7 @@ ns.Vault.Changed()
 check("the bank tab dims with no bank saved at all", Alpha(bankTab) == 0.4, Alpha(bankTab))
 for who, record in pairs(banks) do ns.vault.chars[who].bank = record end
 ns.Vault.Changed()
-check("and brightens once there is one", Alpha(bankTab) == 0.85)
+check("and brightens once there is one", Alpha(bankTab) == REST_ALPHA)
 check("the tab tooltips run", pcall(bankTab.scripts.OnEnter, bankTab) and pcall(bagsTab.scripts.OnEnter, bagsTab)
   and pcall(guildTab.scripts.OnEnter, guildTab))
 guildTab.scripts.OnLeave(guildTab)
@@ -2929,6 +3173,7 @@ ns.vault.guilds["Iron Circle - Voidpact"] = nil
 -- Chosen while the window is open, however it closes.
 local function Chosen(tab)
   if Alpha(tab) ~= 1 then return false end
+  if STYLED then return EUI_SEL[tab] == true end
   if BARE then return true end
   return tab.frameTex.atlas == "spellbook-Tab-Frame-Glow-C60" and tab.glow.shown == true
 end
@@ -2942,7 +3187,7 @@ check("and both tabs are chosen", Chosen(bankTab) and Chosen(bagsTab))
 CloseSpecialWindows()
 check("Escape closes the bags, and their tab lets go", BankTabsBags.shown == false and not Chosen(bagsTab) and Chosen(bankTab))
 BankTabsBank:Hide()
-check("the bank's close button (a plain hide) lets go of the Bank tab", not Chosen(bankTab) and Alpha(bankTab) == 0.85)
+check("the bank's close button (a plain hide) lets go of the Bank tab", not Chosen(bankTab) and Alpha(bankTab) == REST_ALPHA)
 guildTab.scripts.OnClick(guildTab)
 check("the Guild tab opens the saved guild bank, chosen", BankTabsGuild.shown == true and Chosen(guildTab))
 guildTab.scripts.OnClick(guildTab)
@@ -2970,7 +3215,7 @@ backpack:SetID(0)
 backpack:Hide()
 backpack:Show()
 RunTimers(0.1)
-check("and they come back when it is the backpack again", bankTab.shown and Hung(backpack, htabs) and backpack.clampInsets[3] == 29)
+check("and they come back when it is the backpack again", bankTab.shown and Hung(backpack, htabs) and backpack.clampInsets[3] == ROOM)
 
 -- The combined bag window is a backpack too; an ordinary bag is not.
 ContainerFrameCombinedBags:Show()
@@ -2994,7 +3239,7 @@ do
   local fl, fb, _, fh = ns.Windows.Measure(ContainerFrameCombinedBags)
   local gl, gb = ns.Windows.Measure(combined[3])
   check("the combined backpack, narrowed, keeps its tabs full size and wraps the Guild tab above", combined[1].scale == 1
-    and near(gl - fl, 64) and near(gb - (fb + fh), -8 + 31), (gl - fl) .. "," .. (gb - (fb + fh)))
+    and near(gl - fl, 64) and near(gb - (fb + fh), -TUCK + 31), (gl - fl) .. "," .. (gb - (fb + fh)))
   ContainerFrameCombinedBags:SetSize(cw, ch)
   if ContainerFrameCombinedBags.scripts.OnSizeChanged then ContainerFrameCombinedBags.scripts.OnSizeChanged(ContainerFrameCombinedBags) end
   RunTimers(0.1)
@@ -3356,6 +3601,437 @@ check("a reset keeps the saved banks", ns.vault.chars[me] ~= nil)
 check("a reset puts the settings back", ns.db.dragModifier == "alt")
 check("a reset keeps where the Casement import stands", ns.db.importedCasement == "none")
 
+do -- scope: 11j. The window styles, and EllesmereUI's own bag window
+-- With the Blizzard style nothing is drawn. With a style drawn (--eui: EllesmereUI's, through a
+-- stand-in facade that writes down every call; --dark: Bank Tabs' own Dark, whose calls are
+-- written down the same way while they draw) the saved windows, their slots and tabs and the
+-- options window are restyled, and the options page in the game's panel is not. With EllesmereUI's
+-- Blizzard Skins+ module off (--euibags) its skin never runs. In both EllesmereUI modes its Bags
+-- module's window carries the Bank, Bags and Guild tabs.
+local Styles = ns.Styles
+-- The reset in 14 chose Automatic again; a player who chose Dark has it chosen.
+if DARK_MODE then ns.db.style = "dark" Styles.Try("style switch", Styles.Changed) end
+local function did(f, what) return type(f) == "table" and (EUI_CALLS[f] or ""):find(what .. ",", 1, true) ~= nil end
+local skinErrors = {}
+for key, value in pairs(ns.report) do
+  if type(key) == "string" and key:find("^skin error") then skinErrors[#skinErrors + 1] = key .. ": " .. tostring(value) end
+end
+check("no part of the window style failed", #skinErrors == 0 and not EUI_ERROR, skinErrors[1] or EUI_ERROR)
+local SAVED = { bank = "BankTabsBank", bags = "BankTabsBags", guild = "BankTabsGuild" }
+local function OnSaved(f)
+  local p = f.parent
+  return p == BankTabsBank or p == BankTabsBags or p == BankTabsGuild
+end
+FireAll("PLAYER_ENTERING_WORLD")
+local applied = Styles.Applied()
+
+if not STYLED then
+  check("no style is drawn", applied == nil and Styles.S == nil, applied)
+  if not EUI_MODE then
+    check("without EllesmereUI the look stays the game's, and the report says why", ns.report["skin"] == "Blizzard (EllesmereUI is not loaded)",
+      ns.report["skin"])
+    local touched = 0
+    for _, f in ipairs(FRAMES) do if f.csStyled or f.csFlat or f.csStood or f.csTabLook then touched = touched + 1 end end
+    check("no frame wears a style", touched == 0, touched)
+    check("and there is no EllesmereUI bag window to hang tabs on", ns.BagHeader.EllesmereBags() == nil)
+  else
+    check("with the Blizzard Skins+ module off, the report says so", ns.report["skin"] == "Blizzard (EllesmereUI's Blizzard Skins+ module is off)",
+      ns.report["skin"])
+    check("the skin was registered but never ran", EUI_REG == "BankTabs" and not EUI_FIRED and next(EUI_CALLS) == nil)
+  end
+  local plain = true
+  for kind, name in pairs(SAVED) do
+    ns.VaultUI.Show(kind)
+    if _G[name].csTabLook ~= nil or ns.VaultUI.windows[kind].csStyled then plain = false end
+  end
+  check("so the saved windows keep the game's look", plain)
+else
+  local want = DARK_MODE and "dark" or "eui"
+  check("the style drawn is the one chosen", applied == want and Styles.S ~= nil, applied)
+  check("the report names it", ns.report["skin"] == (want == "dark" and "Dark" or "EllesmereUI (eui style)"), ns.report["skin"])
+  if EUI_MODE then
+    check("the skin is registered with EllesmereUI under the addon's folder name", EUI_REG == "BankTabs")
+  end
+  if EUI_MODE == "skin" then
+    check("and EllesmereUI called it back once", EUI_FIRED == true)
+  end
+
+  for kind, name in pairs(SAVED) do
+    ns.VaultUI.Show(kind)
+    local f = _G[name]
+    local W = ns.VaultUI.windows[kind]
+    local close = f.CloseButton or f.csClose
+    local border, top = nil, 0
+    for _, kid in ipairs(f.kids) do
+      if kid.euiBorder then border = kid end
+      if kid ~= close and not kid.csTab and (kid.level or 0) > top then top = kid.level end
+    end
+    if applied == "eui" then
+      check("the saved " .. kind .. " wears EllesmereUI's window", did(f, "Shell") and border ~= nil)
+    else
+      local backdrop
+      for _, t in ipairs(TEXTURES) do if t.parent == f and t.layer == "BACKGROUND" and t.sub == -8 then backdrop = t end end
+      check("the saved " .. kind .. " wears the Dark window, as opaque as the setting says", did(f, "Shell") and backdrop ~= nil
+        and backdrop.gradient ~= nil and near(backdrop.gradient[1].a, ns.db.darkAlpha, 0.001))
+    end
+    check("its close button is the style's, above everything in the window", (BARE and close == nil) or (did(close, "CloseButton")
+      and close.level > top), close and (close.level .. " over " .. top))
+    check("its plate is stripped, its title and search box restyled", (BARE or did(W.inset, "Inset")) and did(f.csTitle, "Font")
+      and did(W.searchBox, "EditBox"))
+    check("its portrait is gone", not f.csPortrait or f.csPortrait.alpha == 0)
+    check("its lines are kept off the window, where the style fades everything", W.bagRule.parent ~= f and W.divider.parent ~= f
+      and W.bagRule.parent.parent == f)
+    check("its tabs stand on its edge", f.csTabLook and f.csTabLook.tuck == 0 and f.csTabLook.h == 31)
+  end
+
+  -- Every slot, Bag Slot and side tab drawn so far, the ones built after the style was drawn included.
+  local cells, skinned = 0, 0
+  for _, f in ipairs(FRAMES) do
+    if f.kind == "Button" and OnSaved(f) and f.icon and f.count then
+      cells = cells + 1
+      if f.csStyled and did(f.icon, "SquareIcon") and did(f.count, "Font") and #(f.ring or {}) == 4 then skinned = skinned + 1 end
+    end
+  end
+  check("every slot of the saved windows is restyled as it is built", cells > 100 and skinned == cells, skinned .. "/" .. cells)
+  local tabs, tabbed = 0, 0
+  for _, f in ipairs(FRAMES) do
+    if f.kind == "CheckButton" and f.csTab and OnSaved(f) then
+      tabs = tabs + 1
+      if did(f, "Tab") and did(f, "SetTabSelection") and f.Icon == f.icon then tabbed = tabbed + 1 end
+    end
+  end
+  check("every character and guild tab wears the style's tab", tabs >= 3 and tabbed == tabs, tabbed .. "/" .. tabs)
+
+  -- The chosen tab is the one the style shows chosen, and a click moves it.
+  ns.VaultUI.Show("bank")
+  local ctabs = {}
+  for _, f in ipairs(FRAMES) do
+    if f.kind == "CheckButton" and f.csTab and f.parent == BankTabsBank and f.shown then ctabs[#ctabs + 1] = f end
+  end
+  check("the character on show is the chosen tab", ctabs[1] and EUI_SEL[ctabs[1]] == true and EUI_SEL[ctabs[2]] == false)
+  ctabs[2].scripts.OnClick(ctabs[2])
+  check("and a click on another moves the choice", EUI_SEL[ctabs[2]] == true and EUI_SEL[ctabs[1]] == false)
+  if applied == "dark" then
+    -- Dark draws it: its accent line under the chosen tab only, and no second hover wash.
+    local function Line(tab)
+      for _, t in ipairs(TEXTURES) do
+        if t.parent == tab and t.layer == "OVERLAY" and t.h == 2 and t.color and near(t.color[1], 0.35, 0.001) then return t end
+      end
+    end
+    check("Dark's accent line is under the chosen tab only", Line(ctabs[2]) ~= nil and Line(ctabs[2]).shown == true
+      and Line(ctabs[1]) ~= nil and Line(ctabs[1]).shown == false)
+    local washes = 0
+    for _, t in ipairs(TEXTURES) do if t.parent == ctabs[1] and t.layer == "HIGHLIGHT" and t.alpha ~= 0 then washes = washes + 1 end end
+    check("and one hover wash, Dark's own", washes == 1, washes)
+  end
+  ctabs[1].scripts.OnClick(ctabs[1])
+
+  -- The options window, with its own copy of the options; the page in the game's panel keeps the
+  -- game's look.
+  BankTabsWindow:Show()
+  check("the options window opens with a copy of its own", BankTabsWindow.shown == true and BankTabsWindowOptions ~= nil
+    and BankTabsWindowOptions.parent == BankTabsWindow and BankTabsOptions.parent ~= BankTabsWindow)
+  check("the options window wears the style's window and close button", did(BankTabsWindow, "Shell")
+    and (BARE or did(BankTabsWindow.CloseButton or BankTabsWindow.csClose, "CloseButton")))
+  local switches, switched, buttons, buttoned, choices, plainChoices = 0, 0, 0, 0, 0, 0
+  local function walk(frame)
+    for _, kid in ipairs(frame.kids or {}) do
+      if kid.kind == "CheckButton" then
+        switches = switches + 1
+        if did(kid, "Checkbox") then switched = switched + 1 end
+      elseif kid.kind == "Button" then
+        buttons = buttons + 1
+        if did(kid, "Button") then buttoned = buttoned + 1 end
+        if kid.csValue ~= nil then
+          choices = choices + 1
+          if not did(kid, "StateButtonLabel") then plainChoices = plainChoices + 1 end
+        end
+      end
+      walk(kid)
+    end
+  end
+  walk(BankTabsWindowOptions)
+  local fonts = 0
+  for _, fs in ipairs(FONTSTRINGS) do if did(fs, "Font") then fonts = fonts + 1 end end
+  check("every switch in the options window is the style's", switches > 10 and switched == switches, switched .. "/" .. switches)
+  check("and every button", buttons > 10 and buttoned == buttons, buttoned .. "/" .. buttons)
+  check("the choice buttons keep the colors that say which is picked", choices >= 8 and plainChoices == choices, plainChoices .. "/" .. choices)
+  check("the text is in the style's font", fonts > 30, fonts)
+  local touched = 0
+  local function walkPage(frame)
+    for _, kid in ipairs(frame.kids or {}) do
+      if EUI_CALLS[kid] then touched = touched + 1 end
+      walkPage(kid)
+    end
+  end
+  walkPage(BankTabsOptions)
+  for _, fs in ipairs(FONTSTRINGS) do
+    local p, guard = fs.parent, 0
+    while p and guard < 10 do
+      if p == BankTabsOptions and EUI_CALLS[fs] then touched = touched + 1 end
+      p, guard = p.parent, guard + 1
+    end
+  end
+  check("the options page in the game's panel keeps the game's look", touched == 0 and not EUI_CALLS[BankTabsOptions], touched)
+  BankTabsWindow:Hide()
+end
+
+if EUI_MODE then
+  -- EllesmereUI's bag window in place of the game's: the Bank, Bags and Guild tabs hang above it.
+  for kind in pairs(SAVED) do ns.VaultUI.Hide(kind) end
+  local host = EUI_MainBagFrame
+  check("EllesmereUI's bag window is found", ns.BagHeader.EllesmereBags() == host)
+  host:Show()
+  local tabs = ns.BagHeader.Tabs(host)
+  local list = tabs and { tabs.bank, tabs.bags, tabs.guild } or {}
+  check("it gets the Bank, Bags and Guild tabs when it opens", #list == 3 and list[1].shown and list[3].shown)
+  local hung = #list == 3
+  for i, tab in ipairs(list) do
+    local p = tab.points[1]
+    if not (tab.parent == host and tab.h == 31 and p and p[1] == "BOTTOMLEFT" and p[2] == host and p[3] == "TOPLEFT"
+      and near(p[4], 6 + (i - 1) * 45) and near(p[5], 0)) then hung = false end
+  end
+  check("standing on its top edge from its left corner, in a row", hung)
+  if #list == 3 then -- scope: the rest needs the tabs
+  if applied then
+    check("wearing the style's tab look", did(list[1], "Tab") and did(list[3], "Tab") and list[1].csStyled and list[1].icon.allPoints == list[1])
+    check("the report says which", (ns.report["backpack tabs"] or ""):find(Styles.Name(applied) .. " tabs", 1, true) ~= nil,
+      ns.report["backpack tabs"])
+  else
+    check("wearing flat tabs of Bank Tabs' own, no style being drawn", list[1].csFlat == true and list[1].flatLine ~= nil
+      and (list[1].frameTex == nil or list[1].frameTex.alpha == 0) and not list[1].csStyled)
+  end
+  check("the report says where they are", (ns.report["backpack tabs"] or ""):find("EUI_MainBagFrame", 1, true) ~= nil
+    and (ns.report["backpack tabs"] or ""):find("EllesmereUI's bags", 1, true) ~= nil, ns.report["backpack tabs"])
+  check("the window is kept on screen with them", near(select(3, host:GetClampRectInsets()), 31), select(3, host:GetClampRectInsets()))
+
+  -- They go wherever the window goes.
+  host:ClearAllPoints()
+  host:SetPoint("TOPLEFT", UIParent, "BOTTOMLEFT", 300, 700)
+  check("moved, the tabs go with it", near(list[1]:GetBottom(), host:GetTop()) and near(list[1]:GetLeft(), host:GetLeft() + 6),
+    list[1]:GetBottom() .. "," .. host:GetTop())
+  host:SetWidth(150)
+  host.scripts.OnSizeChanged(host)
+  check("made narrow, they wrap into a second row", near(list[3].points[1][5], 31) and near(list[3].points[1][4], 6)
+    and near(select(3, host:GetClampRectInsets()), 62), list[3].points[1][5])
+  host:SetWidth(620)
+  host.scripts.OnSizeChanged(host)
+  check("and back in one row when wide again", near(list[3].points[1][5], 0) and near(select(3, host:GetClampRectInsets()), 31))
+
+  -- A tab opens its saved window and is shown chosen while it is open.
+  local function Chosen(tab)
+    if applied then return EUI_SEL[tab] == true end
+    return tab.flatLine ~= nil and tab.flatLine.shown == true
+  end
+  list[1].scripts.OnClick(list[1])
+  check("the Bank tab opens the saved bank and is shown chosen", ns.VaultUI.IsShown("bank") and Chosen(list[1]) and not Chosen(list[3]))
+  list[3].scripts.OnClick(list[3])
+  check("the Guild tab opens the saved guild bank beside it", ns.VaultUI.IsShown("guild") and ns.VaultUI.IsShown("bank")
+    and Chosen(list[3]) and Chosen(list[1]))
+  ns.VaultUI.Hide("bank")
+  check("closing the saved bank lets go of its tab", not Chosen(list[1]) and Chosen(list[3]))
+  ns.VaultUI.Hide("guild")
+
+  host:Hide()
+  check("closed, the window takes its tabs with it", not list[1]:IsVisible() and not list[3]:IsVisible())
+  end -- the rest needs the tabs
+  -- The game's own backpack keeps the spellbook's tabs.
+  local blizzard = ns.BagHeader.Tabs(ContainerFrameCombinedBags) or ns.BagHeader.Tabs(ContainerFrame1)
+  if applied then
+    check("the game's own backpack wears the style's tabs too", blizzard and blizzard.bank.h == 31 and blizzard.bank.csStyled and blizzard.bank.icon.allPoints == blizzard.bank
+      and did(blizzard.bank, "Tab") and not blizzard.bank.csFlat)
+  else
+    check("the game's own backpack keeps its own tabs", blizzard and blizzard.bank.h == 37 and not blizzard.bank.csStyled
+      and not blizzard.bank.csFlat)
+  end
+end
+end -- scope
+
+do -- scope: 11k. The Look page, /banktabs style, and going from one style to another
+-- From Blizzard, Dark is drawn at once. Leaving a drawn style takes a reload, which a prompt of
+-- the addon's own offers, and the prompt goes again if the choice comes back to what is drawn.
+local Styles = ns.Styles
+local function did(f, what) return type(f) == "table" and (EUI_CALLS[f] or ""):find(what .. ",", 1, true) ~= nil end
+local function find(root, key)
+  local found
+  local function walk(frame)
+    for _, kid in ipairs(frame.kids or {}) do
+      if not found and rawget(kid, key) then found = kid end
+      walk(kid)
+    end
+  end
+  walk(root)
+  return found
+end
+local function Prompt() return BankTabsReloadPrompt ~= nil and BankTabsReloadPrompt.shown == true end
+-- The reload prompt's buttons come from a template every client has; with no templates at all
+-- (--bare) it cannot be built, and Bank Tabs carries on with the error in its report.
+local function ClearBareErrors()
+  if not BARE then return end
+  for key, value in pairs(ns.report) do
+    if type(key) == "string" and key:find("^skin error") and tostring(value):find("UIPanelButtonTemplate", 1, true) then ns.report[key] = nil end
+  end
+end
+local before = Styles.Applied()
+
+check("the Look page is built", ns.report["page look"] == "ok", ns.report["page look"])
+local button, opacity = find(BankTabsOptions, "csStyleButton"), find(BankTabsOptions, "csOpacity")
+check("it has the window style button and the opacity slider", button ~= nil and opacity ~= nil)
+if button and opacity then -- scope: the controls
+local caption = opacity.parent.caption
+
+Styles.Try("style switch", Styles.Set, "auto")
+ClearBareErrors()
+ns.SyncOptions()
+check("the button names the style chosen", button.text == "Window style: Automatic", button.text)
+check("the opacity slider is grayed while Dark is not chosen", opacity.alpha == 0.5 and opacity.enabled == false
+  and caption.font == "GameFontDisable", tostring(opacity.alpha) .. " " .. tostring(caption.font))
+opacity.scripts.OnEnter(opacity)
+local says = false
+for _, l in ipairs(GameTooltip.csLines) do if l[1] == "Applies to the Dark style only." then says = true end end
+check("and its tooltip says it applies to Dark only", says)
+button.scripts.OnEnter(button)
+local lines = {}
+for _, l in ipairs(GameTooltip.csLines) do lines[#lines + 1] = l[1] end
+check("the button's tooltip lists every style", table.concat(lines, "|"):find(Styles.HELP[3], 1, true) ~= nil and #lines >= 4, #lines)
+
+button.scripts.OnClick(button, "LeftButton")
+check("a left-click picks the next style", ns.db.style == "blizzard" and button.text == "Window style: Blizzard", ns.db.style)
+button.scripts.OnClick(button, "LeftButton")
+ClearBareErrors()
+check("and the next", ns.db.style == "dark" and button.text == "Window style: Dark", ns.db.style)
+check("with Dark chosen the opacity slider is live", opacity.alpha == 1 and opacity.enabled == true and caption.font == "GameFontHighlight")
+
+if before == nil then
+  -- From Blizzard, at once and with no reload.
+  check("Dark is drawn at once from Blizzard", Styles.Applied() == "dark" and ns.report["skin"] == "Dark", ns.report["skin"])
+  check("with no reload prompt", not Prompt())
+  local drawn = true
+  for _, name in ipairs({ "BankTabsBank", "BankTabsBags", "BankTabsGuild" }) do
+    if _G[name] and not did(_G[name], "Shell") then drawn = false end
+  end
+  check("on every saved window built so far", drawn)
+  BankTabsWindow:Show()
+  local switch = find(BankTabsWindowOptions, "csStyleButton")
+  check("and on the options window's copy of the options", did(BankTabsWindow, "Shell") and did(switch, "Button"))
+  check("but not on the page in the game's panel", not did(button, "Button") and not EUI_CALLS[opacity])
+  BankTabsWindow:Hide()
+  local own = ns.BagHeader.Tabs(ContainerFrameCombinedBags) or ns.BagHeader.Tabs(ContainerFrame1)
+  local host = own and own.bank.parent
+  check("the tabs on the game's backpack give way to Dark's, standing on its edge", own and own.bank.csStyled and did(own.bank, "Tab")
+    and own.bank.h == 31 and own.bank.icon.allPoints == own.bank and own.bank.points[1] and near(own.bank.points[1][5], 0) and not EUI_CALLS[host],
+    own and own.bank.points[1] and own.bank.points[1][5])
+  check("and the report says so", (ns.report["backpack tabs"] or ""):find("Dark tabs", 1, true) ~= nil, ns.report["backpack tabs"])
+  if EUI_MODE == "bags" then
+    local tabs = ns.BagHeader.Tabs(EUI_MainBagFrame)
+    local tab = tabs and tabs.bank
+    check("the flat tabs on EllesmereUI's bag window give way to Dark's", tab and tab.csStyled and did(tab, "Tab")
+      and tab.flatFill.alpha == 0 and tab.flatLine.alpha == 0)
+  end
+elseif before == "dark" then
+  check("Dark stays drawn, with nothing to reload", Styles.Applied() == "dark" and ns.report["skin"] == "Dark" and not Prompt(),
+    ns.report["skin"])
+else
+  check("from EllesmereUI's look Dark takes a reload", Styles.Applied() == "eui" and (BARE or Prompt()), ns.report["skin"])
+  check("which the report says", (ns.report["skin"] or ""):find("Dark after a /reload", 1, true) ~= nil, ns.report["skin"])
+end
+
+if Styles.Applied() == "dark" then
+  -- The opacity reaches the windows at once, and a redraw of the options does not write it back.
+  local backdrop
+  for _, t in ipairs(TEXTURES) do if t.parent == BankTabsBank and t.layer == "BACKGROUND" and t.sub == -8 then backdrop = t end end
+  opacity:SetValue(60)
+  check("the slider sets the opacity", near(ns.db.darkAlpha, 0.6, 0.001), ns.db.darkAlpha)
+  check("and the Dark windows take it at once", backdrop and backdrop.gradient and near(backdrop.gradient[1].a, 0.6, 0.001))
+  ns.SyncOptions()
+  check("a redraw of the options leaves it", near(ns.db.darkAlpha, 0.6, 0.001) and opacity.value == 60, ns.db.darkAlpha)
+  opacity:SetValue(63)
+  check("it moves in steps of 5", near(ns.db.darkAlpha, 0.65, 0.001), ns.db.darkAlpha)
+
+  -- Leaving Dark takes a reload.
+  button.scripts.OnClick(button, "RightButton")
+  ClearBareErrors()
+  check("a right-click picks the style before", ns.db.style == "blizzard", ns.db.style)
+  check("Dark stays drawn until a reload", Styles.Applied() == "dark")
+  check("which the report and the note say", (ns.report["skin"] or ""):find("Blizzard after a /reload", 1, true) ~= nil
+    and (Styles.Note() or ""):find("/reload", 1, true) ~= nil, ns.report["skin"])
+  if not BARE then
+    check("the reload prompt offers it", Prompt() and (BankTabsReloadPrompt.text.text or ""):find("Switching Bank Tabs to Blizzard", 1, true) ~= nil,
+      BankTabsReloadPrompt and BankTabsReloadPrompt.text.text)
+    check("in the style that is drawn", did(BankTabsReloadPrompt, "Shell"))
+    BankTabsReloadPrompt.reload.scripts.OnClick(BankTabsReloadPrompt.reload)
+    check("and Reload now reloads", RELOADED == true)
+  end
+  button.scripts.OnClick(button, "LeftButton")
+  check("back to Dark, nothing waits for a reload", ns.db.style == "dark" and ns.report["skin"] == "Dark" and not Prompt(), ns.report["skin"])
+end
+
+-- The slash command.
+SlashCmdList["BANKTABS"]("style blizzard")
+ClearBareErrors()
+check("/banktabs style blizzard picks Blizzard and says so", ns.db.style == "blizzard" and ChatWith("window style: Blizzard.") > 0)
+SlashCmdList["BANKTABS"]("style dark")
+check("/banktabs style dark picks Dark", ns.db.style == "dark" and button.text == "Window style: Dark")
+SlashCmdList["BANKTABS"]("style auto")
+ClearBareErrors()
+check("/banktabs style auto picks Automatic", ns.db.style == "auto" and ChatWith("window style: Automatic.") > 0)
+SlashCmdList["BANKTABS"]("style sideways")
+check("anything else lists the styles", ns.db.style == "auto" and ChatWith("styles: auto, blizzard, dark.") > 0)
+SlashCmdList["BANKTABS"]("help")
+check("the help lists the command", ChatWith("/banktabs style") > 0)
+
+ns.db.darkAlpha = 0.4
+ns.ResetToDefaults()
+ClearBareErrors()
+check("a reset puts the style and the opacity back", ns.db.style == "auto" and ns.db.darkAlpha == 0.92)
+local errors = {}
+for key, value in pairs(ns.report) do
+  if type(key) == "string" and key:find("^skin error") then errors[#errors + 1] = key .. ": " .. tostring(value) end
+end
+check("no skin errors along the way", #errors == 0, errors[1])
+-- The rest of the suite runs in the style chosen at login.
+if DARK_MODE then Styles.Try("style switch", Styles.Set, "dark") ClearBareErrors() end
+if BankTabsReloadPrompt then BankTabsReloadPrompt:Hide() end
+end -- the controls
+end -- scope
+
+do -- scope: 11l. The X closes Bank Tabs' own windows in combat, as their tabs do
+-- The user could not close the saved bags with the X in combat ("Interface action blocked"), while
+-- its tab closed it: the template's click goes through HideUIPanel, which the game refuses to
+-- addon code in combat. Hiding a window of our own is allowed then, and that is what the X does.
+local windows = { BankTabsBank, BankTabsBags, BankTabsGuild, BankTabsWindow }
+local closed, tried = 0, 0
+for _, frame in ipairs(windows) do
+  local close = frame and (frame.CloseButton or frame.csClose)
+  if close and close.scripts.OnClick then
+    tried = tried + 1
+    frame:Show()
+    IN_COMBAT = true
+    local blocked = BLOCKED
+    close.scripts.OnClick(close, "LeftButton")
+    if not frame.shown and BLOCKED == blocked then closed = closed + 1 end
+    IN_COMBAT = false
+    frame:Hide()
+  end
+end
+check("in combat the X closes every one of Bank Tabs' own windows, nothing blocked", BARE and tried == 0 or (tried == 4 and closed == 4),
+  closed .. "/" .. tried)
+-- Its tab, in combat too.
+ns.VaultUI.Show("bags")
+IN_COMBAT = true
+ns.VaultUI.Toggle("bags")
+check("as the tab does", not BankTabsBags.shown)
+IN_COMBAT = false
+-- And out of combat as before: the saved window lets go of its place in the Escape order.
+ns.VaultUI.Show("bank")
+local close = BankTabsBank.CloseButton or BankTabsBank.csClose
+if close then
+  close.scripts.OnClick(close, "LeftButton")
+  check("out of combat the X closes it as before, and it leaves the Escape list", not BankTabsBank.shown
+    and not ns.VaultUI.IsShown("bank"))
+end
+end -- scope
+
 -- ------------------------------------------------------------------
 -- 15. Nothing broke along the way
 -- ------------------------------------------------------------------
@@ -3375,7 +4051,8 @@ check("no Blizzard addon was loaded by us", blizzard == 0, blizzard)
 do -- scope: 15b. Every global Bank Tabs made carries its name
 -- Bank Tabs and Map Tab can be installed together, so nothing Bank Tabs puts in the global space
 -- may be named for Casement or Map Tab, or for nothing at all.
-local HARNESS = { GuildBankFrame = true, INSERTED = true, MOVING = true, NS = true }
+local HARNESS = { GuildBankFrame = true, INSERTED = true, MOVING = true, NS = true, DARK_LOGIN = true, DARK_SET = true,
+  RELOADED = true }
 local stray = {}
 for k in pairs(_G) do
   if not GLOBALS_BEFORE[k] and not HARNESS[k] and type(k) == "string"
@@ -3385,10 +4062,10 @@ table.sort(stray)
 check("every global Bank Tabs made is named for it", #stray == 0, table.concat(stray, ", "))
 local named = 0
 for _, key in ipairs({ "BankTabsFrame", "BankTabsOptions", "BankTabsWindow", "BankTabsMinimapButton", "BankTabsBank", "BankTabsBags",
-  "BankTabsGuild", "BankTabsBankSearch", "BankTabsBagsSearch", "BankTabsGuildSearch" }) do
+  "BankTabsGuild", "BankTabsBankSearch", "BankTabsBagsSearch", "BankTabsGuildSearch", "BankTabsWindowOptions" }) do
   if _G[key] ~= nil then named = named + 1 end
 end
-check("its frames are the BankTabs ones", named == 10, named)
+check("its frames are the BankTabs ones", named == 11, named)
 check("the single saved window of before is gone, and its API with it", _G["BankTabsVault"] == nil and _G["BankTabsVaultSearch"] == nil
   and ns.VaultUI.Mode == nil)
 end -- scope
@@ -4167,7 +4844,10 @@ function number(L, name) {
 const pre = (process.argv.includes('--bare')
   ? 'BARE=true\nBAD_ATLAS=true\nBAD_TEMPLATES={TooltipBackdropTemplate=true,UICheckButtonTemplate=true,ChatConfigCheckButtonTemplate=true,MinimalSliderTemplate=true,UISliderTemplate=true,OptionsSliderTemplate=true,UIPanelButtonTemplate=true,UIPanelCloseButton=true,DefaultPanelFlatTemplate=true,DefaultPanelTemplate=true,ButtonFrameTemplate=true,BasicFrameTemplate=true,BackdropTemplate=true,SearchBoxTemplate=true,InputBoxTemplate=true}\n'
   : '') + (process.argv.includes('--verbose') ? 'VERBOSE=true\n' : '')
-  + (process.argv.includes('--noenum') ? 'NO_ENUM=true\n' : '');
+  + (process.argv.includes('--noenum') ? 'NO_ENUM=true\n' : '')
+  + ((process.argv.includes('--eui') || process.env.EUI === '1') ? 'EUI_MODE="skin"\n'
+    : process.argv.includes('--euibags') ? 'EUI_MODE="bags"\n' : '')
+  + ((process.argv.includes('--dark') || process.env.DARK === '1') ? 'DARK_MODE=true\n' : '');
 
 function newState(extra, label) {
   const L = lauxlib.luaL_newstate(); lualib.luaL_openlibs(L);
@@ -4219,12 +4899,23 @@ const parts = [];
   check('the TOC is BankTabs.toc', toc !== null);
   check('titled Bank Tabs', field(toc, 'Title') === 'Bank Tabs', field(toc, 'Title'));
   const version = (sources['Core.lua'].match(/ns\.version = "([^"]+)"/) || [])[1];
-  check('its version is the addon\'s own, 2.1.1', field(toc, 'Version') === '2.1.1' && version === '2.1.1', field(toc, 'Version') + ' / ' + version);
+  check('its version is the addon\'s own, 2.2.0', field(toc, 'Version') === '2.2.0' && version === '2.2.0', field(toc, 'Version') + ' / ' + version);
   check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
     && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
   check('its icon is the treasure chest from the game\'s icons (not Stockpile\'s bag), the path intact', /^Interface\\Icons\\Racial_Dwarf_FindTreasure$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
   check('the interface number is this client\'s', field(toc, 'Interface') === '16001');
   check('it lists exactly the files this harness loads, in order', codeLines(toc).join(',') === files.join(','), codeLines(toc).join(','));
+  check('EllesmereUI and its Bags module are optional, never required', field(toc, 'OptionalDeps') === 'EllesmereUI, EllesmereUIBags'
+    && field(toc, 'Dependencies') === null && field(toc, 'RequiredDeps') === null, field(toc, 'OptionalDeps'));
+  const skin = sources['BankTabs_Skins.lua'];
+  check('the window styles restyle none of the game\'s windows', !/BankFrame|ContainerFrame|GuildBankFrame|SettingsPanel|WorldMapFrame/.test(skin));
+  check('and use none of EllesmereUI\'s files or settings', !/AddOns[\\/]+Ellesmere|EllesmereUIDB|\.WSkin/i.test(skin + sources['Styles.lua']));
+  check('the old EllesmereUI file is gone', read('BankTabs_EllesmereUI.lua') === null);
+  // Every addon carries the same Styles.lua, never edited: ShardGrid's installed copy is the
+  // reference wherever it is installed.
+  const shared = (() => { try { return fs.readFileSync('C:/Program Files (x86)/World of Warcraft/_classic_beta_/Interface/AddOns/ShardGrid/Styles.lua'); } catch (e) { return null; } })();
+  const mine = (() => { try { return fs.readFileSync(DIR + 'Styles.lua'); } catch (e) { return null; } })();
+  check('Styles.lua is the shared copy, byte for byte', mine !== null && (shared === null || Buffer.compare(shared, mine) === 0));
   check('none of the map half ships', ['Map.lua', 'Reveal.lua', 'Data/MapOverlays.lua', 'tools/overlays-from-csv.js'].every(rel => read(rel) === null));
 
   // The saved windows' API: nothing still calls the single window of before, or calls one
@@ -4267,7 +4958,7 @@ const parts = [];
     const changelog = (read('CHANGELOG.md') || '').replace(/\r\n/g, '\n');
     const notes = (read('RELEASE-NOTES.md') || '').replace(/\r\n/g, '\n');
     const top = changelog.split(/\r?\n(?=## )/).find(s => s.startsWith('## ')) || '';
-    check('the changelog opens on 2.1.1', /^## 2\.1\.1 - /.test(top), top.slice(0, 30));
+    check('the changelog opens on 2.2.0', /^## 2\.2\.0 - /.test(top), top.slice(0, 30));
     check('the release notes are that section and nothing else', notes.replace(/\s+$/, '') === top.replace(/\s+$/, ''));
 
     // Every text file, docs and code: no em or en dashes, as the author asked.

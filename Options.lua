@@ -1,6 +1,10 @@
 -- Bank Tabs
--- Options: one set of controls, shown either in the game's own options list
--- (Esc > Options > AddOns > Bank Tabs) or in a standalone window opened with "/banktabs window".
+-- Options: one set of controls, shown in the game's own options list (Esc > Options > AddOns >
+-- Bank Tabs) and in a standalone window opened with "/banktabs window". Each host has a copy of
+-- its own, built from the same pages, so the window's copy can wear the window style
+-- (BankTabs_Skins.lua) while the page in the game's options keeps the game's look, as every other
+-- addon's page there does. Every control writes straight into the saved variables, and
+-- ns.SyncOptions brings both copies up to date.
 --
 -- The page is registered as a CANVAS category and holds only this addon's own widgets. It
 -- deliberately does not create Settings proxy settings: on this client those taint Blizzard code
@@ -16,8 +20,8 @@ local NAV_W = 146
 local PANE_X = NAV_W + 14
 local PANE_W = CONTENT_W - PANE_X - 14
 
-local content, window, page
-local pages, navButtons = {}, {}
+local window, page
+local blocks = {}  -- each host's copy of the options: blocks.page (the game's options) and blocks.window
 local widgets = {}
 local uniqueID = 0
 
@@ -173,6 +177,78 @@ local function Choice(layout, label, options, get, set, tooltip, indent)
 	return holder
 end
 
+-- A slider with its caption above and its value at the right hand end.
+local SLIDER_W = 240
+local SLIDER_TEMPLATES = { "MinimalSliderTemplate", "UISliderTemplate", "OptionsSliderTemplate" }
+
+local function NewSlider(parent)
+	for _, template in ipairs(SLIDER_TEMPLATES) do
+		local ok, made = pcall(CreateFrame, "Slider", NextName("Slider"), parent, template)
+		if ok and made and made.SetMinMaxValues then
+			report["slider"] = template
+			-- OptionsSliderTemplate carries captions of its own; this draws its own.
+			for _, key in ipairs({ "Low", "High", "Text" }) do
+				local part = made[key] or (made.GetName and _G[(made:GetName() or "") .. key])
+				if type(part) == "table" and part.SetText then part:SetText("") end
+			end
+			return made
+		end
+		if ok and made then made:Hide() end
+	end
+	report["slider"] = "plain"
+	local slider = CreateFrame("Slider", NextName("Slider"), parent)
+	slider:SetOrientation("HORIZONTAL")
+	local track = slider:CreateTexture(nil, "BACKGROUND")
+	track:SetPoint("LEFT")
+	track:SetPoint("RIGHT")
+	track:SetHeight(6)
+	track:SetColorTexture(0, 0, 0, 0.6)
+	local thumb = slider:CreateTexture(nil, "ARTWORK")
+	thumb:SetSize(10, 16)
+	thumb:SetColorTexture(0.8, 0.8, 0.82, 1)
+	slider:SetThumbTexture(thumb)
+	return slider
+end
+
+local function Slider(layout, label, spec, indent)
+	local holder = CreateFrame("Frame", nil, layout.parent)
+	holder:SetSize(SLIDER_W + 4, 40)
+
+	local caption = holder:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+	caption:SetPoint("TOPLEFT", 0, 0)
+	caption:SetText(label)
+	local value = holder:CreateFontString(nil, "ARTWORK", "GameFontNormal")
+	value:SetPoint("TOPRIGHT", 0, 0)
+
+	local slider = NewSlider(holder)
+	slider:SetPoint("TOPLEFT", 2, -18)
+	slider:SetSize(SLIDER_W, 16)
+	slider:SetMinMaxValues(spec.min, spec.max)
+	slider:SetValueStep(spec.step)
+	if slider.SetObeyStepOnDrag then pcall(slider.SetObeyStepOnDrag, slider, true) end
+
+	-- Setting the value from the saved one fires the same script, which must not write it back.
+	local syncing = false
+	local function ShowValue(v) value:SetText(spec.format and spec.format(v) or tostring(v)) end
+	slider:SetScript("OnValueChanged", function(_, v)
+		if syncing then return end
+		v = math.floor(v / spec.step + 0.5) * spec.step
+		v = math.max(spec.min, math.min(spec.max, v))
+		if v ~= spec.get() then spec.set(v) end
+		ShowValue(v)
+	end)
+
+	Place(layout, holder, 44, indent)
+	widgets[#widgets + 1] = { refresh = function()
+		syncing = true
+		pcall(slider.SetValue, slider, spec.get())
+		syncing = false
+		ShowValue(spec.get())
+	end }
+	holder.slider, holder.caption, holder.value = slider, caption, value
+	return holder
+end
+
 local function ButtonRow(layout, buttons)
 	local holder = CreateFrame("Frame", nil, layout.parent)
 	holder:SetSize(PANE_W, 24)
@@ -300,6 +376,70 @@ local function BuildVaultPage(parent)
 	})
 end
 
+-- The window style of Bank Tabs' own windows, from Styles.lua (shared with Jon's other addons).
+local function BuildLookPage(parent)
+	local layout = NewLayout(parent)
+	Header(layout, "Look")
+	local Styles = ns.Styles
+	if not Styles then
+		Note(layout, "The window styles are not loaded on this client.", 0, 1)
+		return
+	end
+
+	Note(layout, "How Bank Tabs' own windows are drawn: the saved bank, bags and guild bank with their slots and tabs, and the options window. The game's own windows keep their look, and so does this page in Esc > Options.", 0, 3)
+
+	local styleButton = ns.Button(parent, "", 220, 22)
+	Place(layout, styleButton, 28)
+	styleButton:RegisterForClicks("LeftButtonUp", "RightButtonUp")
+	styleButton:SetScript("OnClick", function(_, button)
+		Styles.Try("style switch", Styles.Cycle, button == "RightButton" and -1 or 1)
+		ns.SyncOptions()
+	end)
+	styleButton:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:SetText("Window style", 1, 1, 1)
+		for _, line in ipairs(Styles.HELP) do GameTooltip:AddLine(line, nil, nil, nil, true) end
+		GameTooltip:AddLine("Left-click for the next style, right-click for the previous one.", 0.6, 0.6, 0.6, true)
+		GameTooltip:Show()
+	end)
+	styleButton:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	styleButton.csStyleButton = true
+
+	local note = Note(layout, "", 0, 2)
+	layout.y = layout.y + 6
+
+	local opacity = Slider(layout, "Dark background opacity", {
+		min = 0, max = 100, step = 5,
+		get = function() return math.floor((ns.db.darkAlpha or 0.92) * 100 + 0.5) end,
+		set = function(v)
+			ns.db.darkAlpha = v / 100
+			Styles.SetDarkAlpha(ns.db.darkAlpha)
+			ns.MirrorToAccount()
+		end,
+		format = function(v) return v .. "%" end,
+	})
+	opacity.slider:SetScript("OnEnter", function(self)
+		GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
+		GameTooltip:SetText("Dark background opacity", 1, 1, 1)
+		GameTooltip:AddLine("How much of the world shows through the Dark style's windows.", nil, nil, nil, true)
+		if ns.db.style ~= "dark" then GameTooltip:AddLine("Applies to the Dark style only.", 1, 0.82, 0, true) end
+		GameTooltip:Show()
+	end)
+	opacity.slider:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	opacity.slider.csOpacity = true
+
+	widgets[#widgets + 1] = { refresh = function()
+		styleButton:SetText("Window style: " .. Styles.Name(ns.db.style))
+		note:SetText(Styles.Note())
+		-- Grayed unless Dark is the chosen style.
+		local dark = ns.db.style == "dark"
+		if opacity.slider.SetEnabled then opacity.slider:SetEnabled(dark) end
+		opacity.slider:SetAlpha(dark and 1 or 0.5)
+		opacity.caption:SetFontObject(dark and "GameFontHighlight" or "GameFontDisable")
+		opacity.value:SetFontObject(dark and "GameFontNormal" or "GameFontDisable")
+	end }
+end
+
 local function BuildAboutPage(parent)
 	local layout = NewLayout(parent)
 	Header(layout, "About Bank Tabs")
@@ -314,6 +454,7 @@ local function BuildAboutPage(parent)
 		"/banktabs gold lists every character's gold",
 		"/banktabs lock or unlock turns every window switch off or on",
 		"/banktabs minimap shows or hides the minimap button",
+		"/banktabs style auto, blizzard or dark picks the window style",
 		"/banktabs reset puts every bag and bank window back",
 		"/banktabs debug prints what resolved on this client",
 	}
@@ -333,13 +474,14 @@ end
 local PAGES = {
 	{ key = "windows", label = "Windows", build = BuildWindowsPage },
 	{ key = "vault", label = "Bank snapshots", build = BuildVaultPage },
+	{ key = "look", label = "Look", build = BuildLookPage },
 	{ key = "about", label = "About", build = BuildAboutPage },
 }
 
-local function ShowPage(key)
+local function ShowPage(block, key)
 	for _, entry in ipairs(PAGES) do
-		if pages[entry.key] then pages[entry.key]:SetShown(entry.key == key) end
-		local button = navButtons[entry.key]
+		if block.csPages[entry.key] then block.csPages[entry.key]:SetShown(entry.key == key) end
+		local button = block.csNav[entry.key]
 		if button then
 			if entry.key == key then
 				if button.LockHighlight then button:LockHighlight() end
@@ -352,14 +494,14 @@ local function ShowPage(key)
 end
 
 -- ------------------------------------------------------------------
--- The shared content block
+-- A content block: one host's copy of every page
 -- ------------------------------------------------------------------
 
-local function BuildContent()
-	if content then return end
-
-	content = CreateFrame("Frame", "BankTabsOptions", UIParent)
+local function BuildContent(name)
+	local content = CreateFrame("Frame", name, UIParent)
 	content:SetSize(CONTENT_W, CONTENT_H)
+	content.csPages, content.csNav = {}, {}
+	local pages, navButtons = content.csPages, content.csNav
 
 	local title = content:CreateFontString(nil, "ARTWORK", "GameFontNormalLarge")
 	title:SetPoint("TOPLEFT", 0, 0)
@@ -375,7 +517,7 @@ local function BuildContent()
 
 	local navY = 0
 	for _, entry in ipairs(PAGES) do
-		local button = ns.Button(nav, entry.label, NAV_W - 8, 24, function() ShowPage(entry.key) end)
+		local button = ns.Button(nav, entry.label, NAV_W - 8, 24, function() ShowPage(content, entry.key) end)
 		button:SetPoint("TOPLEFT", 0, -navY)
 		navButtons[entry.key] = button
 		navY = navY + 28
@@ -396,17 +538,29 @@ local function BuildContent()
 		report["page " .. entry.key] = ok and "ok" or ("failed: " .. tostring(err))
 	end
 
-	ShowPage("windows")
-	-- Stays out of sight until a host (the window or the options page) asks for it.
+	ShowPage(content, "windows")
+	-- Stays out of sight until its host (the window or the options page) asks for it.
 	content:Hide()
+	return content
+end
+
+-- The game's options page has its copy from the start; the window's is built when it first opens.
+local function BuildPageContent()
+	if not blocks.page then blocks.page = BuildContent("BankTabsOptions") end
+	return blocks.page
+end
+
+-- The window's copy, if it has been built, for the window style to draw on.
+function ns.OptionsWindowContent()
+	return blocks.window
 end
 
 function ns.SyncOptions()
-	if not content or not ns.db then return end
+	if not next(blocks) or not ns.db then return end
 	for _, widget in ipairs(widgets) do pcall(widget.refresh) end
 end
 
-local function HostContent(host, x, y, scale)
+local function HostContent(content, host, x, y, scale)
 	content:SetParent(host)
 	content:ClearAllPoints()
 	content:SetPoint("TOPLEFT", host, "TOPLEFT", x, y)
@@ -428,7 +582,11 @@ local function BuildWindow()
 	window.csTitle:SetText("Bank Tabs")
 
 	window:SetScript("OnShow", function(self)
-		HostContent(self, 18, -36, 1)
+		if not blocks.window then
+			blocks.window = BuildContent("BankTabsWindowOptions")
+			if ns.SkinOptions then ns.SkinOptions(blocks.window) end
+		end
+		HostContent(blocks.window, self, 18, -36, 1)
 		ns.SyncOptions()
 	end)
 
@@ -529,7 +687,7 @@ function ns.OpenBlizzardOptions()
 end
 
 function ns.ToggleOptions(forceWindow)
-	BuildContent()
+	BuildPageContent()
 	BuildWindow()
 
 	if window:IsShown() then window:Hide() return end
@@ -561,7 +719,7 @@ local function BuildOptionsCategory()
 		local w, h = page:GetWidth() or 0, page:GetHeight() or 0
 		if w <= 0 or h <= 0 then return end
 		local scale = math.min(1, (w - 24) / CONTENT_W, (h - 24) / CONTENT_H)
-		HostContent(page, 12, -12, scale)
+		HostContent(BuildPageContent(), page, 12, -12, scale)
 	end
 
 	page:SetScript("OnShow", function()
@@ -578,7 +736,7 @@ local function BuildOptionsCategory()
 end
 
 function ns.SetupOptions()
-	BuildContent()
+	BuildPageContent()
 	BuildWindow()
 	local ok, err = pcall(BuildOptionsCategory)
 	if not ok then report["options category"] = "failed: " .. tostring(err) end

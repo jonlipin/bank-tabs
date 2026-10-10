@@ -49,6 +49,7 @@ local NAMES = { bank = "BankTabsBank", bags = "BankTabsBags", guild = "BankTabsG
 local POS_KEYS = { bank = "savedBank", bags = "savedBags", guild = "savedGuild" }
 
 local windows = {}  -- kind -> that window's state, once it has been opened
+VaultUI.windows = windows -- for the window styles, which restyle what is already built
 local order = {}    -- the kinds on screen, the one opened or brought forward last at the end
 local lastKind = nil
 local escSlot = nil -- the index in UISpecialFrames that names the front window
@@ -528,7 +529,7 @@ end
 local function NewCell(W, size)
 	local cell = CreateFrame("Button", nil, W.frame)
 	cell:SetSize(size, size)
-	SlotBacking(cell)
+	cell.backing = SlotBacking(cell)
 
 	local icon = cell:CreateTexture(nil, "ARTWORK")
 	icon:SetPoint("TOPLEFT", 1, -1)
@@ -567,10 +568,11 @@ local function NewCell(W, size)
 			pcall(ChatEdit_InsertLink, self.csItem.link)
 		end
 	end)
+	if ns.SkinCell then ns.SkinCell(cell) end
 	return cell
 end
 
--- Paints a cell's border in a colour, or hides it. `cell.border` carries the shown state in both
+-- Paints a cell's border in a color, or hides it. `cell.border` carries the shown state in both
 -- the glow and the ring cases.
 local function PaintBorder(cell, shown, r, g, b)
 	if cell.borderIsGlow then
@@ -924,6 +926,7 @@ local function NewCharTab(W, index)
 		if self.csGuild then GuildTabTooltip(self) else CharTabTooltip(self) end
 	end)
 	tab:SetScript("OnLeave", function() GameTooltip:Hide() end)
+	if ns.SkinCharTab then ns.SkinCharTab(tab) end
 	W.charTabs[index] = tab
 	return tab
 end
@@ -955,7 +958,7 @@ local function LayoutCharTabs(W)
 	for i = #list + 1, #W.charTabs do W.charTabs[i]:Hide() end
 	local rows = #list > 0 and math.ceil(#list / perRow) or 0
 	-- How far the top row stands above the window, by the one rule the backpack's tabs use too.
-	W.tabRoom = ns.TabRowsHeight(rows)
+	W.tabRoom = ns.TabRowsHeight(rows, nil, W.frame)
 	pcall(W.frame.SetClampRectInsets, W.frame, 0, 0, W.tabRoom, 0)
 	return #list
 end
@@ -989,7 +992,7 @@ end
 -- the snapshot was taken lives on the portrait's tooltip and on the character tabs instead.
 local function Footer(W, record)
 	W.moneyText:SetText(record and ns.Money(record.money) or "")
-	-- The account's gold, small and grey in the bottom left, unless switched off.
+	-- The account's gold, small and gray in the bottom left, unless switched off.
 	if ns.db.vault.showAccountGold and W.kind ~= "guild" then
 		local _, total = ns.Vault.Gold()
 		W.accountText:SetText("Account " .. ns.Money(total))
@@ -1446,6 +1449,7 @@ local function Build(kind)
 		HeaderTabsChanged()
 	end)
 	report["saved " .. kind .. " window"] = "ok, replica"
+	if ns.SkinSavedWindow then ns.SkinSavedWindow(W) end
 	return W
 end
 
