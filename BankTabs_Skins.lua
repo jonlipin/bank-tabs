@@ -224,6 +224,12 @@ function ns.SkinOptions(content)
 	Try("options", function() SkinControls(content, 1) end)
 end
 
+-- Controls added to the options window's copy after it was dressed (the rows of the Characters page).
+function ns.SkinOptionsPart(frame)
+	if not S() or type(frame) ~= "table" then return end
+	Try("options", function() SkinControls(frame, 1) end)
+end
+
 -- ---- everything that exists when a style is drawn -------------------------------------------
 
 local function SkinAll()

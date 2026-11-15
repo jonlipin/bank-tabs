@@ -369,6 +369,13 @@ UIPanelWindows = { BankFrame = { area = "left" }, GuildBankFrame = { area = "lef
 -- blocked" message and nothing else; BLOCKED counts them.
 IN_COMBAT, BLOCKED = false, 0
 function InCombatLockdown() return IN_COMBAT end
+-- The game's mark for frames its gamepad navigation leaves alone. Out of combat it takes; asked
+-- for in combat it is refused with the blocked message, as the real one is.
+NAV_IGNORED = {}
+function SmartNavigation_MarkFrameIgnored(frame)
+  if IN_COMBAT then BLOCKED = BLOCKED + 1 return end
+  NAV_IGNORED[frame] = true
+end
 function ShowUIPanel(f)
   if not f then return end
   if IN_COMBAT then BLOCKED = BLOCKED + 1 return end
@@ -1030,7 +1037,7 @@ check("with no old Casement installed the window engine does not wait for login"
 check("the old commands are not taken before login", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil)
 
 do -- scope: 1b. This is Bank Tabs, and only its half of Casement
-check("the version is 2.2.0", ns.version == "2.2.0", ns.version)
+check("the version is 2.3.0", ns.version == "2.3.0", ns.version)
 check("the saved variables are Bank Tabs' own", ns.db == BankTabsDB and ns.vault == BankTabsAccountDB.vault
   and CasementDB == nil and CasementAccountDB == nil)
 check("the event frame is Bank Tabs' own", BankTabsFrame ~= nil and CasementFrame == nil)
@@ -1041,7 +1048,7 @@ check("the map's settings are not in the defaults", ns.db.map == nil and ns.db.w
 local groups = {}
 for _, group in ipairs(ns.Windows.GROUPS) do groups[#groups + 1] = group.key end
 check("the window switches are the bag, bank and guild bank ones", table.concat(groups, ",") == "combined,bags,reagent,bank,guildbank", table.concat(groups, ","))
-check("the map exploration event is not registered", ns.report["events"] == "18/18 registered", ns.report["events"])
+check("the map exploration event is not registered", ns.report["events"] == "20/20 registered", ns.report["events"])
 end -- scope
 
 -- ------------------------------------------------------------------
@@ -3577,6 +3584,256 @@ end
 check("each bag, bank and guild bank window has its switch", windowSwitches == 5, windowSwitches)
 end -- scope
 
+do -- scope: 13c. Characters: hiding, deleting, other realms
+-- A player on a new realm still saw the character from the old one on the tabs, and another wanted
+-- rid of characters deleted in game. Nothing could be removed before this.
+local me = ns.Who()
+local ALT, FAR, GONE = "Player-70-0AAAAAAA", "Player-99-0BBBBBBB", "Player-70-0CCCCCCC"
+local function Bank(id, count, money)
+  return { time = time() - 7200, reason = "bank closed", money = money, items = 1, slots = 48, free = 47,
+    containers = { { id = 6, label = "Bank tab 1", slots = 48, items = { { slot = 1, id = id, name = "Item " .. id, count = count, icon = 1 } } } } }
+end
+ns.vault.chars[ALT] = { class = "WARRIOR", level = 30, name = "Alt One", realm = "Voidpact", guid = ALT, bank = Bank(99001, 3, 100) }
+ns.vault.chars[FAR] = { class = "WARLOCK", level = 47, name = "Far Away", realm = "Other Realm", guid = FAR, bank = Bank(99001, 5, 300) }
+ns.vault.chars[GONE] = { class = "WARRIOR", level = 12, name = "Long Gone", realm = "Voidpact", guid = GONE, bank = Bank(99002, 9, 50) }
+ns.vault.guilds["Far Guild - Other Realm"] = { time = time(), money = 1, items = 1, tabs = { [1] = { name = "T", items = {
+  { slot = 1, id = 99001, name = "Item 99001", count = 11, icon = 1 } } } } }
+ns.db.vault.otherRealms = true
+ns.Vault.Changed()
+
+local function Has(list, who) for _, c in ipairs(list) do if c.who == who then return true end end return false end
+local function GoldRow(who) for _, row in ipairs((ns.Vault.Gold())) do if row.who == who then return row end end end
+local function Total() local _, total = ns.Vault.Gold() return total end
+local function GuildListed(key) for _, g in ipairs(ns.VaultUI.Guilds()) do if g.key == key then return true end end return false end
+local onItem = TOOLTIP_CALLBACKS[0]
+local function Hover(id)
+  GameTooltip:SetOwner(nil)
+  GameTooltip.csTooltipStamp = nil
+  GameTooltip.csItemName, GameTooltip.csItemLink = "Item " .. id, nil
+  onItem(GameTooltip, { id = id })
+  local out = {}
+  for _, l in ipairs(GameTooltip.csLines) do out[tostring(l[1])] = tostring(l[2]) end
+  return out
+end
+
+check("other realms are shown by default, as before", ns.defaults.vault.otherRealms == true and Has(ns.Vault.Characters("bank"), FAR)
+  and GoldRow(FAR) ~= nil and GuildListed("Far Guild - Other Realm") and Hover(99001)["Far Away"] == "bank 5")
+local totalAll = Total()
+
+-- The roster the Characters page draws: realm by realm, this realm first, everything saved in it.
+local roster = ns.Vault.Roster()
+check("the roster starts with the realm being played", roster[1] and roster[1].realm == "Voidpact" and roster[1].here == true, roster[1] and tostring(roster[1].realm))
+local far
+for _, block in ipairs(roster) do if block.realm == "Other Realm" then far = block end end
+check("another realm has its own block, with its character and its guild bank", far ~= nil and far.here == false and #far.chars == 1
+  and far.chars[1].who == FAR and #far.guilds == 1 and far.guilds[1].key == "Far Guild - Other Realm")
+check("the character being played is first in its realm, marked as such", roster[1].chars[1].who == me and roster[1].chars[1].mine == true)
+
+-- Switched off, every other realm goes at once, from the tabs, the tooltips and the gold.
+ns.db.vault.otherRealms = false
+ns.Vault.Changed()
+check("with other realms switched off, their characters have no tab", not Has(ns.Vault.Characters("bank"), FAR) and Has(ns.Vault.Characters("bank"), ALT))
+check("no share of the gold", GoldRow(FAR) == nil and Total() == totalAll - 300, Total())
+check("no tooltip lines, and neither has their guild bank", Hover(99001)["Far Away"] == nil and Hover(99001)["Far Guild"] == nil
+  and Hover(99001)["Alt One"] == "bank 3")
+check("and their guild bank no tab", not GuildListed("Far Guild - Other Realm"))
+check("nothing was deleted", ns.vault.chars[FAR] ~= nil and ns.vault.guilds["Far Guild - Other Realm"] ~= nil)
+local shownFlag
+for _, block in ipairs(ns.Vault.Roster()) do for _, c in ipairs(block.chars) do if c.who == FAR then shownFlag = c.shown end end end
+check("the roster still lists them, marked as not shown", shownFlag == false)
+ns.db.vault.otherRealms = true
+ns.Vault.Changed()
+check("switched back on, they return", Has(ns.Vault.Characters("bank"), FAR) and Total() == totalAll)
+
+-- Hiding one character.
+check("a character can be hidden", ns.Vault.SetHidden("char", ALT, true) == true and ns.vault.chars[ALT].hidden == true)
+check("hidden, it has no tab, no gold and no tooltip line", not Has(ns.Vault.Characters("bank"), ALT) and GoldRow(ALT) == nil
+  and Hover(99001)["Alt One"] == nil)
+check("but everything saved for it is kept", ns.vault.chars[ALT].bank.items == 1)
+ns.Vault.SetHidden("char", ALT, false)
+check("shown again, it is back", ns.vault.chars[ALT].hidden == nil and Has(ns.Vault.Characters("bank"), ALT) and Hover(99001)["Alt One"] == "bank 3")
+check("the character being played cannot be hidden", ns.Vault.SetHidden("char", me, true) == false and ns.vault.chars[me].hidden == nil)
+check("or deleted", ns.Vault.Forget("char", me) == false and ns.vault.chars[me] ~= nil)
+ns.vault.chars[me].hidden = true
+check("and stays on show even with a hidden mark on it", ns.Vault.CharShown(me, ns.vault.chars[me]) == true and Has(ns.Vault.Characters("bank"), me))
+ns.vault.chars[me].hidden = nil
+ns.Vault.SetHidden("guild", "Far Guild - Other Realm", true)
+check("a guild bank can be hidden too", not GuildListed("Far Guild - Other Realm") and Hover(99001)["Far Guild"] == nil)
+ns.Vault.SetHidden("guild", "Far Guild - Other Realm", false)
+check("and shown again", GuildListed("Far Guild - Other Realm") and Hover(99001)["Far Guild"] == "guild bank 11")
+
+-- The page: /banktabs characters opens the options window on it.
+-- With the options open in the game's own panel, the page turns there; otherwise Bank Tabs' own
+-- window opens on it.
+local host = BankTabsOptions.parent
+if host and host ~= BankTabsWindow and host ~= UIParent then
+  host:Show()
+  SlashCmdList["BANKTABS"]("characters")
+  check("with the game's options open on Bank Tabs, the page turns there", BankTabsOptions.csPages.characters.shown == true
+    and BankTabsWindow.shown ~= true)
+  host:Hide()
+end
+SlashCmdList["BANKTABS"]("characters")
+local content = BankTabsWindowOptions
+check("/banktabs characters opens the options window on the Characters page", BankTabsWindow.shown == true and content ~= nil
+  and content.csPages.characters ~= nil and content.csPages.characters.shown == true and content.csPages.windows.shown == false)
+local page = content.csPages.characters
+local R = page.csRoster
+local function RowFor(key)
+  for _, row in ipairs(R.rows) do if row.shown and row.csItem and row.csItem.key == key then return row end end
+end
+local function RowText(needle)
+  for _, row in ipairs(R.rows) do if row.shown and type(row.text.text) == "string" and row.text.text:find(needle, 1, true) then return row end end
+end
+check("a row for every realm, character and guild bank saved", RowFor(ALT) ~= nil and RowFor(FAR) ~= nil and RowFor(GONE) ~= nil
+  and RowFor("Far Guild - Other Realm") ~= nil and RowText("Other Realm") ~= nil and RowText("(this realm)") ~= nil, R.count)
+check("a character's row says who, what is saved and when", RowFor(FAR).text.text:find("Far Away", 1, true) ~= nil
+  and RowFor(FAR).text.text:find("47", 1, true) ~= nil and RowFor(FAR).text.text:find("bank", 1, true) ~= nil
+  and RowFor(FAR).text.text:find("2 h ago", 1, true) ~= nil, RowFor(FAR).text.text)
+local mine = RowFor(me)
+check("the character being played says so, and its buttons are off", mine ~= nil and mine.text.text:find("(playing now)", 1, true) ~= nil
+  and mine.hide.enabled == false and mine.delete.enabled == false)
+local headerRow = RowText("Other Realm")
+check("a realm's line has no buttons", headerRow and headerRow.hide.shown == false and headerRow.delete.shown == false)
+
+-- Hide and Show from the page.
+local row = RowFor(ALT)
+row.hide.scripts.OnClick(row.hide)
+row = RowFor(ALT)
+check("Hide on a row hides the character and turns into Show, the row dimmed", ns.vault.chars[ALT].hidden == true and row.hide.text == "Show"
+  and row:GetAlpha() == 0.55 and row.text.text:find("hidden", 1, true) ~= nil, row.hide.text)
+row.hide.scripts.OnClick(row.hide)
+row = RowFor(ALT)
+check("Show brings it back", ns.vault.chars[ALT].hidden == nil and row.hide.text == "Hide" and row:GetAlpha() == 1)
+
+-- Delete asks for a second click, and lets go of the question after four seconds.
+row = RowFor(GONE)
+row.delete.scripts.OnClick(row.delete)
+check("the first click on Delete only asks", ns.vault.chars[GONE] ~= nil and RowFor(GONE).delete.text == "Sure?", RowFor(GONE).delete.text)
+RunTimers(5)
+check("left alone, the question goes away", ns.vault.chars[GONE] ~= nil and RowFor(GONE).delete.text == "Delete", RowFor(GONE).delete.text)
+row = RowFor(GONE)
+row.delete.scripts.OnClick(row.delete)
+RunTimers(5)
+row = RowFor(GONE)
+row.delete.scripts.OnClick(row.delete)
+check("a second click that comes too late asks again", ns.vault.chars[GONE] ~= nil and RowFor(GONE).delete.text == "Sure?")
+-- Even should the timer that takes the question away not have run yet.
+R.state.confirmAt = GetTime() - 10
+row = RowFor(GONE)
+row.delete.scripts.OnClick(row.delete)
+check("the four seconds are counted on the click itself too", ns.vault.chars[GONE] ~= nil and RowFor(GONE).delete.text == "Sure?")
+row = RowFor(GONE)
+row.delete.scripts.OnClick(row.delete)
+check("the second click deletes everything saved for the character", ns.vault.chars[GONE] == nil and RowFor(GONE) == nil)
+check("and it is off the tabs, the tooltips and the gold", not Has(ns.Vault.Characters("bank"), GONE) and Hover(99002)["Long Gone"] == nil and GoldRow(GONE) == nil)
+check("the other characters are untouched", ns.vault.chars[ALT] ~= nil and ns.vault.chars[FAR] ~= nil)
+row = RowFor(ALT)
+row.delete.scripts.OnClick(row.delete)
+local other = RowFor(FAR)
+other.delete.scripts.OnClick(other.delete)
+check("asking about one character does not confirm another", ns.vault.chars[ALT] ~= nil and ns.vault.chars[FAR] ~= nil
+  and RowFor(FAR).delete.text == "Sure?" and RowFor(ALT).delete.text == "Delete")
+RunTimers(5)
+local guildRow = RowFor("Far Guild - Other Realm")
+guildRow.delete.scripts.OnClick(guildRow.delete)
+guildRow = RowFor("Far Guild - Other Realm")
+guildRow.delete.scripts.OnClick(guildRow.delete)
+check("a guild bank is deleted the same way", ns.vault.guilds["Far Guild - Other Realm"] == nil and RowFor("Far Guild - Other Realm") == nil)
+
+-- The switch on the page.
+local switch
+for _, f in ipairs(FRAMES) do
+  if f.kind == "CheckButton" and f.parent == page then switch = f end
+end
+check("the page has the other realms switch, ticked", switch ~= nil and switch.checked == true)
+switch.checked = false
+switch.scripts.OnClick(switch)
+Hover(99001)
+switch.checked = true
+switch.scripts.OnClick(switch)
+check("a tooltip read before the switch has the far character", Hover(99001)["Far Away"] == "bank 5")
+switch.checked = false
+switch.scripts.OnClick(switch)
+check("unticked, other realms are left out and their rows dim", ns.db.vault.otherRealms == false and not Has(ns.Vault.Characters("bank"), FAR)
+  and RowFor(FAR) ~= nil and RowFor(FAR):GetAlpha() == 0.55)
+check("and the tooltips follow at once", Hover(99001)["Far Away"] == nil)
+switch.checked = true
+switch.scripts.OnClick(switch)
+check("ticked again, they are back", ns.db.vault.otherRealms == true and Has(ns.Vault.Characters("bank"), FAR) and RowFor(FAR):GetAlpha() == 1)
+
+-- A right click on a character's tab comes here too.
+BankTabsWindow:Hide()
+ns.VaultUI.Show("bank")
+local tab
+for _, f in ipairs(FRAMES) do
+  if f.kind == "CheckButton" and f.parent == BankTabsBank and f.shown and f.csWho == FAR then tab = f end
+end
+check("the far character has a tab on the saved bank", tab ~= nil)
+local before = ns.VaultUI.Selected("bank")
+if tab then tab.scripts.OnClick(tab, "RightButton") end
+check("a right click on a tab opens the Characters page and leaves the saved bank on its character", BankTabsWindow.shown == true
+  and BankTabsWindowOptions.csPages.characters.shown == true and ns.VaultUI.Selected("bank") == before)
+if tab then tab.scripts.OnClick(tab, "LeftButton") end
+check("a left click still picks the character", ns.VaultUI.Selected("bank") == FAR)
+-- Deleting the character on show falls back to this one.
+ns.Vault.Forget("char", FAR)
+check("deleting the character a saved window shows falls back to this one", ns.VaultUI.Selected("bank") == me)
+BankTabsWindow:Hide()
+ns.vault.chars[ALT] = nil
+ns.Vault.Changed()
+ns.VaultUI.Show("bank", me)
+end -- scope
+
+do -- scope: 13d. A gamepad's d-pad leaves the backpack tabs and the drag strips alone
+-- The game walks a bag window's buttons as a grid on a gamepad, and the tabs above the backpack and
+-- the drag strip across its top each made a column of their own: a player's d-pad jumped onto them
+-- from the middle of the bags. Each is given the game's own "leave this alone" mark.
+local tabs = ns.BagHeader.Tabs(ContainerFrame1)
+local marked = tabs ~= nil
+for _, key in ipairs({ "bank", "bags", "guild" }) do
+  if not (tabs and tabs[key] and NAV_IGNORED[tabs[key]]) then marked = false end
+end
+check("the three backpack tabs are marked for the gamepad's navigation to leave alone", marked)
+local grips, gripsMarked = 0, 0
+for _, f in ipairs(FRAMES) do
+  if f.dragButtons and f.csOurs and f.parent ~= Minimap then
+    grips = grips + 1
+    if NAV_IGNORED[f] then gripsMarked = gripsMarked + 1 end
+  end
+end
+check("so is every drag strip and overlay", grips > 0 and gripsMarked == grips, gripsMarked .. " of " .. grips)
+check("the report says so", ns.report["gamepad navigation"] == "the backpack tabs and drag strips are left out of it", ns.report["gamepad navigation"])
+
+-- In combat the game refuses the mark with a blocked message: it is not asked for until combat ends.
+local blockedBefore = BLOCKED
+IN_COMBAT = true
+local late = CreateFrame("Frame", nil, UIParent)
+ns.GamepadIgnore(late)
+check("in combat the mark is not asked for, so nothing is blocked", NAV_IGNORED[late] == nil and BLOCKED == blockedBefore, BLOCKED - blockedBefore)
+check("and the report says a frame is waiting", ns.GamepadIgnoreFlush() == 1 and (ns.report["gamepad navigation"] or ""):find("waiting", 1, true) ~= nil,
+  ns.report["gamepad navigation"])
+IN_COMBAT = false
+fire("PLAYER_REGEN_ENABLED")
+RunTimers(1)
+check("it is marked once combat ends", NAV_IGNORED[late] == true and BLOCKED == blockedBefore)
+
+-- The navigation addon may load after the frames were made.
+local keep = SmartNavigation_MarkFrameIgnored
+SmartNavigation_MarkFrameIgnored = nil
+local early = CreateFrame("Frame", nil, UIParent)
+check("with the game's navigation not loaded, nothing fails", pcall(ns.GamepadIgnore, early) and NAV_IGNORED[early] == nil)
+SmartNavigation_MarkFrameIgnored = keep
+fire("ADDON_LOADED", "Blizzard_GamepadSmartNavigation")
+check("and the frame is marked when it loads", NAV_IGNORED[early] == true)
+local calls = 0
+SmartNavigation_MarkFrameIgnored = function(f) calls = calls + 1 keep(f) end
+ns.GamepadIgnore(early)
+ns.GamepadIgnoreFlush()
+check("a frame is only ever marked once", calls == 0, calls)
+SmartNavigation_MarkFrameIgnored = keep
+end -- scope
+
 -- ------------------------------------------------------------------
 -- 14. Saved variables
 -- ------------------------------------------------------------------
@@ -4899,7 +5156,7 @@ const parts = [];
   check('the TOC is BankTabs.toc', toc !== null);
   check('titled Bank Tabs', field(toc, 'Title') === 'Bank Tabs', field(toc, 'Title'));
   const version = (sources['Core.lua'].match(/ns\.version = "([^"]+)"/) || [])[1];
-  check('its version is the addon\'s own, 2.2.0', field(toc, 'Version') === '2.2.0' && version === '2.2.0', field(toc, 'Version') + ' / ' + version);
+  check('its version is the addon\'s own, 2.3.0', field(toc, 'Version') === '2.3.0' && version === '2.3.0', field(toc, 'Version') + ' / ' + version);
   check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
     && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
   check('its icon is the treasure chest from the game\'s icons (not Stockpile\'s bag), the path intact', /^Interface\\Icons\\Racial_Dwarf_FindTreasure$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
@@ -4958,7 +5215,7 @@ const parts = [];
     const changelog = (read('CHANGELOG.md') || '').replace(/\r\n/g, '\n');
     const notes = (read('RELEASE-NOTES.md') || '').replace(/\r\n/g, '\n');
     const top = changelog.split(/\r?\n(?=## )/).find(s => s.startsWith('## ')) || '';
-    check('the changelog opens on 2.2.0', /^## 2\.2\.0 - /.test(top), top.slice(0, 30));
+    check('the changelog opens on 2.3.0', /^## 2\.3\.0 - /.test(top), top.slice(0, 30));
     check('the release notes are that section and nothing else', notes.replace(/\s+$/, '') === top.replace(/\s+$/, ''));
 
     // Every text file, docs and code: no em or en dashes, as the author asked.

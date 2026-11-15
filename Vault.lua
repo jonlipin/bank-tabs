@@ -142,6 +142,124 @@ function Vault.Changed()
 	if ns.BagHeader and ns.BagHeader.Refresh then pcall(ns.BagHeader.Refresh) end
 end
 
+-- ------------------------------------------------------------------
+-- Which characters and guild banks are shown
+-- ------------------------------------------------------------------
+
+-- Everything saved stays saved until it is deleted, but not all of it has to be on show. A
+-- character or guild bank can be hidden (entry.hidden, from the Characters page of the options),
+-- and every character and guild bank on another realm can be left out at once (the otherRealms
+-- setting switched off). What is not shown has no tab on the saved windows, no line on item
+-- tooltips and no share of the account's gold. The character being played, and its guild's bank,
+-- are always shown.
+
+local function ThisRealm()
+	if not GetRealmName then return nil end
+	local ok, realm = pcall(GetRealmName)
+	if ok and type(realm) == "string" and realm ~= "" then return realm end
+	return nil
+end
+
+-- The realm a character was saved on: kept with the entry, or the tail of a key saved by name
+-- before characters were keyed by GUID ("Name - Realm"). Nil when neither says.
+function Vault.RealmOf(key, entry)
+	if type(entry) == "table" and type(entry.realm) == "string" and entry.realm ~= "" then return entry.realm end
+	if type(key) == "string" and not key:find("^Player%-") then
+		local realm = key:match("^.- %- (.+)$")
+		if realm and realm ~= "" then return realm end
+	end
+	return nil
+end
+
+-- Whether something saved on `realm` is on another realm than the one being played. A realm that
+-- is not known counts as this one, so nothing disappears for want of a name.
+local function Elsewhere(realm)
+	local here = ThisRealm()
+	return realm ~= nil and here ~= nil and realm ~= here
+end
+
+local function OtherRealmsShown()
+	return not (ns.db and ns.db.vault and ns.db.vault.otherRealms == false)
+end
+
+function Vault.CharShown(who, entry)
+	if who == ns.Who() then return true end
+	if type(entry) ~= "table" then return false end
+	if entry.hidden then return false end
+	if not OtherRealmsShown() and Elsewhere(Vault.RealmOf(who, entry)) then return false end
+	return true
+end
+
+-- A guild bank is keyed "Guild - Realm".
+function Vault.GuildShown(key, record)
+	if Vault.GuildKey and key == Vault.GuildKey() then return true end
+	if type(record) == "table" and record.hidden then return false end
+	if not OtherRealmsShown() and Elsewhere(type(key) == "string" and key:match("^.- %- (.+)$") or nil) then return false end
+	return true
+end
+
+-- Hides or shows a character ("char") or a guild bank ("guild") without touching what is saved.
+function Vault.SetHidden(kind, key, hidden)
+	local entry
+	if kind == "char" then
+		if key == ns.Who() then return false end
+		entry = Vault.CharRecord(key)
+	elseif kind == "guild" then
+		entry = ns.vault.guilds[key]
+	end
+	if type(entry) ~= "table" then return false end
+	entry.hidden = hidden and true or nil
+	Vault.Changed()
+	return true
+end
+
+-- Everything saved, shown or not, for the Characters page: one block per realm, the realm being
+-- played first and the rest by name, each with its characters and its guild banks by name.
+--   { realm = "Name" or false, here = bool, chars = { { who, entry, mine, shown } }, guilds = { { key, record, mine, shown } } }
+function Vault.Roster()
+	local here = ThisRealm()
+	local blocks, byRealm = {}, {}
+	local function Block(realm)
+		realm = realm or here or false
+		local block = byRealm[realm]
+		if not block then
+			block = { realm = realm, here = (realm == here) or realm == false, chars = {}, guilds = {} }
+			byRealm[realm] = block
+			blocks[#blocks + 1] = block
+		end
+		return block
+	end
+	local me = ns.Who()
+	local mineSeen = false
+	for who in pairs(ns.vault.chars or {}) do
+		local entry = Vault.CharRecord(who)
+		if entry then
+			local block = Block(who == me and here or Vault.RealmOf(who, entry))
+			block.chars[#block.chars + 1] = { who = who, entry = entry, mine = who == me, shown = Vault.CharShown(who, entry) }
+			if who == me then mineSeen = true end
+		end
+	end
+	local myGuild = Vault.GuildKey and Vault.GuildKey()
+	for key, record in pairs(ns.vault.guilds or {}) do
+		if type(record) == "table" then
+			local block = Block(type(key) == "string" and key:match("^.- %- (.+)$") or nil)
+			block.guilds[#block.guilds + 1] = { key = key, record = record, mine = key == myGuild, shown = Vault.GuildShown(key, record) }
+		end
+	end
+	for _, block in ipairs(blocks) do
+		table.sort(block.chars, function(a, b)
+			if a.mine ~= b.mine then return a.mine end
+			return ns.Label(a.who) < ns.Label(b.who)
+		end)
+		table.sort(block.guilds, function(a, b) return a.key < b.key end)
+	end
+	table.sort(blocks, function(a, b)
+		if a.here ~= b.here then return a.here end
+		return tostring(a.realm) < tostring(b.realm)
+	end)
+	return blocks, mineSeen
+end
+
 -- Gold: every character's last seen money (this character's live), and the account total. The
 -- freshest of a character's bank and bags snapshots is the one trusted.
 function Vault.Gold()
@@ -158,7 +276,9 @@ function Vault.Gold()
 					best = record
 				end
 			end
-			if best then out[#out + 1] = { who = who, money = best.money, time = best.time, mine = who == me } end
+			if best and Vault.CharShown(who, entry) then
+				out[#out + 1] = { who = who, money = best.money, time = best.time, mine = who == me }
+			end
 		end
 	end
 	-- This character's purse is read live and replaces whatever was saved.
@@ -485,12 +605,14 @@ local function Totals(record)
 end
 
 -- Every character with something saved, this one first, then alphabetical.
+-- The characters on show (see Vault.CharShown) with a snapshot of `kind`, or with anything saved
+-- when no kind is given: this character first, then by name.
 function Vault.Characters(kind)
 	local me = ns.Who()
 	local out = {}
 	for who, raw in pairs(ns.vault.chars or {}) do
 		local entry = Migrate(who, raw)
-		if entry and (not kind or entry[kind]) then
+		if entry and (not kind or entry[kind]) and Vault.CharShown(who, entry) then
 			out[#out + 1] = { who = who, entry = entry, mine = who == me }
 		end
 	end
@@ -1005,13 +1127,17 @@ function Vault.SnapshotNow()
 	return "saved " .. table.concat(done, " and ") .. "."
 end
 
+-- Deletes everything saved for a character ("char") or a guild bank ("guild"). The character being
+-- played is never deleted: its bags would only be saved again a few seconds later.
 function Vault.Forget(kind, key)
 	if kind == "char" then
+		if key == ns.Who() then return false end
 		ns.vault.chars[key] = nil
 	elseif kind == "guild" then
 		ns.vault.guilds[key] = nil
 	end
 	Vault.Changed()
+	return true
 end
 
 -- ------------------------------------------------------------------

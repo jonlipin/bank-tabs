@@ -55,6 +55,8 @@ local function Build()
 	index = {}
 	for who in pairs(ns.vault.chars or {}) do
 		local entry = ns.Vault.CharRecord(who)
+		-- Only the characters on show: not the hidden ones, nor other realms' while those are left out.
+		if not ns.Vault.CharShown(who, entry) then entry = nil end
 		for _, kind in ipairs({ "bank", "bags" }) do
 			local record = entry and entry[kind]
 			for _, bucket in ipairs(record and record.containers or {}) do
@@ -70,7 +72,7 @@ local function Build()
 		end
 	end
 	for guildKey, record in pairs(ns.vault.guilds or {}) do
-		for _, tab in pairs(record.tabs or {}) do
+		for _, tab in pairs(ns.Vault.GuildShown(guildKey, record) and record.tabs or {}) do
 			for _, item in ipairs(tab.items or {}) do
 				for _, key in ipairs(Keys(item)) do
 					local slot = Slot(key)

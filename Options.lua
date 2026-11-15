@@ -440,6 +440,158 @@ local function BuildLookPage(parent)
 	end }
 end
 
+-- Every character and guild bank Bank Tabs has saved, realm by realm, each with a Hide (or Show)
+-- and a Delete button. Hidden, a character keeps what is saved but has no tab, no tooltip lines
+-- and no share of the account's gold; deleted, everything saved for it is gone, which is the way
+-- to be rid of a character that no longer exists. Delete asks for a second click. The switch at
+-- the top leaves out every other realm at once. The character being played cannot be hidden or
+-- deleted. The list is redrawn from Vault.Roster on every sync, into a pool of rows.
+local ROW_H, LIST_H = 26, 372
+
+local function SeenAgo(stamp)
+	if type(stamp) ~= "number" then return nil end
+	local seconds = time() - stamp
+	if seconds < 3600 then return "under an hour ago" end
+	if seconds < 86400 then return math.floor(seconds / 3600) .. " h ago" end
+	return math.floor(seconds / 86400) .. " d ago"
+end
+
+local function ClassHex(token)
+	local c = token and type(RAID_CLASS_COLORS) == "table" and RAID_CLASS_COLORS[token]
+	if type(c) == "table" and type(c.r) == "number" then
+		return string.format("|cff%02x%02x%02x", math.floor(c.r * 255 + 0.5), math.floor((c.g or 0) * 255 + 0.5), math.floor((c.b or 0) * 255 + 0.5))
+	end
+	return "|cffffffff"
+end
+
+local function BuildCharactersPage(parent)
+	local layout = NewLayout(parent)
+	Header(layout, "Characters")
+	Note(layout, "Everything Bank Tabs has saved. Hide keeps what is saved but takes the character off the tabs, the item tooltips and the gold total. Delete forgets it for good, which is how to clear out a character that no longer exists. Click Delete twice to confirm.", 0, 3)
+
+	Check(layout, "Show characters and guild banks from other realms", "Off, only the realm you are playing on has tabs, tooltip lines and a share of the gold total. Nothing is deleted: the others come back when you switch this on or log in over there.",
+		function() return ns.db.vault.otherRealms ~= false end,
+		function(value)
+			ns.db.vault.otherRealms = value and true or false
+			ns.Vault.Changed()
+		end)
+
+	local scroll
+	local okScroll, made = pcall(CreateFrame, "ScrollFrame", NextName("Roster"), parent, "UIPanelScrollFrameTemplate")
+	if okScroll and made then scroll = made else scroll = CreateFrame("ScrollFrame", NextName("Roster"), parent) end
+	scroll:SetSize(PANE_W - 26, LIST_H)
+	Place(layout, scroll, LIST_H, 0)
+	local child = CreateFrame("Frame", nil, scroll)
+	child:SetSize(PANE_W - 26, ROW_H)
+	scroll:SetScrollChild(child)
+	if scroll.EnableMouseWheel then
+		scroll:EnableMouseWheel(true)
+		scroll:SetScript("OnMouseWheel", function(self, delta)
+			local range = math.max(0, (child:GetHeight() or 0) - LIST_H)
+			local at = (self.GetVerticalScroll and self:GetVerticalScroll()) or 0
+			self:SetVerticalScroll(math.max(0, math.min(range, at - delta * ROW_H * 2)))
+		end)
+	end
+
+	local rows, state = {}, {}
+	parent.csRoster = { rows = rows, state = state, scroll = scroll, child = child }
+
+	local Redraw
+
+	local function Row(index)
+		local row = rows[index]
+		if row then return row end
+		row = CreateFrame("Frame", nil, child)
+		row:SetSize(PANE_W - 26, ROW_H)
+		row:SetPoint("TOPLEFT", 0, -(index - 1) * ROW_H)
+		row.text = row:CreateFontString(nil, "ARTWORK", "GameFontHighlight")
+		row.text:SetPoint("LEFT", 4, 0)
+		row.text:SetJustifyH("LEFT")
+		row.delete = ns.Button(row, "Delete", 62, 20, function(self)
+			local item = row.csItem
+			if not item or item.mine then return end
+			local id = item.kind .. ":" .. item.key
+			if state.confirm == id and (GetTime() - (state.confirmAt or 0)) <= 4 then
+				state.confirm = nil
+				ns.Vault.Forget(item.kind, item.key)
+				ns.Print("deleted what was saved for " .. item.label .. ".")
+				ns.SyncOptions()
+			else
+				state.confirm, state.confirmAt = id, GetTime()
+				ns.After(4.1, function() if state.confirm == id then state.confirm = nil ns.SyncOptions() end end)
+				Redraw()
+			end
+		end)
+		row.delete:SetPoint("RIGHT", -2, 0)
+		row.hide = ns.Button(row, "Hide", 54, 20, function()
+			local item = row.csItem
+			if not item or item.mine then return end
+			ns.Vault.SetHidden(item.kind, item.key, not item.hidden)
+			ns.SyncOptions()
+		end)
+		row.hide:SetPoint("RIGHT", row.delete, "LEFT", -4, 0)
+		row.text:SetPoint("RIGHT", row.hide, "LEFT", -6, 0)
+		if row.text.SetWordWrap then row.text:SetWordWrap(false) end
+		-- The window's copy wears the window style; rows made after it was drawn are dressed here.
+		local content = parent:GetParent()
+		if content and content.csStyled and ns.SkinOptionsPart then ns.SkinOptionsPart(row) end
+		rows[index] = row
+		return row
+	end
+
+	Redraw = function()
+		local blocks = ns.Vault.Roster()
+		local n = 0
+		local function Line(item)
+			n = n + 1
+			local row = Row(n)
+			row.csItem = item
+			row.text:SetText(item.text)
+			local buttons = item.kind ~= nil
+			row.hide:SetShown(buttons)
+			row.delete:SetShown(buttons)
+			if buttons then
+				row.hide:SetText(item.hidden and "Show" or "Hide")
+				row.hide:SetEnabled(not item.mine)
+				row.delete:SetEnabled(not item.mine)
+				local confirming = state.confirm == (item.kind .. ":" .. item.key)
+				row.delete:SetText(confirming and "Sure?" or "Delete")
+			end
+			row:SetAlpha((item.kind and not item.shown) and 0.55 or 1)
+			row:Show()
+		end
+		for _, block in ipairs(blocks) do
+			Line({ text = "|cffffd100" .. (block.realm or "Realm not saved") .. "|r" .. (block.here and "  |cff909090(this realm)|r" or "") })
+			for _, c in ipairs(block.chars) do
+				local entry = c.entry
+				local bits = {}
+				if entry.level then bits[#bits + 1] = tostring(entry.level) end
+				local saved = {}
+				if entry.bank then saved[#saved + 1] = "bank" end
+				if entry.bags then saved[#saved + 1] = "bags" end
+				local latest = math.max(entry.bank and entry.bank.time or 0, entry.bags and entry.bags.time or 0)
+				local label = ns.ShortLabel(c.who)
+				Line({ kind = "char", key = c.who, label = label, mine = c.mine, hidden = entry.hidden and true or false, shown = c.shown,
+					text = "   " .. ClassHex(entry.class) .. label .. "|r  |cff909090" .. table.concat(bits, " ")
+						.. (#saved > 0 and ("  " .. table.concat(saved, ", ")) or "  nothing saved")
+						.. (c.mine and "  (playing now)" or (latest > 0 and ("  " .. SeenAgo(latest)) or ""))
+						.. (entry.hidden and "  hidden" or "") .. "|r" })
+			end
+			for _, g in ipairs(block.guilds) do
+				local name = (g.key:gsub(" %- .*$", ""))
+				Line({ kind = "guild", key = g.key, label = name .. "'s guild bank", mine = false, hidden = g.record.hidden and true or false, shown = g.shown,
+					text = "   Guild bank: " .. name .. "  |cff909090" .. (SeenAgo(g.record.time) or "")
+						.. (g.record.hidden and "  hidden" or "") .. "|r" })
+			end
+		end
+		for i = n + 1, #rows do rows[i]:Hide() end
+		child:SetHeight(math.max(ROW_H, n * ROW_H))
+		parent.csRoster.count = n
+	end
+	parent.csRoster.Redraw = Redraw
+	widgets[#widgets + 1] = { refresh = Redraw }
+end
+
 local function BuildAboutPage(parent)
 	local layout = NewLayout(parent)
 	Header(layout, "About Bank Tabs")
@@ -452,6 +604,7 @@ local function BuildAboutPage(parent)
 		"/banktabs bank, bags or guild open the saved bank, bags or guild bank, each a window of its own",
 		"/banktabs snapshot saves what is open in front of you",
 		"/banktabs gold lists every character's gold",
+		"/banktabs characters hides or deletes saved characters",
 		"/banktabs lock or unlock turns every window switch off or on",
 		"/banktabs minimap shows or hides the minimap button",
 		"/banktabs style auto, blizzard or dark picks the window style",
@@ -474,6 +627,7 @@ end
 local PAGES = {
 	{ key = "windows", label = "Windows", build = BuildWindowsPage },
 	{ key = "vault", label = "Bank snapshots", build = BuildVaultPage },
+	{ key = "characters", label = "Characters", build = BuildCharactersPage },
 	{ key = "look", label = "Look", build = BuildLookPage },
 	{ key = "about", label = "About", build = BuildAboutPage },
 }
@@ -698,6 +852,19 @@ function ns.ToggleOptions(forceWindow)
 
 	if not forceWindow and ns.OpenBlizzardOptions() then return end
 	window:Show()
+end
+
+-- Opens the options on one page: in the game's own options when that is where they are open, else
+-- in Bank Tabs' own window, which opens from anywhere. `key` is a page key ("characters").
+function ns.ShowOptionsPage(key)
+	BuildPageContent()
+	BuildWindow()
+	if PageIsOpen() then
+		ShowPage(blocks.page, key)
+		return
+	end
+	if not window:IsShown() then window:Show() end
+	if blocks.window then ShowPage(blocks.window, key) end
 end
 
 local function BuildOptionsCategory()

@@ -16,7 +16,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "2.2.0"
+ns.version = "2.3.0"
 ns.report = {}
 
 local report = ns.report
@@ -62,6 +62,7 @@ ns.defaults = {
 		bagButtons = true,
 		showAccountGold = true, -- the account's gold, small, in the replica's bottom left corner
 		moneyTooltip = true,    -- hovering the money on a bag or bank window lists every character's gold
+		otherRealms = true,     -- characters and guild banks saved on other realms are shown too
 	},
 
 	-- Lines on item tooltips: which characters have the item and where, from the snapshots.
@@ -918,6 +919,69 @@ function ns.Money(amount)
 end
 
 -- ------------------------------------------------------------------
+-- Gamepad navigation
+-- ------------------------------------------------------------------
+
+-- On a gamepad the d-pad steps through a window's buttons, and the bag windows are walked as a grid:
+-- every button anywhere in the window is filed into a column by where its centre lies
+-- (SmartNavigationMixin:UpdateGrid in Blizzard_GamepadSmartNavigation), and anything with a mouse
+-- script counts as a button. The tabs above the backpack and the drag strip across a window's top
+-- are children of that window, so each made a column of its own between the item columns, and
+-- stepping left or right through the middle of the bags jumped up onto them (a player reported
+-- exactly that). The game has a mark for frames its navigation should leave alone, which addons may
+-- set without taint, but only out of combat: asked for in combat it is refused with the "interface
+-- action failed" message. So a frame that cannot be marked yet waits, and is marked when combat
+-- ends, when the navigation addon loads, or the next time the backpack opens.
+local navPending = {}
+
+local function NavRestricted()
+	local R, kinds = C_RestrictedActions, type(Enum) == "table" and Enum.AddOnRestrictionType
+	if R and R.IsAddOnRestrictionActive and type(kinds) == "table" and kinds.Combat ~= nil then
+		local ok, active = pcall(R.IsAddOnRestrictionActive, kinds.Combat)
+		if ok then return active and true or false end
+	end
+	if InCombatLockdown then
+		local ok, locked = pcall(InCombatLockdown)
+		return ok and locked and true or false
+	end
+	return false
+end
+
+local function MarkNavIgnored(frame)
+	local mark = _G.SmartNavigation_MarkFrameIgnored
+	if type(mark) ~= "function" or NavRestricted() then return false end
+	return pcall(mark, frame) and true or false
+end
+
+-- Keeps a frame of ours, and everything inside it, out of the gamepad's d-pad navigation.
+function ns.GamepadIgnore(frame)
+	if type(frame) ~= "table" or frame.csNavIgnored then return end
+	if MarkNavIgnored(frame) then
+		frame.csNavIgnored = true
+		navPending[frame] = nil
+	else
+		navPending[frame] = true
+	end
+end
+
+-- Another go at the frames still waiting for their mark.
+function ns.GamepadIgnoreFlush()
+	local waiting = 0
+	for frame in pairs(navPending) do
+		if MarkNavIgnored(frame) then
+			frame.csNavIgnored = true
+			navPending[frame] = nil
+		else
+			waiting = waiting + 1
+		end
+	end
+	report["gamepad navigation"] = (type(_G.SmartNavigation_MarkFrameIgnored) ~= "function" and "the game's navigation is not loaded")
+		or (waiting > 0 and (waiting .. " frames waiting to be marked (in combat)"))
+		or "the backpack tabs and drag strips are left out of it"
+	return waiting
+end
+
+-- ------------------------------------------------------------------
 -- Event frame
 -- ------------------------------------------------------------------
 
@@ -943,6 +1007,8 @@ local EVENTS = {
 	"GUILDBANKBAGSLOTS_CHANGED",
 	"BAG_OPEN",
 	"BAG_CLOSED",
+	"PLAYER_REGEN_ENABLED",
+	"ADDON_RESTRICTION_STATE_CHANGED",
 }
 
 -- Some of these do not exist on every build. RegisterEvent on an unknown event errors, so each
@@ -1015,7 +1081,11 @@ frame:SetScript("OnEvent", function(self, event, ...)
 		local name = ...
 		if name == ADDON then
 			Init()
-		elseif ns.Windows and ns.Windows.Sweep then
+		else
+			-- The game's gamepad navigation may load after the frames it has to leave alone were made.
+			if name == "Blizzard_GamepadSmartNavigation" then pcall(ns.GamepadIgnoreFlush) end
+		end
+		if name ~= ADDON and ns.Windows and ns.Windows.Sweep then
 			-- Blizzard_GuildBankUI and the other load on demand panels only exist once the game
 			-- has needed them, so every addon that loads gets a second look for new windows.
 			pcall(ns.Windows.Sweep, "addon " .. tostring(name))
@@ -1052,6 +1122,12 @@ frame:SetScript("OnEvent", function(self, event, ...)
 			if not ok then report["casement import"] = "failed at logout: " .. tostring(err) end
 		end
 		MirrorToAccount()
+		return
+	end
+
+	if event == "PLAYER_REGEN_ENABLED" or event == "ADDON_RESTRICTION_STATE_CHANGED" then
+		-- The restriction is lifted by the time its event has been dealt out, so the marks wait a moment.
+		ns.After(0.2, ns.GamepadIgnoreFlush)
 		return
 	end
 
@@ -1115,6 +1191,9 @@ SlashCmdList["BANKTABS"] = function(msg)
 		if which == "guildbank" then which = "guild" end
 		if which ~= "bank" and which ~= "bags" and which ~= "guild" then which = nil end
 		ns.VaultUI.Toggle(which)
+
+	elseif cmd == "characters" or cmd == "chars" then
+		if ns.ShowOptionsPage then ns.ShowOptionsPage("characters") else Print("The options are not built on this client, see /banktabs debug.") end
 
 	elseif cmd == "snapshot" then
 		if not (ns.Vault and ns.Vault.SnapshotNow) then Print("Snapshots are not available on this client.") return end

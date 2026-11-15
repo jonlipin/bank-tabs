@@ -254,6 +254,8 @@ local function BuildGrip(entry)
 	grip:SetScript("OnLeave", function() hint:Hide() end)
 
 	WireDrag(grip, entry)
+	-- Not a stop for a gamepad's d-pad on its way through the window (ns.GamepadIgnore).
+	ns.GamepadIgnore(grip)
 	entry.grip = grip
 	return grip
 end
@@ -272,6 +274,7 @@ local function BuildOverlay(entry)
 	overlay.tint = tint
 	overlay:Hide()
 	WireDrag(overlay, entry)
+	ns.GamepadIgnore(overlay)
 	entry.overlay = overlay
 	return overlay
 end
@@ -520,6 +523,7 @@ function Windows.WireRegion(region, frame)
 	if not entry then return false end
 	region.csOurs = true
 	WireDrag(region, entry)
+	ns.GamepadIgnore(region)
 	return true
 end
 

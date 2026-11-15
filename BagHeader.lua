@@ -175,6 +175,8 @@ local function BuildSet(frame)
 			GameTooltip:Show()
 		end)
 		tab:SetScript("OnLeave", function() GameTooltip:Hide() end)
+		-- Not a stop for a gamepad's d-pad on its way through the bags (ns.GamepadIgnore).
+		ns.GamepadIgnore(tab)
 		set.list[index] = tab
 		set.byKey[spec.key] = tab
 	end
@@ -243,6 +245,8 @@ function BagHeader.Update(frame)
 		return
 	end
 	if not set then set = BuildSet(frame) end
+	-- Frames made in combat could not be marked then; the backpack opening is a good moment to retry.
+	ns.GamepadIgnoreFlush()
 
 	-- While a window style is drawn (Dark, or EllesmereUI's), the tabs wear its tab look, on the
 	-- game's backpack as on the saved windows, and stand on the window's edge. A style drawn after

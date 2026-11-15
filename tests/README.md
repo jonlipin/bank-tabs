@@ -11,18 +11,18 @@ node tests/banktabstest.js [addon dir] [--bare] [--verbose] [--noenum] [--eui | 
 
 Run it from the repo root; the addon dir defaults to the folder above `tests`.
 
-- no flags: 975 checks against the normal client, WoW Forever as its own interface code describes
+- no flags: 1030 checks against the normal client, WoW Forever as its own interface code describes
   it: its real `Enum.BagIndex`, its bank tabs through `C_Bank` (a Bag Slot is a bank tab, its bag
   in the `Characterbanktab` container), the bank drawn as one grid of every tab, and `UnitName`
   giving a first name and a surname. The window style is Automatic with no EllesmereUI, so nothing
   is drawn until the Look page picks Dark, which is then drawn at once.
-- `--bare`: 962; every UI template and atlas is missing, so every fallback path runs. As on the
+- `--bare`: 1017; every UI template and atlas is missing, so every fallback path runs. As on the
   client, `SetAtlas` raises nothing for a missing atlas, so only a real check of the atlas table
   lets a fallback step in.
-- `--noenum`: 950; a classic client: no `Enum.BagIndex` and no bank tabs, so the bank scan falls back
+- `--noenum`: 1005; a classic client: no `Enum.BagIndex` and no bank tabs, so the bank scan falls back
   to the classic container ids, the bank bags hang off inventory slots and the saved bank shows one
   tab or bag at a time
-- `--dark` (or `DARK=1`): 1002; the player has chosen the Dark window style, drawn as the world comes
+- `--dark` (or `DARK=1`): 1057; the player has chosen the Dark window style, drawn as the world comes
   up after the first login. Dark's own drawing calls write down what they were called on, as the
   EllesmereUI stand-in's do, and still draw: every saved window, slot, tab and options window
   control is checked as drawn, and so are the Bank, Bags and Guild tabs on the game's backpack
@@ -30,12 +30,12 @@ Run it from the repo root; the addon dir defaults to the folder above `tests`.
   shape under a 1 pixel edge, with the backdrop as opaque as the
   setting says and Dark's accent line under the chosen tab only, while the options page in the
   game's panel keeps the game's look.
-- `--eui` (or `EUI=1`): 1007; a stand-in EllesmereUI whose skinning facade writes down every call
+- `--eui` (or `EUI=1`): 1062; a stand-in EllesmereUI whose skinning facade writes down every call
   per frame and calls the skin back at PLAYER_LOGIN, plus a stand-in for its Bags module's window
   (`EUI_MainBagFrame`): every saved window, slot, tab and options window control is checked as
   skinned, with no skin errors, and the Bank, Bags and Guild tabs hang on that window, follow it,
   wrap and switch.
-- `--euibags`: 989; EllesmereUI and its Bags window with the Blizzard Skins+ module off, so the skin
+- `--euibags`: 1044; EllesmereUI and its Bags window with the Blizzard Skins+ module off, so the skin
   never runs: the saved windows keep the game's look, and the tabs on EllesmereUI's window are Bank
   Tabs' own flat ones until the Look page picks Dark, when they give way to Dark's tabs.
 - The modes combine: `--bare` or `--noenum` with any of the others, and `--dark` with `--eui`

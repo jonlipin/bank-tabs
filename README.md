@@ -134,6 +134,7 @@ Everything is on by default except the drag strip outlines, and the window style
 | `/banktabs guild` | Opens the saved guild bank, or closes it when it is in front |
 | `/banktabs snapshot` | Saves your bags, and the bank or guild bank if one is open |
 | `/banktabs gold` | Lists every character's gold and the account total |
+| `/banktabs characters` | Opens the Characters page: hide or delete saved characters and guild banks |
 | `/banktabs lock` / `unlock` | Turns every window switch off or on |
 | `/banktabs reset` | Puts every bag and bank window back where the game had it, and forgets where you left the saved windows |
 | `/banktabs grips` | Outlines the part of each window you can drag |
@@ -186,8 +187,11 @@ read them.
   no guild, the first saved by name); every other saved guild bank is a tab away, and item
   tooltips count each one. A guild bank shows what the last character to open it could see.
 - A guild bank tab your rank cannot view keeps what a character who could view it saved.
-- There is no way yet to remove a character you deleted or moved: it keeps its tab, its tooltip
-  lines and its share of the account gold.
+- A character you deleted in game, or one on a realm you have left, stays saved until you hide or
+  delete it on the Characters page of the options (`/banktabs characters`, or right-click a
+  character tab). The switch there leaves out every other realm at once.
+- On a gamepad the d-pad steps through the bags and skips the tabs above the backpack; click them
+  with the cursor.
 - Built for WoW Forever (build 1.60.1) only.
 
 ## If something does not work
@@ -217,12 +221,12 @@ addon still running, nothing present, already imported, and the ways those go wr
 the package files.
 
 ```
-node tests/banktabstest.js              # the normal client: 975 checks
-node tests/banktabstest.js --bare       # every UI template missing: 962
-node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 950
-node tests/banktabstest.js --dark       # the Dark window style chosen: 1002
-node tests/banktabstest.js --eui        # a stand-in EllesmereUI and its bag window: 1007
-node tests/banktabstest.js --euibags    # EllesmereUI's bag window, its skins off: 989
+node tests/banktabstest.js              # the normal client: 1030 checks
+node tests/banktabstest.js --bare       # every UI template missing: 1017
+node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 1005
+node tests/banktabstest.js --dark       # the Dark window style chosen: 1057
+node tests/banktabstest.js --eui        # a stand-in EllesmereUI and its bag window: 1062
+node tests/banktabstest.js --euibags    # EllesmereUI's bag window, its skins off: 1044
 ```
 
 Run it from the repo root. It needs `fengari` on the module path (for example through

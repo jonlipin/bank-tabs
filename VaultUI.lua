@@ -189,8 +189,9 @@ end
 function VaultUI.Guilds()
 	local mine = ns.Vault.GuildKey and ns.Vault.GuildKey()
 	local list, keys = {}, {}
-	for key in pairs(ns.vault and ns.vault.guilds or {}) do
-		if key ~= mine then keys[#keys + 1] = key end
+	for key, record in pairs(ns.vault and ns.vault.guilds or {}) do
+		-- Not the hidden ones, nor other realms' while those are left out (Vault.GuildShown).
+		if key ~= mine and ns.Vault.GuildShown(key, record) then keys[#keys + 1] = key end
 	end
 	table.sort(keys)
 	if mine then list[1] = { key = mine, record = ns.vault.guilds[mine], mine = true } end
@@ -864,6 +865,7 @@ local function CharTabTooltip(self)
 	end
 	local gold = GoldOf(self.csWho)
 	if gold then GameTooltip:AddDoubleLine("Gold", ns.Money(gold), 1, 0.82, 0, 1, 1, 1) end
+	GameTooltip:AddLine("Right-click to hide or delete characters", 0.5, 0.5, 0.5)
 	GameTooltip:Show()
 end
 
@@ -912,8 +914,15 @@ end
 
 local function NewCharTab(W, index)
 	local tab = ns.CreateTab(W.frame)
-	tab:SetScript("OnClick", function(self)
+	if tab.RegisterForClicks then tab:RegisterForClicks("LeftButtonUp", "RightButtonUp") end
+	tab:SetScript("OnClick", function(self, button)
 		self:SetChecked(false)
+		-- A right click goes to the Characters page of the options, where a character or a guild bank
+		-- can be hidden or deleted.
+		if button == "RightButton" then
+			if ns.ShowOptionsPage then ns.ShowOptionsPage("characters") end
+			return
+		end
 		Front(W)
 		W.who = self.csWho
 		W.viewing, W.viewingBag = nil, nil
