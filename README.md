@@ -64,6 +64,9 @@ everything Casement saved over to Bank Tabs; see [Coming from Casement](#coming-
 - Separate switches for the combined bag window, the individual bag windows, the reagent bag
   (where the client has one), the bank window with its bank bags, and the guild bank, each with
   its own Reset.
+- "Reagent bag inside the combined backpack" (off by default) puts the reagent bag's slots in
+  the combined backpack, in rows of their own above the bags, instead of in a window beside it.
+  They are the game's own slots and work the same.
 - Drag any of them by the strip along the top edge, the close button left clear. The strip is
   invisible unless you switch on "Show me where the drag strips are".
 - Hold alt (or shift, or ctrl, your choice, or switch it off) and you can drag a window from
@@ -192,6 +195,8 @@ read them.
   character tab). The switch there leaves out every other realm at once.
 - On a gamepad the d-pad steps through the bags and skips the tabs above the backpack; click them
   with the cursor.
+- The reagent bag sits inside the combined backpack only while the game has it open, which is
+  whenever all the bags are opened. The backpack opened on its own shows without it.
 - Built for WoW Forever (build 1.60.1) only.
 
 ## If something does not work
@@ -221,12 +226,12 @@ addon still running, nothing present, already imported, and the ways those go wr
 the package files.
 
 ```
-node tests/banktabstest.js              # the normal client: 1030 checks
-node tests/banktabstest.js --bare       # every UI template missing: 1017
-node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 1005
-node tests/banktabstest.js --dark       # the Dark window style chosen: 1057
-node tests/banktabstest.js --eui        # a stand-in EllesmereUI and its bag window: 1062
-node tests/banktabstest.js --euibags    # EllesmereUI's bag window, its skins off: 1044
+node tests/banktabstest.js              # the normal client: 1074 checks
+node tests/banktabstest.js --bare       # every UI template missing: 1061
+node tests/banktabstest.js --noenum     # no Enum.BagIndex, classic bank ids: 1008
+node tests/banktabstest.js --dark       # the Dark window style chosen: 1101
+node tests/banktabstest.js --eui        # a stand-in EllesmereUI and its bag window: 1065
+node tests/banktabstest.js --euibags    # EllesmereUI's bag window, its skins off: 1047
 ```
 
 Run it from the repo root. It needs `fengari` on the module path (for example through

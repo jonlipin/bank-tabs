@@ -16,7 +16,7 @@
 
 local ADDON, ns = ...
 
-ns.version = "2.3.0"
+ns.version = "2.4.0"
 ns.report = {}
 
 local report = ns.report
@@ -49,6 +49,9 @@ ns.defaults = {
 
 	-- Draw a faint outline over the strip of each window that can be dragged.
 	showGrips = false,
+
+	-- The reagent bag shown inside the combined backpack instead of in a window of its own.
+	reagentInBackpack = false,
 
 	-- A button on the minimap rim. `angle` is degrees around it, kept when the user drags it.
 	minimap = {
@@ -266,6 +269,7 @@ function ns.Refresh()
 	if ns.Windows and ns.Windows.Apply then pcall(ns.Windows.Apply) end
 	if ns.Minimap and ns.Minimap.Apply then pcall(ns.Minimap.Apply) end
 	if ns.BagHeader and ns.BagHeader.Apply then pcall(ns.BagHeader.Apply) end
+	if ns.ReagentDock and ns.ReagentDock.Apply then pcall(ns.ReagentDock.Apply) end
 end
 
 -- Every character's gold and the total, as a tooltip on `owner`. Shown from the money on the
@@ -1061,6 +1065,10 @@ local function Init()
 		local ok, err = pcall(ns.BagHeader.Init)
 		report["bag header"] = ok and "ok" or ("failed: " .. tostring(err))
 	end
+	if ns.ReagentDock and ns.ReagentDock.Init then
+		local ok, err = pcall(ns.ReagentDock.Init)
+		report["reagent dock"] = ok and "ok" or ("failed: " .. tostring(err))
+	end
 	if ns.Minimap and ns.Minimap.Init then
 		local ok, err = pcall(ns.Minimap.Init)
 		report["minimap"] = ok and "ok" or ("failed: " .. tostring(err))
@@ -1128,11 +1136,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
 	if event == "PLAYER_REGEN_ENABLED" or event == "ADDON_RESTRICTION_STATE_CHANGED" then
 		-- The restriction is lifted by the time its event has been dealt out, so the marks wait a moment.
 		ns.After(0.2, ns.GamepadIgnoreFlush)
+		if ns.ReagentDock and ns.ReagentDock.OnEvent then pcall(ns.ReagentDock.OnEvent, event) end
 		return
 	end
 
 	if ns.Windows and ns.Windows.OnEvent then pcall(ns.Windows.OnEvent, event, ...) end
 	if ns.Vault and ns.Vault.OnEvent then pcall(ns.Vault.OnEvent, event, ...) end
+	if ns.ReagentDock and ns.ReagentDock.OnEvent then pcall(ns.ReagentDock.OnEvent, event) end
 end)
 
 -- ------------------------------------------------------------------

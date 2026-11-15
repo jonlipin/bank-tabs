@@ -67,6 +67,8 @@ for i = 1, 17 do CONTAINER_NAMES[#CONTAINER_NAMES + 1] = "ContainerFrame" .. i e
 
 local function ContainerOption(frame)
 	if frame == _G.ContainerFrameCombinedBags then return "combined", "combined" end
+	-- A reagent bag shown inside the combined backpack is part of that window, not one to place.
+	if ns.ReagentDock and ns.ReagentDock.Holds(frame) then return nil end
 	local id = frame.GetID and frame:GetID() or nil
 	if type(id) ~= "number" then return nil end
 	local reagent = ReagentBagIndex()

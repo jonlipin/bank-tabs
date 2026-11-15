@@ -282,6 +282,10 @@ local function BuildWindowsPage(parent)
 		CheckWithReset(layout, group.label, nil, group.key)
 	end
 
+	Check(layout, "Reagent bag inside the combined backpack", "With the bags combined, the reagent bag's slots sit in the backpack, in rows of their own above the bags, instead of in a window beside it. They are the same slots and work the same. It shows whenever the game opens the reagent bag with the backpack, which is whenever all the bags are opened.",
+		function() return ns.db.reagentInBackpack end,
+		function(value) ns.db.reagentInBackpack = value end)
+
 	layout.y = layout.y + 6
 	Choice(layout, "Hold this key to drag a window from anywhere", {
 		{ value = "none", label = "Off" },

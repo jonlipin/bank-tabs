@@ -24,7 +24,7 @@ const { lua, lauxlib, lualib, to_luastring } = require('fengari');
 let DIR = process.argv.slice(2).find(a => !a.startsWith('--')) || path.resolve(__dirname, '..');
 DIR = DIR.replace(/\\/g, '/');
 if (!DIR.endsWith('/')) DIR += '/';
-const files = ['Core.lua', 'Import.lua', 'Windows.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'Tooltips.lua', 'Options.lua', 'Styles.lua', 'BankTabs_Skins.lua'];
+const files = ['Core.lua', 'Import.lua', 'Windows.lua', 'Minimap.lua', 'Vault.lua', 'VaultUI.lua', 'BagHeader.lua', 'BagReagent.lua', 'Tooltips.lua', 'Options.lua', 'Styles.lua', 'BankTabs_Skins.lua'];
 
 const stub = String.raw`
 local VERBS = { "Set", "Get", "Is", "Create", "Register", "Enable", "Clear", "Hook", "Start", "Stop", "Has", "Num", "Add", "Unregister", "Disable", "Raise", "Lower", "Lock", "Unlock", "Show", "Hide", "Insert", "Toggle" }
@@ -728,6 +728,11 @@ ContainerFrameCombinedBags = CreateFrame("Frame", "ContainerFrameCombinedBags", 
 ContainerFrameCombinedBags:SetSize(420, 600)
 ContainerFrameCombinedBags:SetPoint("BOTTOMRIGHT", UIParent, "BOTTOMRIGHT", -20, 100)
 ContainerFrameCombinedBags:Hide()
+-- What the reagent rows are built on: how many rows of slots the combined backpack has, and the
+-- sizing the game runs whenever that changes (rows of 37 with 5 between, and its padding).
+COMBINED_SLOTS = 76
+function ContainerFrameCombinedBags:GetRows() return math.ceil(COMBINED_SLOTS / 10) end
+function ContainerFrameCombinedBags:UpdateFrameSize() self:SetSize(420, self:GetRows() * 42 - 5 + 103) end
 
 -- The money readouts on the game's own windows: a frame with the coin buttons inside it.
 local function moneyFrame(parent, name)
@@ -1037,7 +1042,7 @@ check("with no old Casement installed the window engine does not wait for login"
 check("the old commands are not taken before login", SLASH_BANKTABS1 == "/banktabs" and SLASH_BANKTABS3 == nil and SLASH_BANKTABS4 == nil)
 
 do -- scope: 1b. This is Bank Tabs, and only its half of Casement
-check("the version is 2.3.0", ns.version == "2.3.0", ns.version)
+check("the version is 2.4.0", ns.version == "2.4.0", ns.version)
 check("the saved variables are Bank Tabs' own", ns.db == BankTabsDB and ns.vault == BankTabsAccountDB.vault
   and CasementDB == nil and CasementAccountDB == nil)
 check("the event frame is Bank Tabs' own", BankTabsFrame ~= nil and CasementFrame == nil)
@@ -3452,6 +3457,258 @@ check("letting go puts it away", bagOverlay.shown == false)
 
 end -- scope
 
+do -- scope: 11j. The reagent bag inside the combined backpack
+-- ------------------------------------------------------------------
+-- 11j. The reagent bag inside the combined backpack
+-- ------------------------------------------------------------------
+-- The game's reagent bag window, as far as this needs it: a frame and a close button, a
+-- background, a portrait with a button in it, and item buttons the game lays out four across
+-- from the bottom right, last slot first.
+local combined, bag = ContainerFrameCombinedBags, ContainerFrame6
+local money = combined.MoneyFrame
+local KEY = "reagent bag in the backpack"
+local backpackWasShown = ContainerFrame1.shown
+ContainerFrame1:Hide()
+bag:SetID(5)
+bag:EnableMouse(true)
+local bagBg = bag:CreateTexture(nil, "BACKGROUND")
+local portrait = CreateFrame("Frame", nil, bag)
+local portraitButton = CreateFrame("Button", nil, portrait)
+portraitButton:EnableMouse(true)
+bag.Items = {}
+-- A spare item button waiting in the window's pool: hidden, and not one of the bag's slots.
+local spare = CreateFrame("ItemButton", nil, bag)
+rawset(spare, "GetBagID", function() return 5 end)
+spare:EnableMouse(true)
+spare:Hide()
+-- How many across the game lays the bag out.
+local across = 4
+local function Slots(n)
+  for i = #bag.Items + 1, n do
+    local b = CreateFrame("ItemButton", nil, bag)
+    b:SetSize(37, 37)
+    b:EnableMouse(true)
+    rawset(b, "GetBagID", function() return 5 end)
+    bag.Items[i] = b
+  end
+  for i, b in ipairs(bag.Items) do b:SetID(n - i + 1) end
+end
+function bag:UpdateItemLayout()
+  for i, b in ipairs(self.Items) do
+    local at = i - 1
+    b:ClearAllPoints()
+    b:SetPoint("BOTTOMRIGHT", self, "BOTTOMRIGHT", -7 - (at % across) * 42, 9 + math.floor(at / across) * 42)
+  end
+end
+-- All the bags opened, as the B key does it: the backpack sized and shown, the reagent bag shown
+-- and laid out, and every open bag window scaled alike and re-stacked.
+local function OpenAll()
+  combined:UpdateFrameSize()
+  combined:Show()
+  bag:Show()
+  bag:UpdateItemLayout()
+  combined:SetScale(0.9)
+  bag:SetScale(0.9)
+  UpdateContainerFrameAnchors()
+  RunTimers(0.1)
+end
+local function CloseAll()
+  combined:Hide()
+  bag:Hide()
+  UpdateContainerFrameAnchors()
+  RunTimers(0.1)
+end
+local function InBackpack(rows)
+  local lift = 4 + rows * 42 - 5 + 17
+  for i, b in ipairs(bag.Items) do
+    local p, at = b.points[1], i - 1
+    if #b.points ~= 1 or p[1] ~= "BOTTOMRIGHT" or p[2] ~= money or p[3] ~= "TOPRIGHT"
+      or not near(p[4], -(at % 10) * 42) or not near(p[5], lift + math.floor(at / 10) * 42) then return false end
+  end
+  return true
+end
+local function InBag()
+  for i, b in ipairs(bag.Items) do
+    local p, at = b.points[1], i - 1
+    if #b.points ~= 1 or p[2] ~= bag or not near(p[4], -7 - (at % across) * 42) or not near(p[5], 9 + math.floor(at / across) * 42) then return false end
+  end
+  return true
+end
+local function Line()
+  for _, f in ipairs(FRAMES) do if f.parent == combined and f.line then return f end end
+  return nil
+end
+local function Faded()
+  return bag.testClose:GetAlpha() == 0 and bag.testClose.mouse == false and bagBg:GetAlpha() == 0 and bag.mouse == false
+    and portrait:GetAlpha() == 0 and portraitButton.mouse == false
+end
+local function Unfaded()
+  return bag.testClose:GetAlpha() == 1 and bag.testClose.mouse == true and bagBg:GetAlpha() == 1 and bag.mouse == true
+    and portrait:GetAlpha() == 1 and portraitButton.mouse == true
+end
+local function SlotsUntouched()
+  for _, b in ipairs(bag.Items) do
+    if b:GetAlpha() ~= 1 or b.mouse ~= true or b.parent ~= bag then return false end
+  end
+  return true
+end
+local EXTRA2, EXTRA3 = 2 * 42 - 5 + 17, 3 * 42 - 5 + 17
+local H8, H9 = 8 * 42 - 5 + 103, 9 * 42 - 5 + 103
+
+check("the reagent bag in the backpack is off unless asked for", ns.defaults.reagentInBackpack == false and ns.db.reagentInBackpack == false)
+Slots(12)
+OpenAll()
+
+if NO_ENUM or EUI_MainBagFrame ~= nil then
+  ns.db.reagentInBackpack = true
+  ns.Refresh()
+  UpdateContainerFrameAnchors()
+  if NO_ENUM then
+    check("a client with no reagent bag has nothing moved", bag.parent == UIParent and InBag() and Unfaded()
+      and near(combined:GetHeight(), H8) and ns.report[KEY] == "this client has no reagent bag", ns.report[KEY])
+  else
+    check("with EllesmereUI's bag window in use the game's bags are left alone", bag.parent == UIParent and InBag() and Unfaded()
+      and near(combined:GetHeight(), H8) and (ns.report[KEY] or ""):find("EllesmereUI", 1, true) ~= nil, ns.report[KEY])
+  end
+else
+  check("switched off, the reagent bag is left as the game has it", bag.parent == UIParent and InBag() and Unfaded() and Line() == nil
+    and near(combined:GetHeight(), H8) and bag:GetScale() == 0.9, combined:GetHeight())
+  check("and the report says it is off", ns.report[KEY] == "off", ns.report[KEY])
+  local stripBefore = ns.Windows.Entry(bag) and ns.Windows.Entry(bag).active
+
+  ns.db.reagentInBackpack = true
+  ns.Refresh()
+  check("switched on, its window becomes part of the backpack", bag.parent == combined)
+  check("its slots sit in rows of ten above the bags, the last slot bottom right", InBackpack(8))
+  local first, second = bag.Items[12], bag.Items[11]
+  check("read like a page: the short row on top against the right edge, slot 1 then slot 2", first:GetID() == 1 and second:GetID() == 2
+    and near(first.points[1][4], -42) and near(second.points[1][4], 0) and near(first.points[1][5], second.points[1][5])
+    and first.points[1][5] > bag.Items[1].points[1][5])
+  check("the backpack is taller by those rows and the gap", near(combined:GetHeight(), H8 + EXTRA2), combined:GetHeight())
+  local line = Line()
+  check("a line parts them from the bags", line ~= nil and line.shown == true and near(line.w, 415) and line.h == 1
+    and line.points[1][2] == money and near(line.points[1][5], 4 + 8 * 42 - 5 + 8), line and line.points[1] and line.points[1][5])
+  check("the window's own frame and buttons are faded out and take no mouse", Faded())
+  check("the slots themselves are the game's own, left as they were", SlotsUntouched())
+  check("a spare button in the window's pool is left alone too", spare:GetAlpha() == 1 and spare.mouse == true)
+  check("inside the backpack it is not scaled a second time", bag:GetScale() == 1, bag:GetScale())
+  check("it has no drag strip of its own while it is there", ns.Windows.OptionKey({ frame = bag, dynamic = true }) == nil
+    and ns.Windows.Entry(bag).active == false)
+  check("the report says where it is", ns.report[KEY] == "in the combined backpack: 12 slots in 2 rows", ns.report[KEY])
+
+  -- The game goes on running its own layout: each time it is put back at once, in the same call.
+  bag:UpdateItemLayout()
+  check("when the game lays the bag out again the slots are straight back in the backpack", InBackpack(8))
+  bag:SetScale(0.9)
+  UpdateContainerFrameAnchors()
+  check("and when it re-stacks and re-scales the bags", InBackpack(8) and bag:GetScale() == 1 and bag.parent == combined)
+  COMBINED_SLOTS = 86
+  combined:UpdateFrameSize()
+  check("when the backpack gains a row they move up with it", InBackpack(9) and near(combined:GetHeight(), H9 + EXTRA2), combined:GetHeight())
+  check("and the line with them", near(Line().points[1][5], 4 + 9 * 42 - 5 + 8))
+  combined:UpdateFrameSize()
+  check("the game sizing the backpack twice adds the rows once", near(combined:GetHeight(), H9 + EXTRA2), combined:GetHeight())
+  Slots(22)
+  bag:UpdateItemLayout()
+  check("a bigger reagent bag takes another row", InBackpack(9) and near(combined:GetHeight(), H9 + EXTRA3)
+    and ns.report[KEY] == "in the combined backpack: 22 slots in 3 rows", ns.report[KEY])
+  check("with its new slots untouched too", SlotsUntouched() and Faded())
+  -- The game changes how it lays the bag out while it is in the backpack: that is what it goes back to.
+  across = 5
+  bag:UpdateItemLayout()
+  check("a new layout of the game's is taken in the same way", InBackpack(9))
+
+  -- Switched off, every change is undone.
+  ns.db.reagentInBackpack = false
+  ns.Refresh()
+  check("switched off, the window is the game's again, at the game's scale", bag.parent == UIParent and bag:GetScale() == 0.9)
+  check("its slots are back where the game laid them out", InBag())
+  check("its frame and buttons are back and take the mouse", Unfaded())
+  check("the backpack has its own height back and the line is gone", near(combined:GetHeight(), H9) and Line().shown == false, combined:GetHeight())
+  check("and its drag strip is as it was", ns.Windows.OptionKey({ frame = bag, dynamic = true }) == "reagent"
+    and ns.Windows.Entry(bag).active == stripBefore)
+
+  -- The backpack closed on its own takes the reagent bag with it.
+  ns.db.reagentInBackpack = true
+  ns.Refresh()
+  check("switched on again it is back in", bag.parent == combined and InBackpack(9) and near(combined:GetHeight(), H9 + EXTRA3))
+  combined:Hide()
+  check("closing the backpack closes the reagent bag inside it", bag.shown == false and bag.parent == UIParent and InBag() and Unfaded()
+    and near(combined:GetHeight(), H9), combined:GetHeight())
+  OpenAll()
+  check("all the bags opened again puts it back in", bag.parent == combined and InBackpack(9) and Faded())
+  bag:Hide()
+  check("the reagent bag closing on its own gives the backpack its height back", near(combined:GetHeight(), H9) and Line().shown == false
+    and bag.parent == UIParent and Unfaded(), combined:GetHeight())
+  check("and the report says it is waiting for it", (ns.report[KEY] or ""):find("waiting for the reagent bag", 1, true) ~= nil, ns.report[KEY])
+  combined:Hide()
+  combined:Show()
+  check("the backpack opened without the reagent bag is the game's own size", near(combined:GetHeight(), H9) and Line().shown == false)
+
+  -- In combat a protected frame cannot be moved by an addon. Bag windows are not protected; were
+  -- they, nothing is tried until the fight ends.
+  CloseAll()
+  rawset(bag, "IsProtected", function() return true end)
+  IN_COMBAT = true
+  OpenAll()
+  check("in combat a protected bag window is left alone", bag.parent == UIParent and InBag() and near(combined:GetHeight(), H9)
+    and ns.report[KEY] == "waiting for combat to end", ns.report[KEY])
+  IN_COMBAT = false
+  fire("PLAYER_REGEN_ENABLED")
+  RunTimers(1)
+  check("and taken in when the fight ends", bag.parent == combined and InBackpack(9), ns.report[KEY])
+  rawset(bag, "IsProtected", nil)
+  CloseAll()
+  IN_COMBAT = true
+  OpenAll()
+  check("bag windows that are not protected are taken in during a fight too", bag.parent == combined and InBackpack(9))
+  IN_COMBAT = false
+
+  -- The game's gamepad interface puts the reagent bag in the backpack itself.
+  InputUtil = { IsGamepadUIEnabled = function() return true end }
+  ns.Refresh()
+  check("with the game's gamepad interface on it is left to the game", bag.parent == UIParent and InBag() and near(combined:GetHeight(), H9)
+    and (ns.report[KEY] or ""):find("gamepad", 1, true) ~= nil, ns.report[KEY])
+  InputUtil = nil
+  ns.Refresh()
+  check("and taken in again without it", bag.parent == combined and InBackpack(9))
+
+  ns.db.enabled = false
+  ns.Refresh()
+  check("the master switch takes it out as well", bag.parent == UIParent and InBag() and near(combined:GetHeight(), H9))
+  ns.db.enabled = true
+  ns.Refresh()
+  check("and puts it back", bag.parent == combined and InBackpack(9))
+
+  -- The switch on the Windows page.
+  ns.db.reagentInBackpack = false
+  ns.Refresh()
+  local box
+  for _, fs in ipairs(FONTSTRINGS) do
+    if fs.text == "Reagent bag inside the combined backpack" and fs.parent and fs.parent.kind == "CheckButton" then box = fs.parent end
+  end
+  check("the options have a switch for it", box ~= nil)
+  if box then
+    ns.SyncOptions()
+    check("which starts unticked", not box:GetChecked())
+    box:SetChecked(true)
+    box.scripts.OnClick(box)
+  end
+  check("and ticking it puts the reagent bag in the backpack", ns.db.reagentInBackpack == true and bag.parent == combined and InBackpack(9))
+end
+
+ns.db.reagentInBackpack = false
+ns.Refresh()
+CloseAll()
+check("left as it was found: nothing in the backpack, nothing faded", bag.parent == UIParent and Unfaded() and InBag())
+combined:SetScale(1)
+bag:SetScale(1)
+COMBINED_SLOTS = 76
+combined:SetSize(420, 600)
+if backpackWasShown then ContainerFrame1:Show() end
+RunTimers(0.1)
+end -- scope
+
 -- ------------------------------------------------------------------
 -- 12. Slash commands
 -- ------------------------------------------------------------------
@@ -5156,7 +5413,7 @@ const parts = [];
   check('the TOC is BankTabs.toc', toc !== null);
   check('titled Bank Tabs', field(toc, 'Title') === 'Bank Tabs', field(toc, 'Title'));
   const version = (sources['Core.lua'].match(/ns\.version = "([^"]+)"/) || [])[1];
-  check('its version is the addon\'s own, 2.3.0', field(toc, 'Version') === '2.3.0' && version === '2.3.0', field(toc, 'Version') + ' / ' + version);
+  check('its version is the addon\'s own, 2.4.0', field(toc, 'Version') === '2.4.0' && version === '2.4.0', field(toc, 'Version') + ' / ' + version);
   check('it saves BankTabsAccountDB and BankTabsDB', field(toc, 'SavedVariables') === 'BankTabsAccountDB'
     && field(toc, 'SavedVariablesPerCharacter') === 'BankTabsDB');
   check('its icon is the treasure chest from the game\'s icons (not Stockpile\'s bag), the path intact', /^Interface\\Icons\\Racial_Dwarf_FindTreasure$/.test(field(toc, 'IconTexture') || ''), field(toc, 'IconTexture'));
@@ -5215,7 +5472,7 @@ const parts = [];
     const changelog = (read('CHANGELOG.md') || '').replace(/\r\n/g, '\n');
     const notes = (read('RELEASE-NOTES.md') || '').replace(/\r\n/g, '\n');
     const top = changelog.split(/\r?\n(?=## )/).find(s => s.startsWith('## ')) || '';
-    check('the changelog opens on 2.3.0', /^## 2\.3\.0 - /.test(top), top.slice(0, 30));
+    check('the changelog opens on 2.4.0', /^## 2\.4\.0 - /.test(top), top.slice(0, 30));
     check('the release notes are that section and nothing else', notes.replace(/\s+$/, '') === top.replace(/\s+$/, ''));
 
     // Every text file, docs and code: no em or en dashes, as the author asked.
